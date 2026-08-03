@@ -4,16 +4,32 @@
 // the value, or undefined to mean "ask the next one". Nothing else about
 // a provider is visible to the caller - which is the point: an app reads
 // `api.token` and never learns whether it came from the environment, a
-// .env file, HashiCorp Vault or a boru vault.
+// .env file, HashiCorp Vault, AWS, GCP, Azure or a boru vault.
+//
+// Two failure shapes, and they are never interchangeable. A store that
+// does not hold the secret is a MISS (undefined) - the chain carries on.
+// A store that could not answer - bad credentials, unreachable host,
+// missing configuration - is an ERROR: falling through there would
+// quietly reach for a weaker store.
 //
 // A port of typescript/src/Providers.ts, which is canonical.
 
 const { spawnSync } = require('node:child_process')
 const { readFileSync } = require('node:fs')
+const { join } = require('node:path')
 
 // Sekreto.js requires this module lazily, so by the time any provider is
 // built these names are all defined.
-const { SekretoError, checkname, envkey, parsedotenv, vaultref } = require('./Sekreto')
+const {
+  SekretoError,
+  awsparam,
+  checkname,
+  envkey,
+  flatname,
+  parsedotenv,
+  vaultref,
+} = require('./Sekreto')
+const { sigv4 } = require('./Sigv4')
 
 /** Environment variables: `api.token` from `API_TOKEN`. */
 function envprovider(prefix, source) {
@@ -59,13 +75,46 @@ function memoryprovider(values, prefix) {
   }
 }
 
-/** Refuse to send a Vault token in the clear.
+/** A directory of one-secret-per-file entries, keyed like the
+ * environment: `api.token` reads `<dir>/API_TOKEN`.
  *
- * Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
- * convenience. Sending `X-Vault-Token` over http to anything but the local
+ * This is the shape of a mounted Kubernetes Secret, a Docker or Swarm
+ * secret, and a systemd credentials directory, so those all work with no
+ * further configuration. One trailing newline is stripped - tools that
+ * write these files disagree about it, and a newline is never part of a
+ * secret on purpose. */
+function fileprovider(dir, prefix) {
+  return {
+    lookup: (name) => {
+      const file = join(dir, envkey(name, prefix))
+
+      let text
+      try {
+        text = readFileSync(file, 'utf8')
+      } catch (err) {
+        // An absent file - or an absent directory - means "no secrets
+        // here", exactly like a missing .env. Anything else (permission
+        // denied, an unreadable mount) is a store that could not answer.
+        if ('ENOENT' === err.code || 'ENOTDIR' === err.code) {
+          return undefined
+        }
+        throw new SekretoError('sekreto: file provider cannot read ' + file + ': ' + err.message)
+      }
+
+      return text.replace(/\r?\n$/, '')
+    },
+    describe: () => 'file:' + dir,
+  }
+}
+
+/** Refuse to send a secret-bearing credential in the clear.
+ *
+ * A vault API is HTTPS in any real deployment; plaintext is a dev-mode
+ * convenience. Sending a token over http to anything but the local
  * machine puts both the token and the secret it fetches on the wire for
  * anyone on the path, so sekreto will not do it. Loopback stays allowed:
- * that is `vault server -dev` and this repo's own test harness. */
+ * that is `vault server -dev`, `boru vault serve`, and this repo's own
+ * test harness. */
 function checkaddr(addr) {
   if (addr.startsWith('https://')) {
     return
@@ -84,33 +133,122 @@ function checkaddr(addr) {
   throw new SekretoError('sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)')
 }
 
-/** HashiCorp Vault, KV v2.
+/** One JSON round-trip. Network failure is always an error - an
+ * unreachable store is a store that could not answer. */
+async function fetchjson(method, url, headers, body) {
+  let res
+  try {
+    res = await fetch(url, { method, headers, body })
+  } catch (err) {
+    throw new SekretoError('sekreto: cannot reach ' + url.split('?')[0] + ': ' + err.message)
+  }
+
+  let parsed = undefined
+  try {
+    parsed = await res.json()
+  } catch (err) {
+    // A body that is not JSON only matters when the status promised one;
+    // callers decide on status first.
+  }
+
+  return { status: res.status, body: parsed }
+}
+
+/** HashiCorp Vault.
  *
- * `api.token` reads `{addr}/v1/{mount}/data/api` and takes the `token`
- * field of `data.data`. A 404 means "not here", which is a miss rather
- * than an error, so a vault can sit in a chain with fallbacks. */
-function hashicorpprovider(addr, token, mount) {
-  const usemount = mount || 'secret'
+ * KV v2 (the default): `api.token` reads `{addr}/v1/{mount}/data/api`
+ * and takes the `token` field of `data.data`. KV v1 (`kv: 1`) reads
+ * `{addr}/v1/{mount}/api` and takes the field of `data`. A 404 means
+ * "not here" - a miss - so a vault can sit in a chain with fallbacks.
+ *
+ * A Vault Enterprise namespace rides the X-Vault-Namespace header, on
+ * logins as well as reads.
+ *
+ * Instead of being handed a token, the provider can log in: Kubernetes
+ * auth (the pod's service-account JWT, from its conventional path) or
+ * AppRole. A failed login is an error, never a miss - it means this
+ * store could not answer at all. */
+function hashicorpprovider(addr, token, options) {
+  const opts = options || {}
+  const usemount = opts.mount || 'secret'
+  const kv = opts.kv || 2
+
+  // The working token, resolved once and reused. A configured token
+  // wins; otherwise the first lookup logs in.
+  let livetoken = '' === token ? undefined : token
+
+  const baseheaders = () => {
+    const headers = {}
+    if (opts.vaultnamespace) {
+      headers['X-Vault-Namespace'] = opts.vaultnamespace
+    }
+    return headers
+  }
+
+  const login = async () => {
+    const auth = opts.auth
+    if (!auth) {
+      throw new SekretoError('sekreto: hashicorp: no token and no auth method')
+    }
+
+    const mount = auth.mount || auth.method
+    const url = addr.replace(/\/$/, '') + '/v1/auth/' + mount + '/login'
+
+    let body
+    if ('kubernetes' === auth.method) {
+      let jwt = auth.jwt
+      if (undefined === jwt) {
+        const file = auth.jwtfile || '/var/run/secrets/kubernetes.io/serviceaccount/token'
+        try {
+          jwt = readFileSync(file, 'utf8').trim()
+        } catch (err) {
+          throw new SekretoError('sekreto: hashicorp: cannot read jwt file ' + file)
+        }
+      }
+      body = { role: auth.role || '', jwt }
+    } else if ('approle' === auth.method) {
+      body = { role_id: auth.roleid || '', secret_id: auth.secretid || '' }
+    } else {
+      throw new SekretoError('sekreto: hashicorp: unknown auth method: ' + String(auth.method))
+    }
+
+    const res = await fetchjson('POST', url, baseheaders(), JSON.stringify(body))
+
+    const got = res.body && res.body.auth && res.body.auth.client_token
+    if (200 !== res.status || !got) {
+      throw new SekretoError('sekreto: hashicorp login failed: ' + res.status + ': ' + url)
+    }
+
+    return String(got)
+  }
 
   return {
     lookup: async (name) => {
       checkaddr(addr)
 
-      const ref = vaultref(name)
-      const url = addr.replace(/\/$/, '') + '/v1/' + usemount + '/data/' + ref.path
+      if (undefined === livetoken) {
+        livetoken = await login()
+      }
 
-      const res = await fetch(url, { headers: { 'X-Vault-Token': token } })
+      const ref = vaultref(name)
+      const base = addr.replace(/\/$/, '') + '/v1/' + usemount
+      const url = 1 === kv ? base + '/' + ref.path : base + '/data/' + ref.path
+
+      const headers = baseheaders()
+      headers['X-Vault-Token'] = livetoken
+
+      const res = await fetchjson('GET', url, headers)
 
       if (404 === res.status) {
         return undefined
       }
 
-      if (!res.ok) {
+      if (200 !== res.status) {
         throw new SekretoError('sekreto: hashicorp error: ' + res.status + ': ' + url)
       }
 
-      const body = await res.json()
-      const data = body && body.data && body.data.data
+      const data =
+        1 === kv ? res.body && res.body.data : res.body && res.body.data && res.body.data.data
 
       const value = data ? data[ref.field] : undefined
       return undefined === value || null === value ? undefined : String(value)
@@ -121,27 +259,61 @@ function hashicorpprovider(addr, token, mount) {
 
 /** A boru vault (https://github.com/boru-lang/boru).
  *
- * boru keeps secrets in a local encrypted keyring and hands a value out
- * through its own CLI: `boru vault get --reveal <alias>` prints the secret
- * on stdout, and nothing else.
+ * Two ways in, both boru's own.
  *
- * There is deliberately no HTTP read here. boru's `vault proxy` and
- * `vault mcp` are a *credential broker*: they inject the real secret into
- * an outbound request and forward it, so an agent can call an API without
- * ever holding the credential. Handing a value back is the one thing that
- * broker is built not to do, so sekreto reads the vault the way boru
- * itself does - through the CLI.
+ * With no `addr`, the CLI: `boru vault get --reveal <alias>` prints the
+ * secret on stdout and nothing else. The passphrase is read by boru
+ * itself from `BORU_VAULT_PASSPHRASE`; sekreto never accepts it as
+ * config and never puts it on a command line, where it would show up in
+ * the process table.
  *
- * A sekreto name is already a valid boru alias, so `api.token` crosses over
- * unchanged. A `namespace` qualifies it the way boru writes it,
- * `<namespace>:<name>`.
+ * With an `addr`, boru's wire protocol: `boru vault serve` publishes a
+ * read-only, HashiCorp-shaped provision API (boru's
+ * design/VAULT-WIRE-PROTOCOL.0.md), authenticated by a capability token
+ * from `boru vault grant`. A sekreto name is already a valid boru
+ * alias, and boru aliases keep their dots, so `api.token` is the single
+ * path segment `api.token` - not the `api`/`token` split a HashiCorp KV
+ * gets. The value is the `value` field. A 404 is a miss; anything else
+ * the server refuses (a revoked capability, a sealed vault) is an
+ * error.
  *
- * The passphrase is read by boru itself from `BORU_VAULT_PASSPHRASE`.
- * sekreto never accepts it as config and never puts it on a command line,
- * where it would show up in the process table. */
+ * boru's `vault proxy` and `vault mcp` remain out of bounds: they are a
+ * credential *broker*, built precisely so the caller never receives the
+ * credential. `vault serve` is the provision endpoint, built to hand
+ * the value back - that is the one sekreto uses. */
 function boruprovider(options) {
   const opts = options || {}
   const command = opts.command || 'boru'
+
+  if (opts.addr) {
+    const addr = opts.addr.replace(/\/$/, '')
+    const mount = opts.mount || 'secret'
+
+    return {
+      lookup: async (name) => {
+        checkname(name)
+        checkaddr(addr)
+
+        const alias = opts.namespace ? opts.namespace + '/' + name : name
+        const url = addr + '/v1/' + mount + '/data/' + alias
+
+        const res = await fetchjson('GET', url, { 'X-Vault-Token': opts.token || '' })
+
+        if (404 === res.status) {
+          return undefined
+        }
+
+        if (200 !== res.status) {
+          throw new SekretoError('sekreto: boru serve error: ' + res.status + ': ' + url)
+        }
+
+        const data = res.body && res.body.data && res.body.data.data
+        const value = data ? data['value'] : undefined
+        return undefined === value || null === value ? undefined : String(value)
+      },
+      describe: () => 'boru:' + addr,
+    }
+  }
 
   return {
     lookup: (name) => {
@@ -186,6 +358,581 @@ function borumiss(why) {
   return /no alias named/.test(why)
 }
 
+/** The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now. */
+function awsnow() {
+  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
+}
+
+/** Region and credentials, from config first and the standard AWS_*
+ * environment variables second - those are AWS's own convention, and a
+ * pod or CI job that has them set should just work. Missing either is
+ * an error: an AWS store with no credentials could not answer. */
+function awsauth(opts) {
+  const env = process.env
+
+  const region = opts.region || env.AWS_REGION || env.AWS_DEFAULT_REGION || ''
+  const keyid = opts.keyid || env.AWS_ACCESS_KEY_ID || ''
+  const secret = opts.secret || env.AWS_SECRET_ACCESS_KEY || ''
+  const session = opts.session || env.AWS_SESSION_TOKEN || undefined
+
+  if ('' === region) {
+    throw new SekretoError('sekreto: aws: no region (set region or AWS_REGION)')
+  }
+  if ('' === keyid || '' === secret) {
+    throw new SekretoError(
+      'sekreto: aws: no credentials (set keyid/secret or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)',
+    )
+  }
+
+  return { region, keyid, secret, session }
+}
+
+/** One signed call to an AWS JSON-1.1 API. */
+async function awscall(opts, service, target, payload) {
+  const auth = awsauth(opts)
+  const addr = opts.addr || 'https://' + service + '.' + auth.region + '.amazonaws.com'
+  checkaddr(addr)
+
+  const url = addr.replace(/\/$/, '') + '/'
+  const body = JSON.stringify(payload)
+  const headers = {
+    'content-type': 'application/x-amz-json-1.1',
+    'x-amz-target': target,
+  }
+
+  const signed = sigv4({
+    method: 'POST',
+    url,
+    headers,
+    body,
+    service,
+    region: auth.region,
+    keyid: auth.keyid,
+    secret: auth.secret,
+    session: auth.session,
+    datetime: awsnow(),
+  })
+
+  return fetchjson('POST', url, { ...headers, ...signed }, body)
+}
+
+/** Does this AWS error body name one of the not-found types? Those are
+ * a miss; every other failure is a store that could not answer. */
+function awsmiss(body, types) {
+  const errtype = body && 'string' === typeof body.__type ? body.__type : ''
+  return types.some((name) => errtype.includes(name))
+}
+
+/** AWS Secrets Manager.
+ *
+ * `api.token` reads the secret named `api` (the vaultref path, so
+ * `db.pass.main` reads `db/pass`) and takes the `token` field of its
+ * JSON SecretString - the AWS idiom of one JSON map per secret. A
+ * SecretString that is not JSON is the value itself, under the
+ * conventional field `value`. Requests are SigV4-signed in-tree; see
+ * Sigv4.js. */
+function awssecretsprovider(options) {
+  const opts = options || {}
+
+  return {
+    lookup: async (name) => {
+      const ref = vaultref(name)
+
+      const res = await awscall(opts, 'secretsmanager', 'secretsmanager.GetSecretValue', {
+        SecretId: ref.path,
+      })
+
+      if (400 === res.status && awsmiss(res.body, ['ResourceNotFoundException'])) {
+        return undefined
+      }
+
+      if (200 !== res.status) {
+        throw new SekretoError('sekreto: aws secretsmanager error: ' + res.status)
+      }
+
+      const text = res.body && res.body.SecretString
+
+      if ('string' !== typeof text) {
+        // A binary secret has no fields to address; only the conventional
+        // `value` field can mean "the bytes themselves".
+        const bin = res.body && res.body.SecretBinary
+        if ('string' === typeof bin && 'value' === ref.field) {
+          return Buffer.from(bin, 'base64').toString('utf8')
+        }
+        return undefined
+      }
+
+      let parsed
+      try {
+        parsed = JSON.parse(text)
+      } catch (err) {
+        parsed = undefined
+      }
+
+      if (parsed && 'object' === typeof parsed && !Array.isArray(parsed)) {
+        const value = parsed[ref.field]
+        return undefined === value || null === value ? undefined : String(value)
+      }
+
+      // A plain-string secret is the whole value; it has no named fields.
+      return 'value' === ref.field ? text : undefined
+    },
+    // Config only, never the environment: describe() feeds the spec's
+    // sources group, which must answer the same everywhere.
+    describe: () => 'awssecrets:' + (opts.region || ''),
+  }
+}
+
+/** AWS SSM Parameter Store.
+ *
+ * `db.pass.main` reads the parameter `/db/pass/main` (under an optional
+ * prefix path), decrypted. Parameter Store carries flat strings, so
+ * there is no field indirection. */
+function awsparamsprovider(options) {
+  const opts = options || {}
+
+  return {
+    lookup: async (name) => {
+      const res = await awscall(opts, 'ssm', 'AmazonSSM.GetParameter', {
+        Name: awsparam(name, opts.prefix),
+        WithDecryption: true,
+      })
+
+      if (400 === res.status && awsmiss(res.body, ['ParameterNotFound'])) {
+        return undefined
+      }
+
+      if (200 !== res.status) {
+        throw new SekretoError('sekreto: aws ssm error: ' + res.status)
+      }
+
+      const value = res.body && res.body.Parameter && res.body.Parameter.Value
+      return undefined === value || null === value ? undefined : String(value)
+    },
+    describe: () => 'awsparams:' + (opts.region || '') + (opts.prefix || ''),
+  }
+}
+
+/** GCP Secret Manager.
+ *
+ * `api.token` reads secret `api_token` (dots flattened to `_`; Secret
+ * Manager ids have no hierarchy and reject dots), latest version. The
+ * token comes from config, then `GOOGLE_OAUTH_ACCESS_TOKEN`, then the
+ * GCE/GKE metadata server - so on Google's own platform no credential
+ * configuration is needed at all.
+ *
+ * The metadata call itself is plain http to a link-local host by
+ * platform design; no credential rides on it, so `checkaddr` guards the
+ * Secret Manager address instead. */
+function gcpsecretsprovider(options) {
+  const opts = options || {}
+
+  let livetoken
+
+  const metadataaddr = () => {
+    if (opts.metadataaddr) {
+      return opts.metadataaddr
+    }
+    const host = process.env.GCE_METADATA_HOST
+    return host ? 'http://' + host : 'http://metadata.google.internal'
+  }
+
+  const login = async () => {
+    const configured = opts.token || process.env.GOOGLE_OAUTH_ACCESS_TOKEN
+    if (configured) {
+      return configured
+    }
+
+    const url =
+      metadataaddr().replace(/\/$/, '') +
+      '/computeMetadata/v1/instance/service-accounts/default/token'
+
+    const res = await fetchjson('GET', url, { 'Metadata-Flavor': 'Google' })
+
+    const got = res.body && res.body.access_token
+    if (200 !== res.status || !got) {
+      throw new SekretoError('sekreto: gcp: no token and metadata server did not answer')
+    }
+
+    return String(got)
+  }
+
+  return {
+    lookup: async (name) => {
+      const project = opts.project || ''
+      if ('' === project) {
+        throw new SekretoError('sekreto: gcp: no project')
+      }
+
+      const addr = opts.addr || 'https://secretmanager.googleapis.com'
+      checkaddr(addr)
+
+      if (undefined === livetoken) {
+        livetoken = await login()
+      }
+
+      const url =
+        addr.replace(/\/$/, '') +
+        '/v1/projects/' +
+        project +
+        '/secrets/' +
+        flatname(name, '_') +
+        '/versions/latest:access'
+
+      const res = await fetchjson('GET', url, { authorization: 'Bearer ' + livetoken })
+
+      if (404 === res.status) {
+        return undefined
+      }
+
+      if (200 !== res.status) {
+        throw new SekretoError('sekreto: gcp error: ' + res.status + ': ' + url)
+      }
+
+      const data = res.body && res.body.payload && res.body.payload.data
+      if ('string' !== typeof data) {
+        return undefined
+      }
+
+      return Buffer.from(data, 'base64').toString('utf8')
+    },
+    describe: () => 'gcpsecrets:' + (opts.project || ''),
+  }
+}
+
+/** Azure Key Vault.
+ *
+ * `api.token` reads secret `api-token` (dots flattened to `-`; Key
+ * Vault names allow nothing else), current version. The token comes
+ * from config, then a client-credentials login when tenant/clientid/
+ * clientsecret are given, then the IMDS managed-identity endpoint - so
+ * on Azure's own platform no credential configuration is needed.
+ *
+ * As with GCP, the IMDS call is plain http to a link-local host by
+ * platform design and carries no credential; the login and vault
+ * addresses are `checkaddr`-guarded. */
+function azuresecretsprovider(options) {
+  const opts = options || {}
+  const resource = 'https://vault.azure.net'
+
+  let livetoken
+
+  const login = async () => {
+    if (opts.token) {
+      return opts.token
+    }
+
+    if (opts.tenant && opts.clientid && opts.clientsecret) {
+      const loginaddr = opts.loginaddr || 'https://login.microsoftonline.com'
+      checkaddr(loginaddr)
+
+      const url = loginaddr.replace(/\/$/, '') + '/' + opts.tenant + '/oauth2/v2.0/token'
+      const form =
+        'grant_type=client_credentials&client_id=' +
+        encodeURIComponent(opts.clientid) +
+        '&client_secret=' +
+        encodeURIComponent(opts.clientsecret) +
+        '&scope=' +
+        encodeURIComponent(resource + '/.default')
+
+      const res = await fetchjson(
+        'POST',
+        url,
+        { 'content-type': 'application/x-www-form-urlencoded' },
+        form,
+      )
+
+      const got = res.body && res.body.access_token
+      if (200 !== res.status || !got) {
+        throw new SekretoError('sekreto: azure login failed: ' + res.status)
+      }
+
+      return String(got)
+    }
+
+    const imds =
+      (opts.imdsaddr || 'http://169.254.169.254').replace(/\/$/, '') +
+      '/metadata/identity/oauth2/token?api-version=2018-02-01&resource=' +
+      encodeURIComponent(resource)
+
+    const res = await fetchjson('GET', imds, { Metadata: 'true' })
+
+    const got = res.body && res.body.access_token
+    if (200 !== res.status || !got) {
+      throw new SekretoError(
+        'sekreto: azure: no token, no client credentials, and IMDS did not answer',
+      )
+    }
+
+    return String(got)
+  }
+
+  return {
+    lookup: async (name) => {
+      const vault = opts.vault || ''
+      if ('' === vault) {
+        throw new SekretoError('sekreto: azure: no vault')
+      }
+
+      const vaulturl = vault.startsWith('http') ? vault : 'https://' + vault + '.vault.azure.net'
+      checkaddr(vaulturl)
+
+      if (undefined === livetoken) {
+        livetoken = await login()
+      }
+
+      const url =
+        vaulturl.replace(/\/$/, '') +
+        '/secrets/' +
+        flatname(name, '-') +
+        '?api-version=' +
+        (opts.apiversion || '7.4')
+
+      const res = await fetchjson('GET', url, { authorization: 'Bearer ' + livetoken })
+
+      if (404 === res.status) {
+        return undefined
+      }
+
+      if (200 !== res.status) {
+        throw new SekretoError('sekreto: azure error: ' + res.status + ': ' + url.split('?')[0])
+      }
+
+      const value = res.body && res.body.value
+      return undefined === value || null === value ? undefined : String(value)
+    },
+    describe: () => 'azuresecrets:' + (opts.vault || ''),
+  }
+}
+
+/** 1Password, through a Connect server.
+ *
+ * The item titled `api.token` (titles keep their dots), in the named
+ * vault. The value is the field with purpose PASSWORD, or the field
+ * labelled `value`. A vault that cannot be found is an error - config
+ * names it, so its absence is a broken store, not a missing secret. */
+function onepasswordprovider(options) {
+  const opts = options || {}
+
+  let vaultid
+
+  const auth = () => ({
+    authorization: 'Bearer ' + (opts.token || ''),
+  })
+
+  const resolvevault = async (addr) => {
+    const want = opts.vault || ''
+    if ('' === want) {
+      throw new SekretoError('sekreto: onepassword: no vault')
+    }
+
+    const res = await fetchjson('GET', addr + '/v1/vaults', auth())
+
+    if (200 !== res.status || !Array.isArray(res.body)) {
+      throw new SekretoError('sekreto: onepassword error: ' + res.status + ': listing vaults')
+    }
+
+    for (const entry of res.body) {
+      if (entry && (want === entry.id || want === entry.name)) {
+        return String(entry.id)
+      }
+    }
+
+    throw new SekretoError('sekreto: onepassword: no vault named ' + want)
+  }
+
+  return {
+    lookup: async (name) => {
+      checkname(name)
+
+      const addr = (opts.addr || '').replace(/\/$/, '')
+      if ('' === addr) {
+        throw new SekretoError('sekreto: onepassword: no addr')
+      }
+      checkaddr(addr)
+
+      if (undefined === vaultid) {
+        vaultid = await resolvevault(addr)
+      }
+
+      const filter = encodeURIComponent('title eq "' + name + '"')
+      const found = await fetchjson(
+        'GET',
+        addr + '/v1/vaults/' + vaultid + '/items?filter=' + filter,
+        auth(),
+      )
+
+      if (200 !== found.status || !Array.isArray(found.body)) {
+        throw new SekretoError('sekreto: onepassword error: ' + found.status + ': finding ' + name)
+      }
+
+      if (0 === found.body.length) {
+        return undefined
+      }
+
+      const item = await fetchjson(
+        'GET',
+        addr + '/v1/vaults/' + vaultid + '/items/' + found.body[0].id,
+        auth(),
+      )
+
+      if (200 !== item.status) {
+        throw new SekretoError('sekreto: onepassword error: ' + item.status + ': reading ' + name)
+      }
+
+      const fields = (item.body && item.body.fields) || []
+
+      for (const field of fields) {
+        if (field && 'PASSWORD' === field.purpose) {
+          return undefined === field.value || null === field.value
+            ? undefined
+            : String(field.value)
+        }
+      }
+      for (const field of fields) {
+        if (field && 'value' === field.label) {
+          return undefined === field.value || null === field.value
+            ? undefined
+            : String(field.value)
+        }
+      }
+
+      return undefined
+    },
+    describe: () => 'onepassword:' + (opts.vault || ''),
+  }
+}
+
+/** Doppler.
+ *
+ * The whole config is downloaded once - Doppler's own bulk endpoint -
+ * and answered from memory, like a remote .env: `api.token` is the
+ * `API_TOKEN` entry. A service token is config-scoped, so project and
+ * config are only needed with broader tokens. */
+function dopplerprovider(options) {
+  const opts = options || {}
+
+  let values
+
+  const load = async () => {
+    if (undefined !== values) {
+      return values
+    }
+
+    const addr = (opts.addr || 'https://api.doppler.com').replace(/\/$/, '')
+    checkaddr(addr)
+
+    let url = addr + '/v3/configs/config/secrets/download?format=json'
+    if (opts.project) {
+      url += '&project=' + encodeURIComponent(opts.project)
+    }
+    if (opts.config) {
+      url += '&config=' + encodeURIComponent(opts.config)
+    }
+
+    const res = await fetchjson('GET', url, {
+      authorization: 'Bearer ' + (opts.token || ''),
+    })
+
+    if (200 !== res.status || !res.body || 'object' !== typeof res.body) {
+      throw new SekretoError('sekreto: doppler error: ' + res.status)
+    }
+
+    values = {}
+    for (const [key, value] of Object.entries(res.body)) {
+      if (null !== value && undefined !== value) {
+        values[key] = String(value)
+      }
+    }
+
+    return values
+  }
+
+  return {
+    lookup: async (name) => (await load())[envkey(name)],
+    describe: () =>
+      'doppler' + (opts.project ? ':' + opts.project + '/' + (opts.config || '') : ''),
+  }
+}
+
+/** Infisical.
+ *
+ * `api.token` reads the secret keyed `API_TOKEN` (Infisical's own
+ * convention is environment-style keys) at a secret path in one
+ * environment of a project. Auth is a token, or a universal-auth
+ * (machine identity) login with clientid/clientsecret. */
+function infisicalprovider(options) {
+  const opts = options || {}
+
+  let livetoken
+
+  const login = async (addr) => {
+    if (opts.token) {
+      return opts.token
+    }
+
+    if (!opts.clientid || !opts.clientsecret) {
+      throw new SekretoError('sekreto: infisical: no token and no client credentials')
+    }
+
+    const res = await fetchjson(
+      'POST',
+      addr + '/api/v1/auth/universal-auth/login',
+      { 'content-type': 'application/json' },
+      JSON.stringify({ clientId: opts.clientid, clientSecret: opts.clientsecret }),
+    )
+
+    const got = res.body && res.body.accessToken
+    if (200 !== res.status || !got) {
+      throw new SekretoError('sekreto: infisical login failed: ' + res.status)
+    }
+
+    return String(got)
+  }
+
+  return {
+    lookup: async (name) => {
+      const addr = (opts.addr || 'https://app.infisical.com').replace(/\/$/, '')
+      checkaddr(addr)
+
+      const project = opts.project || ''
+      const environment = opts.environment || ''
+      if ('' === project || '' === environment) {
+        throw new SekretoError('sekreto: infisical: no project/environment')
+      }
+
+      if (undefined === livetoken) {
+        livetoken = await login(addr)
+      }
+
+      const url =
+        addr +
+        '/api/v3/secrets/raw/' +
+        envkey(name) +
+        '?workspaceId=' +
+        encodeURIComponent(project) +
+        '&environment=' +
+        encodeURIComponent(environment) +
+        '&secretPath=' +
+        encodeURIComponent(opts.path || '/')
+
+      const res = await fetchjson('GET', url, { authorization: 'Bearer ' + livetoken })
+
+      if (404 === res.status) {
+        return undefined
+      }
+
+      if (200 !== res.status) {
+        throw new SekretoError('sekreto: infisical error: ' + res.status)
+      }
+
+      const value = res.body && res.body.secret && res.body.secret.secretValue
+      return undefined === value || null === value ? undefined : String(value)
+    },
+    describe: () => 'infisical:' + (opts.project || '') + '/' + (opts.environment || ''),
+  }
+}
+
 /** Build a provider from its declarative form. */
 function makeprovider(spec) {
   switch (spec.kind) {
@@ -195,24 +942,57 @@ function makeprovider(spec) {
       return dotenvprovider(spec.file || '.env', spec.prefix)
     case 'memory':
       return memoryprovider(spec.values || {}, spec.prefix)
+    case 'file':
+      return fileprovider(spec.dir || '', spec.prefix)
     case 'hashicorp':
-      return hashicorpprovider(spec.addr || '', spec.token || '', spec.mount)
+      return hashicorpprovider(spec.addr || '', spec.token || '', {
+        mount: spec.mount,
+        kv: spec.kv,
+        vaultnamespace: spec.vaultnamespace,
+        auth: spec.auth,
+      })
     case 'boru':
       return boruprovider({
         command: spec.command,
         namespace: spec.namespace,
         home: spec.home,
+        addr: spec.addr,
+        token: spec.token,
+        mount: spec.mount,
       })
+    case 'awssecrets':
+      return awssecretsprovider(spec)
+    case 'awsparams':
+      return awsparamsprovider(spec)
+    case 'gcpsecrets':
+      return gcpsecretsprovider(spec)
+    case 'azuresecrets':
+      return azuresecretsprovider(spec)
+    case 'onepassword':
+      return onepasswordprovider(spec)
+    case 'doppler':
+      return dopplerprovider(spec)
+    case 'infisical':
+      return infisicalprovider(spec)
     default:
       throw new SekretoError('sekreto: unknown provider kind: ' + String(spec.kind))
   }
 }
 
 module.exports = {
+  awsparamsprovider,
+  awssecretsprovider,
+  azuresecretsprovider,
   boruprovider,
+  checkaddr,
+  dopplerprovider,
   dotenvprovider,
   envprovider,
+  fileprovider,
+  gcpsecretsprovider,
+  hashicorpprovider,
+  infisicalprovider,
   makeprovider,
   memoryprovider,
-  hashicorpprovider,
+  onepasswordprovider,
 }

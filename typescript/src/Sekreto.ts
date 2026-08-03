@@ -81,6 +81,31 @@ export function vaultref(name: Name): { path: string; field: string } {
   return { path: parts.slice(0, -1).join('/'), field: parts[parts.length - 1] }
 }
 
+/** A name flattened to one segment: `api.token` -> `api_token` (GCP
+ * Secret Manager, `_`) or `api-token` (Azure Key Vault, `-`).
+ *
+ * Those stores have no path hierarchy and reject dots in ids, so the
+ * dots become the store's conventional separator. */
+export function flatname(name: Name, sep: string): string {
+  checkname(name)
+  return name.split('.').join(sep)
+}
+
+/** The AWS SSM Parameter Store name for a name: dots become the path
+ * hierarchy, rooted at `/` (or at a prefix): `db.pass.main` ->
+ * `/db/pass/main`, or `/app/db/pass/main` under prefix `/app`. */
+export function awsparam(name: Name, prefix?: string): string {
+  checkname(name)
+
+  let base = prefix || ''
+  if ('' !== base && !base.startsWith('/')) {
+    base = '/' + base
+  }
+  base = base.replace(/\/$/, '')
+
+  return base + '/' + name.split('.').join('/')
+}
+
 /** Parse `.env` text into a map of raw keys to values.
  *
  * Deliberately small: `KEY=value`, optional `export`, `#` comments on their

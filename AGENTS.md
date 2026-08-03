@@ -55,9 +55,10 @@ at the top of each port's test file.
 
 A port is complete when it has all four:
 
-- the library — the equivalent of `Sekreto` and the five providers
+- the library — the equivalent of `Sekreto` and all thirteen provider
+  kinds
 - a conformance suite running `spec/sekreto.json` through that language's
-  voxgig/omni runner, covering all eight groups
+  voxgig/omni runner, covering all fourteen groups
 - a CLI at the path `test/integration.sh` expects, printing exactly
   `{"ok":true,"lang":"<lang>","source":"<source>","caller":"<lang>"}`
 - `build`, `test`, `clean` and `inspect` targets in its `Makefile`
@@ -111,21 +112,33 @@ never do.
 
 - `api/server.js` — Fastify, and the only thing it does is refuse any
   request without the right bearer token
-- `test/mockhashicorp.js` — HashiCorp Vault KV v2, enough of it. Vault
-  publishes its wire protocol, so imitating it is legitimate: the provider
-  talks to this exactly as it would to a real Vault.
+- `test/mockhashicorp.js` — HashiCorp Vault, enough of it: KV v2 and v1,
+  namespace enforcement, kubernetes/approle logins. Vault publishes its
+  wire protocol, so imitating it is legitimate: the provider talks to this
+  exactly as it would to a real Vault.
+- `test/mockaws.js`, `test/mockgcp.js`, `test/mockazure.js`,
+  `test/mockonepassword.js`, `test/mockdoppler.js`,
+  `test/mockinfisical.js` — the other published wire protocols, same
+  justification. The AWS mock re-derives every request's SigV4 signature
+  and refuses mismatches, so wrong signing fails here the way it would
+  against real AWS.
 - a **real boru vault**, built by running `boru vault init` and
-  `boru vault add` against the actual binary, found via `$BORU` or `PATH`.
+  `boru vault add` against the actual binary, found via `$BORU` or `PATH`
+  — read through the CLI, and also over `boru vault serve` (its provision
+  wire protocol) with a capability token from `vault grant`.
 
-**There is no boru mock, and there should not be one.** boru has no
-read-a-secret wire protocol to imitate — its vault is read through the
-`boru` CLI — so a mock would be inventing a contract rather than standing in
-for one. When the binary is absent the boru checks are skipped, and the run
-says so. A skipped check is honest; a faked one is not.
+**There is still no boru mock, and there should not be one.** boru's wire
+protocol ships inside the same binary the CLI does, so both boru paths are
+exercised against the real thing; a mock would test the imitation. When
+the binary is absent the boru checks are skipped, and the run says so. A
+skipped check is honest; a faked one is not.
 
-If you are tempted to add an HTTP boru provider, read
-`cmd/go/internal/vault/proxy.go` in boru-lang/boru first. The broker there
-exists precisely so that a caller never receives the credential.
+One boru boundary stays deliberate: the provider speaks `vault serve`
+(the provision endpoint, built to hand a value back under capability
+tokens) and never `vault proxy` or `vault mcp` — those are a credential
+*broker*, built precisely so that a caller never receives the credential.
+Read `design/VAULT-WIRE-PROTOCOL.0.md` in boru-lang/boru for the line
+between the two.
 
 ## Style
 

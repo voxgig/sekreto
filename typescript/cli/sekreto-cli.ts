@@ -2,11 +2,17 @@
 //
 // It asks sekreto for `api.token` and calls the token-protected API with
 // it. Every port ships this same CLI, and test/integration.sh runs all of
-// them against the same server from all four secret sources - which is
+// them against the same server from every secret source - which is
 // what proves the library, rather than the spec alone.
 //
-// Usage: sekreto-cli <api-url> [--source env|dotenv|hashicorp|boru|chain]
-//                              [--store <name>]   directed read
+// Usage: sekreto-cli <api-url> [--source <source>] [--store <name>]
+//
+// Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
+//          gcpsecrets azuresecrets onepassword doppler infisical chain
+//
+// Each source's configuration arrives in the environment variables its
+// own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
+// in chainfor below.
 
 import { Sekreto } from '../src'
 import { ProviderSpec } from '../src/Providers'
@@ -16,12 +22,26 @@ function chainfor(source: string): ProviderSpec[] {
 
   const envspec: ProviderSpec = { kind: 'env', prefix: env.SEKRETO_PREFIX }
   const dotenvspec: ProviderSpec = { kind: 'dotenv', file: env.SEKRETO_DOTENV || '.env' }
+  const filespec: ProviderSpec = { kind: 'file', dir: env.SEKRETO_FILEDIR || '/run/secrets' }
+
   const hashicorpspec: ProviderSpec = {
     kind: 'hashicorp',
     addr: env.VAULT_ADDR || '',
     token: env.VAULT_TOKEN || '',
     mount: env.VAULT_MOUNT,
+    kv: env.VAULT_KV ? parseInt(env.VAULT_KV, 10) : undefined,
+    vaultnamespace: env.VAULT_NAMESPACE,
+    auth: env.VAULT_AUTH
+      ? {
+          method: env.VAULT_AUTH as 'kubernetes' | 'approle',
+          role: env.VAULT_ROLE,
+          jwtfile: env.VAULT_JWT_FILE,
+          roleid: env.VAULT_ROLE_ID,
+          secretid: env.VAULT_SECRET_ID,
+        }
+      : undefined,
   }
+
   const boruspec: ProviderSpec = {
     kind: 'boru',
     command: env.BORU_COMMAND || 'boru',
@@ -29,17 +49,91 @@ function chainfor(source: string): ProviderSpec[] {
     home: env.BORU_HOME,
   }
 
-  if ('env' === source) {
-    return [envspec]
+  // The same vault over its wire protocol (`boru vault serve`) instead
+  // of the CLI: an address plus a capability token from `vault grant`.
+  const boruwirespec: ProviderSpec = {
+    kind: 'boru',
+    addr: env.BORU_ADDR || '',
+    token: env.BORU_TOKEN || '',
+    namespace: env.BORU_NAMESPACE,
   }
-  if ('dotenv' === source) {
-    return [dotenvspec]
+
+  const awssecretsspec: ProviderSpec = {
+    kind: 'awssecrets',
+    region: env.AWS_REGION,
+    addr: env.AWS_ENDPOINT,
   }
-  if ('hashicorp' === source) {
-    return [hashicorpspec]
+
+  const awsparamsspec: ProviderSpec = {
+    kind: 'awsparams',
+    region: env.AWS_REGION,
+    addr: env.AWS_ENDPOINT,
+    prefix: env.AWS_PARAM_PREFIX,
   }
-  if ('boru' === source) {
-    return [boruspec]
+
+  const gcpspec: ProviderSpec = {
+    kind: 'gcpsecrets',
+    project: env.GCP_PROJECT,
+    addr: env.GCP_ADDR,
+    metadataaddr: env.GCP_METADATA_ADDR,
+  }
+
+  const azurespec: ProviderSpec = {
+    kind: 'azuresecrets',
+    vault: env.AZURE_VAULT,
+    token: env.AZURE_TOKEN,
+    tenant: env.AZURE_TENANT,
+    clientid: env.AZURE_CLIENT_ID,
+    clientsecret: env.AZURE_CLIENT_SECRET,
+    loginaddr: env.AZURE_LOGIN_ADDR,
+    imdsaddr: env.AZURE_IMDS_ADDR,
+  }
+
+  const onepasswordspec: ProviderSpec = {
+    kind: 'onepassword',
+    addr: env.OP_CONNECT_HOST,
+    token: env.OP_CONNECT_TOKEN,
+    vault: env.OP_VAULT,
+  }
+
+  const dopplerspec: ProviderSpec = {
+    kind: 'doppler',
+    token: env.DOPPLER_TOKEN,
+    project: env.DOPPLER_PROJECT,
+    config: env.DOPPLER_CONFIG,
+    addr: env.DOPPLER_ADDR,
+  }
+
+  const infisicalspec: ProviderSpec = {
+    kind: 'infisical',
+    addr: env.INFISICAL_ADDR,
+    token: env.INFISICAL_TOKEN,
+    clientid: env.INFISICAL_CLIENT_ID,
+    clientsecret: env.INFISICAL_CLIENT_SECRET,
+    project: env.INFISICAL_PROJECT,
+    environment: env.INFISICAL_ENV,
+    path: env.INFISICAL_PATH,
+  }
+
+  const bysource: Record<string, ProviderSpec[]> = {
+    env: [envspec],
+    dotenv: [dotenvspec],
+    file: [filespec],
+    hashicorp: [hashicorpspec],
+    boru: [boruspec],
+    boruwire: [boruwirespec],
+    awssecrets: [awssecretsspec],
+    awsparams: [awsparamsspec],
+    gcpsecrets: [gcpspec],
+    azuresecrets: [azurespec],
+    onepassword: [onepasswordspec],
+    doppler: [dopplerspec],
+    infisical: [infisicalspec],
+  }
+
+  const found = bysource[source]
+  if (undefined !== found) {
+    return found
   }
 
   // The default: the chain an app would actually ship with - local

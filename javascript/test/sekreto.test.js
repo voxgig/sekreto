@@ -7,7 +7,17 @@ const { existsSync } = require('node:fs')
 const { dirname, join } = require('node:path')
 const { before, describe, test } = require('node:test')
 
-const { Sekreto, envkey, parsedotenv, redact, validname, vaultref } = require('../src')
+const {
+  Sekreto,
+  awsparam,
+  envkey,
+  flatname,
+  parsedotenv,
+  redact,
+  sigv4,
+  validname,
+  vaultref,
+} = require('../src')
 
 // Find the shared spec directory by walking up from this file.
 function specfile(name) {
@@ -69,6 +79,14 @@ describe('sekreto', () => {
     await R.runset(R.spec.vaultref, (name) => vaultref(name))
   })
 
+  test('flatname', async () => {
+    await R.runset(R.spec.flatname, (vin) => flatname(vin.name, vin.sep))
+  })
+
+  test('awsparam', async () => {
+    await R.runset(R.spec.awsparam, (vin) => awsparam(vin.name, vin.prefix))
+  })
+
   test('parsedotenv', async () => {
     await R.runset(R.spec.parsedotenv, (text) => parsedotenv(text))
   })
@@ -95,6 +113,10 @@ describe('sekreto', () => {
 
   test('tryfrom', async () => {
     await R.runset(R.spec.tryfrom, (vin) => chainof(vin).tryfrom(vin.store, vin.name))
+  })
+
+  test('sigv4', async () => {
+    await R.runset(R.spec.sigv4, (vin) => sigv4(vin))
   })
 
   test('redact', async () => {

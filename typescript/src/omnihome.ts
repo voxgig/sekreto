@@ -5,7 +5,7 @@
 // disk - by $OMNI_HOME, or by looking where a checkout usually sits.
 
 import { existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 
 export function omnihome(marker = 'spec/fib.json'): string {
   const candidates = [
@@ -18,7 +18,10 @@ export function omnihome(marker = 'spec/fib.json'): string {
 
   for (const candidate of candidates) {
     if (candidate && existsSync(join(candidate, marker))) {
-      return candidate
+      // Absolute, because the caller hands this to require(), which
+      // resolves a relative path against the requiring file - not the
+      // working directory this check just ran in.
+      return resolve(candidate)
     }
   }
 
