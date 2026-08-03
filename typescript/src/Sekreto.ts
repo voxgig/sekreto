@@ -52,7 +52,7 @@ export function validname(name: any): boolean {
   return true
 }
 
-function checkname(name: any): string {
+export function checkname(name: any): string {
   if (!validname(name)) {
     throw new SekretoError('sekreto: invalid name: ' + String(null == name ? '' : name))
   }
@@ -168,21 +168,53 @@ export function redact(text: string, values: string[]): string {
   return out
 }
 
-/** The secrets facade: a chain of providers plus a cache. */
+/** One provider in the chain, under the store name it answers to. */
+type Entry = { store: string; provider: Provider }
+
+/** One resolved value. Kept as a list rather than a map so that the store
+ * a value came from stays attached, and so redaction order is stable. */
+type Cached = { store: string; name: Name; value: string }
+
+/** The store name a provider answers to when its spec does not say.
+ *
+ * `describe()` opens with the provider's kind - `vault:...`, `dotenv:...`,
+ * plain `env` - so the kind is the natural default, and a custom provider
+ * gets a sensible name without having to implement anything extra. */
+function storename(provider: Provider, spec?: ProviderSpec): string {
+  if (spec && spec.name) {
+    return spec.name
+  }
+  return provider.describe().split(':')[0]
+}
+
+/** The secrets facade: a chain of providers plus a cache.
+ *
+ * Two ways to read. `get` is transparent - it walks the chain and takes
+ * the first hit, and the caller never learns which store answered. `getfrom`
+ * is directed - it names the store, and only that store is asked. Use the
+ * first for ordinary configuration, the second when *which* store holds a
+ * secret is part of what you mean. */
 export class Sekreto {
-  private providers: Provider[]
+  private entries: Entry[]
   private docache: boolean
-  private cache: Map<string, string>
+  private cache: Cached[]
 
   constructor(options?: SekretoOptions) {
     const opts = options || {}
-    this.providers = (opts.providers || []).map((entry) =>
-      'function' === typeof (entry as Provider).lookup
-        ? (entry as Provider)
-        : makeprovider(entry as ProviderSpec),
-    )
+
+    this.entries = (opts.providers || []).map((entry) => {
+      if ('function' === typeof (entry as Provider).lookup) {
+        const provider = entry as Provider
+        return { store: storename(provider), provider }
+      }
+
+      const spec = entry as ProviderSpec
+      const provider = makeprovider(spec)
+      return { store: storename(provider, spec), provider }
+    })
+
     this.docache = false === opts.cache ? false : true
-    this.cache = new Map()
+    this.cache = []
   }
 
   /** The secret, or a SekretoError if no provider has it. */
@@ -198,18 +230,57 @@ export class Sekreto {
 
   /** The secret, or undefined if no provider has it. */
   async try(name: Name): Promise<string | undefined> {
-    checkname(name)
+    return this.resolve('', name, this.entries)
+  }
 
-    if (this.docache && this.cache.has(name)) {
-      return this.cache.get(name)
+  /** The secret from one named store, or a SekretoError if that store does
+   * not have it. */
+  async getfrom(store: string, name: Name): Promise<string> {
+    const found = await this.tryfrom(store, name)
+
+    if (undefined === found) {
+      throw new SekretoError('sekreto: unknown secret: ' + store + ':' + name)
     }
 
-    for (const provider of this.providers) {
-      const found = await provider.lookup(name)
+    return found
+  }
+
+  /** The secret from one named store, or undefined if that store does not
+   * have it.
+   *
+   * Naming a store that is not in the chain is an error, not a miss: `try`
+   * already means "this store may not have it", so it cannot also mean
+   * "this store may not exist" without hiding a typo. */
+  async tryfrom(store: string, name: Name): Promise<string | undefined> {
+    const matching = this.entries.filter((entry) => entry.store === store)
+
+    if (0 === matching.length) {
+      throw new SekretoError('sekreto: unknown store: ' + store)
+    }
+
+    return this.resolve(store, name, matching)
+  }
+
+  private async resolve(
+    store: string,
+    name: Name,
+    entries: Entry[],
+  ): Promise<string | undefined> {
+    checkname(name)
+
+    if (this.docache) {
+      const hit = this.cache.find((entry) => entry.store === store && entry.name === name)
+      if (undefined !== hit) {
+        return hit.value
+      }
+    }
+
+    for (const entry of entries) {
+      const found = await entry.provider.lookup(name)
 
       if (undefined !== found && null !== found) {
         if (this.docache) {
-          this.cache.set(name, found)
+          this.cache.push({ store, name, value: found })
         }
         return found
       }
@@ -221,6 +292,11 @@ export class Sekreto {
   /** Does any provider have this secret? */
   async has(name: Name): Promise<boolean> {
     return undefined !== (await this.try(name))
+  }
+
+  /** Does this named store have this secret? */
+  async hasin(store: string, name: Name): Promise<boolean> {
+    return undefined !== (await this.tryfrom(store, name))
   }
 
   /** Every named secret at once. Missing ones are an error. */
@@ -236,17 +312,34 @@ export class Sekreto {
 
   /** A description of each provider, in resolution order. */
   sources(): string[] {
-    return this.providers.map((provider) => provider.describe())
+    return this.entries.map((entry) => entry.provider.describe())
+  }
+
+  /** The name of each store that can be named by `getfrom`, in resolution
+   * order and without repeats. */
+  stores(): string[] {
+    const out: string[] = []
+
+    for (const entry of this.entries) {
+      if (!out.includes(entry.store)) {
+        out.push(entry.store)
+      }
+    }
+
+    return out
   }
 
   /** Replace every value this Sekreto has resolved with `[redacted]`. */
   redact(text: string): string {
-    return redact(text, Array.from(this.cache.values()))
+    return redact(
+      text,
+      this.cache.map((entry) => entry.value),
+    )
   }
 
   /** Drop cached values, so the next `get` asks the providers again. */
   refresh(): void {
-    this.cache.clear()
+    this.cache = []
   }
 }
 

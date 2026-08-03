@@ -5,7 +5,8 @@
 // them against the same server from all four secret sources - which is
 // what proves the library, rather than the spec alone.
 //
-// Usage: sekreto-cli <api-url> [--source env|dotenv|vault|boru|chain]
+// Usage: sekreto-cli <api-url> [--source env|dotenv|hashicorp|boru|chain]
+//                              [--store <name>]   directed read
 
 const { Sekreto } = require('../src')
 
@@ -16,16 +17,17 @@ function chainfor(source) {
 
   const envspec = { kind: 'env', prefix: env.SEKRETO_PREFIX }
   const dotenvspec = { kind: 'dotenv', file: env.SEKRETO_DOTENV || '.env' }
-  const vaultspec = {
-    kind: 'vault',
+  const hashicorpspec = {
+    kind: 'hashicorp',
     addr: env.VAULT_ADDR || '',
     token: env.VAULT_TOKEN || '',
     mount: env.VAULT_MOUNT,
   }
   const boruspec = {
     kind: 'boru',
-    addr: env.BORU_VAULT_ADDR || '',
-    token: env.BORU_VAULT_TOKEN || '',
+    command: env.BORU_COMMAND || 'boru',
+    namespace: env.BORU_NAMESPACE,
+    home: env.BORU_HOME,
   }
 
   if ('env' === source) {
@@ -34,8 +36,8 @@ function chainfor(source) {
   if ('dotenv' === source) {
     return [dotenvspec]
   }
-  if ('vault' === source) {
-    return [vaultspec]
+  if ('hashicorp' === source) {
+    return [hashicorpspec]
   }
   if ('boru' === source) {
     return [boruspec]
@@ -43,7 +45,7 @@ function chainfor(source) {
 
   // The default: the chain an app would actually ship with - local
   // overrides first, shared vaults last.
-  return [envspec, dotenvspec, vaultspec, boruspec]
+  return [envspec, dotenvspec, hashicorpspec, boruspec]
 }
 
 async function main() {
@@ -53,11 +55,16 @@ async function main() {
   const flag = args.indexOf('--source')
   const source = -1 === flag ? 'chain' : args[flag + 1]
 
+  // --store names a store outright: the secret must come from that one,
+  // not from whichever provider happens to answer first.
+  const storeflag = args.indexOf('--store')
+  const store = -1 === storeflag ? '' : args[storeflag + 1]
+
   const secrets = new Sekreto({ providers: chainfor(source) })
 
   let token
   try {
-    token = await secrets.get('api.token')
+    token = store ? await secrets.getfrom(store, 'api.token') : await secrets.get('api.token')
   } catch (err) {
     console.error('sekreto-cli: ' + err.message)
     return 2
@@ -74,7 +81,7 @@ async function main() {
     return 1
   }
 
-  console.log(JSON.stringify({ ok: true, lang: LANG, source, caller: body.caller }))
+  console.log(JSON.stringify({ ok: true, lang: LANG, source, store, caller: body.caller }))
 
   return 0
 }

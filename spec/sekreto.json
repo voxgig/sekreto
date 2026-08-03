@@ -185,7 +185,199 @@
             },
             "out": ["memory", "memory:APP_"]
           },
+          {
+            "in": {
+              "chain": [
+                { "kind": "boru" },
+                { "kind": "boru", "namespace": "prod" },
+                { "kind": "hashicorp", "addr": "http://127.0.0.1:8200" }
+              ]
+            },
+            "out": ["boru", "boru:prod", "hashicorp:http://127.0.0.1:8200/secret"]
+          },
           { "in": { "chain": [] }, "out": [] }
+        ]
+      },
+
+      "stores": {
+        "set": [
+          {
+            "id": "stores#default",
+            "doc": true,
+            "in": {
+              "chain": [
+                { "kind": "env" },
+                { "kind": "dotenv", "file": ".env" },
+                { "kind": "memory", "values": {} }
+              ]
+            },
+            "out": ["env", "dotenv", "memory"]
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "name": "local", "values": {} },
+                { "kind": "memory", "name": "shared", "values": {} }
+              ]
+            },
+            "out": ["local", "shared"]
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "values": {} },
+                { "kind": "memory", "prefix": "APP_", "values": {} }
+              ]
+            },
+            "out": ["memory"]
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "boru" }, { "kind": "boru", "namespace": "prod" }]
+            },
+            "out": ["boru"]
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "boru", "name": "personal" },
+                { "kind": "boru", "name": "team", "namespace": "prod" }
+              ]
+            },
+            "out": ["personal", "team"]
+          },
+          { "in": { "chain": [] }, "out": [] }
+        ]
+      },
+
+      "getfrom": {
+        "set": [
+          {
+            "id": "getfrom#named",
+            "doc": true,
+            "in": {
+              "chain": [
+                { "kind": "memory", "name": "local", "values": { "API_TOKEN": "LOCAL" } },
+                { "kind": "memory", "name": "shared", "values": { "API_TOKEN": "SHARED" } }
+              ],
+              "store": "shared",
+              "name": "api.token"
+            },
+            "out": "SHARED"
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "name": "local", "values": { "API_TOKEN": "LOCAL" } },
+                { "kind": "memory", "name": "shared", "values": { "API_TOKEN": "SHARED" } }
+              ],
+              "store": "local",
+              "name": "api.token"
+            },
+            "out": "LOCAL"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "values": { "API_TOKEN": "T" } }],
+              "store": "memory",
+              "name": "api.token"
+            },
+            "out": "T"
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "name": "pair", "values": {} },
+                { "kind": "memory", "name": "pair", "values": { "API_TOKEN": "SECOND" } }
+              ],
+              "store": "pair",
+              "name": "api.token"
+            },
+            "out": "SECOND"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "name": "local", "values": {} }],
+              "store": "local",
+              "name": "api.token"
+            },
+            "err": "sekreto: unknown secret: local:api.token"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "name": "local", "values": { "API_TOKEN": "T" } }],
+              "store": "nosuch",
+              "name": "api.token"
+            },
+            "err": "sekreto: unknown store: nosuch"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "values": { "API_TOKEN": "T" } }],
+              "store": "memory",
+              "name": "a b"
+            },
+            "err": "invalid name"
+          },
+          {
+            "doc": true,
+            "in": {
+              "chain": [{ "kind": "hashicorp", "addr": "http://vault.example.com:8200" }],
+              "store": "hashicorp",
+              "name": "api.token"
+            },
+            "err": "sekreto: refusing to send a token in plaintext to http://vault.example.com:8200 (use https)"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "hashicorp", "addr": "ftp://vault.example.com" }],
+              "store": "hashicorp",
+              "name": "api.token"
+            },
+            "err": "sekreto: not an http(s) address: ftp://vault.example.com"
+          }
+        ]
+      },
+
+      "tryfrom": {
+        "set": [
+          {
+            "id": "tryfrom#hit",
+            "doc": true,
+            "in": {
+              "chain": [{ "kind": "memory", "name": "local", "values": { "API_TOKEN": "T" } }],
+              "store": "local",
+              "name": "api.token"
+            },
+            "out": "T"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "name": "local", "values": {} }],
+              "store": "local",
+              "name": "api.token"
+            },
+            "out": "__NULL__"
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "name": "local", "values": {} },
+                { "kind": "memory", "name": "shared", "values": { "API_TOKEN": "S" } }
+              ],
+              "store": "local",
+              "name": "api.token"
+            },
+            "out": "__NULL__"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "name": "local", "values": {} }],
+              "store": "nosuch",
+              "name": "api.token"
+            },
+            "err": "sekreto: unknown store: nosuch"
+          }
         ]
       },
 

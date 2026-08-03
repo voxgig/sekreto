@@ -19,7 +19,7 @@ export {
   envprovider,
   makeprovider,
   memoryprovider,
-  vaultprovider,
+  hashicorpprovider,
 } from './Providers'
 
 export type { Provider, ProviderSpec } from './Providers'

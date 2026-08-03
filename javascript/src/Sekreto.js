@@ -156,15 +156,41 @@ function redact(text, values) {
   return out
 }
 
-/** The secrets facade: a chain of providers plus a cache. */
+/** The store name a provider answers to when its spec does not say.
+ *
+ * `describe()` opens with the provider's kind - `vault:...`, `dotenv:...`,
+ * plain `env` - so the kind is the natural default, and a custom provider
+ * gets a sensible name without having to implement anything extra. */
+function storename(provider, spec) {
+  if (spec && spec.name) {
+    return spec.name
+  }
+  return provider.describe().split(':')[0]
+}
+
+/** The secrets facade: a chain of providers plus a cache.
+ *
+ * Two ways to read. `get` is transparent - it walks the chain and takes the
+ * first hit, and the caller never learns which store answered. `getfrom` is
+ * directed - it names the store, and only that store is asked. */
 class Sekreto {
   constructor(options) {
     const opts = options || {}
-    this.providers = (opts.providers || []).map((entry) =>
-      'function' === typeof entry.lookup ? entry : makeprovider(entry),
-    )
+
+    this.entries = (opts.providers || []).map((entry) => {
+      if ('function' === typeof entry.lookup) {
+        return { store: storename(entry), provider: entry }
+      }
+
+      const provider = makeprovider(entry)
+      return { store: storename(provider, entry), provider }
+    })
+
     this.docache = false === opts.cache ? false : true
-    this.cache = new Map()
+
+    // A list, not a map: the store a value came from stays attached, and
+    // redaction order does not vary between runs.
+    this.cache = []
   }
 
   /** The secret, or a SekretoError if no provider has it. */
@@ -180,18 +206,53 @@ class Sekreto {
 
   /** The secret, or undefined if no provider has it. */
   async try(name) {
-    checkname(name)
+    return this.resolve('', name, this.entries)
+  }
 
-    if (this.docache && this.cache.has(name)) {
-      return this.cache.get(name)
+  /** The secret from one named store, or a SekretoError if that store does
+   * not have it. */
+  async getfrom(store, name) {
+    const found = await this.tryfrom(store, name)
+
+    if (undefined === found) {
+      throw new SekretoError('sekreto: unknown secret: ' + store + ':' + name)
     }
 
-    for (const provider of this.providers) {
-      const found = await provider.lookup(name)
+    return found
+  }
+
+  /** The secret from one named store, or undefined if that store does not
+   * have it.
+   *
+   * Naming a store that is not in the chain is an error, not a miss: `try`
+   * already means "this store may not have it", so it cannot also mean
+   * "this store may not exist" without hiding a typo. */
+  async tryfrom(store, name) {
+    const matching = this.entries.filter((entry) => entry.store === store)
+
+    if (0 === matching.length) {
+      throw new SekretoError('sekreto: unknown store: ' + store)
+    }
+
+    return this.resolve(store, name, matching)
+  }
+
+  async resolve(store, name, entries) {
+    checkname(name)
+
+    if (this.docache) {
+      const hit = this.cache.find((entry) => entry.store === store && entry.name === name)
+      if (undefined !== hit) {
+        return hit.value
+      }
+    }
+
+    for (const entry of entries) {
+      const found = await entry.provider.lookup(name)
 
       if (undefined !== found && null !== found) {
         if (this.docache) {
-          this.cache.set(name, found)
+          this.cache.push({ store, name, value: found })
         }
         return found
       }
@@ -203,6 +264,11 @@ class Sekreto {
   /** Does any provider have this secret? */
   async has(name) {
     return undefined !== (await this.try(name))
+  }
+
+  /** Does this named store have this secret? */
+  async hasin(store, name) {
+    return undefined !== (await this.tryfrom(store, name))
   }
 
   /** Every named secret at once. Missing ones are an error. */
@@ -218,17 +284,34 @@ class Sekreto {
 
   /** A description of each provider, in resolution order. */
   sources() {
-    return this.providers.map((provider) => provider.describe())
+    return this.entries.map((entry) => entry.provider.describe())
+  }
+
+  /** The name of each store that can be named by `getfrom`, in resolution
+   * order and without repeats. */
+  stores() {
+    const out = []
+
+    for (const entry of this.entries) {
+      if (!out.includes(entry.store)) {
+        out.push(entry.store)
+      }
+    }
+
+    return out
   }
 
   /** Replace every value this Sekreto has resolved with `[redacted]`. */
   redact(text) {
-    return redact(text, Array.from(this.cache.values()))
+    return redact(
+      text,
+      this.cache.map((entry) => entry.value),
+    )
   }
 
   /** Drop cached values, so the next `get` asks the providers again. */
   refresh() {
-    this.cache.clear()
+    this.cache = []
   }
 }
 
@@ -240,6 +323,7 @@ function sekreto(options) {
 module.exports = {
   Sekreto,
   SekretoError,
+  checkname,
   envkey,
   parsedotenv,
   redact,

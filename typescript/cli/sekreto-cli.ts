@@ -5,7 +5,8 @@
 // them against the same server from all four secret sources - which is
 // what proves the library, rather than the spec alone.
 //
-// Usage: sekreto-cli <api-url> [--source env|dotenv|vault|boru|chain]
+// Usage: sekreto-cli <api-url> [--source env|dotenv|hashicorp|boru|chain]
+//                              [--store <name>]   directed read
 
 import { Sekreto } from '../src'
 import { ProviderSpec } from '../src/Providers'
@@ -15,16 +16,17 @@ function chainfor(source: string): ProviderSpec[] {
 
   const envspec: ProviderSpec = { kind: 'env', prefix: env.SEKRETO_PREFIX }
   const dotenvspec: ProviderSpec = { kind: 'dotenv', file: env.SEKRETO_DOTENV || '.env' }
-  const vaultspec: ProviderSpec = {
-    kind: 'vault',
+  const hashicorpspec: ProviderSpec = {
+    kind: 'hashicorp',
     addr: env.VAULT_ADDR || '',
     token: env.VAULT_TOKEN || '',
     mount: env.VAULT_MOUNT,
   }
   const boruspec: ProviderSpec = {
     kind: 'boru',
-    addr: env.BORU_VAULT_ADDR || '',
-    token: env.BORU_VAULT_TOKEN || '',
+    command: env.BORU_COMMAND || 'boru',
+    namespace: env.BORU_NAMESPACE,
+    home: env.BORU_HOME,
   }
 
   if ('env' === source) {
@@ -33,8 +35,8 @@ function chainfor(source: string): ProviderSpec[] {
   if ('dotenv' === source) {
     return [dotenvspec]
   }
-  if ('vault' === source) {
-    return [vaultspec]
+  if ('hashicorp' === source) {
+    return [hashicorpspec]
   }
   if ('boru' === source) {
     return [boruspec]
@@ -42,7 +44,7 @@ function chainfor(source: string): ProviderSpec[] {
 
   // The default: the chain an app would actually ship with - local
   // overrides first, shared vaults last.
-  return [envspec, dotenvspec, vaultspec, boruspec]
+  return [envspec, dotenvspec, hashicorpspec, boruspec]
 }
 
 async function main(): Promise<number> {
@@ -52,11 +54,16 @@ async function main(): Promise<number> {
   const flag = args.indexOf('--source')
   const source = -1 === flag ? 'chain' : args[flag + 1]
 
+  // --store names a store outright: the secret must come from that one,
+  // not from whichever provider happens to answer first.
+  const storeflag = args.indexOf('--store')
+  const store = -1 === storeflag ? '' : args[storeflag + 1]
+
   const secrets = new Sekreto({ providers: chainfor(source) })
 
   let token: string
   try {
-    token = await secrets.get('api.token')
+    token = store ? await secrets.getfrom(store, 'api.token') : await secrets.get('api.token')
   } catch (err: any) {
     console.error('sekreto-cli: ' + err.message)
     return 2
@@ -73,7 +80,9 @@ async function main(): Promise<number> {
     return 1
   }
 
-  console.log(JSON.stringify({ ok: true, lang: 'typescript', source, caller: body.caller }))
+  console.log(
+    JSON.stringify({ ok: true, lang: 'typescript', source, store, caller: body.caller }),
+  )
 
   return 0
 }

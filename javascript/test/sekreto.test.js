@@ -85,6 +85,18 @@ describe('sekreto', () => {
     await R.runset(R.spec.sources, (vin) => chainof(vin).sources())
   })
 
+  test('stores', async () => {
+    await R.runset(R.spec.stores, (vin) => chainof(vin).stores())
+  })
+
+  test('getfrom', async () => {
+    await R.runset(R.spec.getfrom, (vin) => chainof(vin).getfrom(vin.store, vin.name))
+  })
+
+  test('tryfrom', async () => {
+    await R.runset(R.spec.tryfrom, (vin) => chainof(vin).tryfrom(vin.store, vin.name))
+  })
+
   test('redact', async () => {
     await R.runset(R.spec.redact, (vin) => redact(vin.text, vin.values))
   })

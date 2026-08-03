@@ -20,12 +20,16 @@ ROOT=$(cd "$HERE/.." && pwd)
 
 API_PORT=${API_PORT:-8099}
 VAULT_PORT=${VAULT_PORT:-8200}
-BORU_PORT=${BORU_PORT:-8300}
 
 # The one secret that matters. Long enough that redaction applies to it.
 TOKEN=${API_TOKEN:-s3cr3t-integration-token}
 VAULT_TOKEN=vault-root-token
-BORU_TOKEN=boru-root-token
+
+# boru is read through its own CLI, not a wire protocol, so the boru checks
+# need the real binary. Point BORU at it, or drop it on PATH; without it the
+# boru checks are skipped rather than faked.
+BORU=${BORU:-$(command -v boru || true)}
+BORU_PASSPHRASE=integration-passphrase
 
 API_URL=http://127.0.0.1:$API_PORT/whoami
 
@@ -69,21 +73,35 @@ echo '== starting servers =='
 API_TOKEN=$TOKEN PORT=$API_PORT node "$ROOT/api/server.js" >"$WORK/api.log" 2>&1 &
 PIDS+=($!)
 
-node "$HERE/mockvault.js" vault "$VAULT_PORT" "$VAULT_TOKEN" \
+node "$HERE/mockhashicorp.js" "$VAULT_PORT" "$VAULT_TOKEN" \
   "api.token=$TOKEN" >"$WORK/vault.log" 2>&1 &
 PIDS+=($!)
 
-node "$HERE/mockvault.js" boru "$BORU_PORT" "$BORU_TOKEN" \
-  "api.token=$TOKEN" >"$WORK/boru.log" 2>&1 &
-PIDS+=($!)
-
 waitport "$API_PORT" api || { cat "$WORK/api.log"; exit 1; }
-waitport "$VAULT_PORT" vault || { cat "$WORK/vault.log"; exit 1; }
-waitport "$BORU_PORT" boru || { cat "$WORK/boru.log"; exit 1; }
+waitport "$VAULT_PORT" hashicorp || { cat "$WORK/vault.log"; exit 1; }
 
-echo "   api    http://127.0.0.1:$API_PORT"
-echo "   vault  http://127.0.0.1:$VAULT_PORT"
-echo "   boru   http://127.0.0.1:$BORU_PORT"
+echo "   api        http://127.0.0.1:$API_PORT"
+echo "   hashicorp  http://127.0.0.1:$VAULT_PORT"
+
+# A real boru vault, holding the same secret under the same name. boru
+# stores it in an encrypted keyring on disk; nothing goes over a socket.
+BORU_HOME_DIR="$WORK/boruhome"
+
+if [ -n "$BORU" ]; then
+  mkdir -p "$BORU_HOME_DIR"
+  if BORU_HOME="$BORU_HOME_DIR" BORU_VAULT_PASSPHRASE="$BORU_PASSPHRASE" \
+       "$BORU" vault init --backend=file >"$WORK/boru.log" 2>&1 &&
+     printf '%s\n' "$TOKEN" | BORU_HOME="$BORU_HOME_DIR" \
+       BORU_VAULT_PASSPHRASE="$BORU_PASSPHRASE" \
+       "$BORU" vault add api.token --from-stdin >>"$WORK/boru.log" 2>&1; then
+    echo "   boru       $BORU (vault at $BORU_HOME_DIR)"
+  else
+    echo "   boru       FAILED to set up; see $WORK/boru.log" >&2
+    BORU=""
+  fi
+else
+  echo "   boru       not installed, boru checks skipped"
+fi
 echo
 
 # Every CLI runs from an empty directory, so a stray .env anywhere in the
@@ -143,6 +161,9 @@ LANGS=${*:-$ALL_LANGS}
 # Run one CLI once, with one secret source configured, and check the result.
 #
 #   check <lang> <source> <expect: ok|deny> <env assignments...>
+#
+# STORE, when set, is passed as --store: the CLI must then take the secret
+# from that named store rather than from whichever provider answers first.
 check() {
   local lang=$1 source=$2 expect=$3
   shift 3
@@ -150,23 +171,29 @@ check() {
   local cmd
   cmd=$(cli_cmd "$lang")
 
+  local storeargs=()
+  if [ -n "${STORE:-}" ]; then
+    storeargs=(--store "$STORE")
+  fi
+
   local out rc
   out=$(cd "$WORK/run" && env -i \
     PATH="$PATH" HOME="$HOME" \
     JAVA_HOME="${JAVA_HOME:-}" DOTNET_CLI_TELEMETRY_OPTOUT=1 \
     DOTNET_NOLOGO=1 \
     "$@" \
-    $cmd "$API_URL" --source "$source" 2>&1)
+    $cmd "$API_URL" --source "$source" "${storeargs[@]}" 2>&1)
   rc=$?
 
   local label="$lang/$source"
+  [ -n "${STORE:-}" ] && label="$lang/$source->${STORE}"
 
   if [ "$expect" = ok ]; then
     # The API echoes the caller back, so a pass means the whole path worked:
     # secret read -> bearer token accepted -> response parsed.
-    if [ $rc -eq 0 ] && [ "$out" = "{\"ok\":true,\"lang\":\"$lang\",\"source\":\"$source\",\"caller\":\"$lang\"}" ]; then
+    if [ $rc -eq 0 ] && [ "$out" = "{\"ok\":true,\"lang\":\"$lang\",\"source\":\"$source\",\"store\":\"${STORE:-}\",\"caller\":\"$lang\"}" ]; then
       pass=$((pass + 1))
-      printf '   %s %-22s\n' "$(green ok)" "$label"
+      printf '   %s %-28s\n' "$(green ok)" "$label"
       return 0
     fi
   else
@@ -174,14 +201,14 @@ check() {
     # the real token even so.
     if [ $rc -ne 0 ] && ! echo "$out" | grep -qF "$TOKEN"; then
       pass=$((pass + 1))
-      printf '   %s %-22s (denied, as expected)\n' "$(green ok)" "$label"
+      printf '   %s %-28s (denied, as expected)\n' "$(green ok)" "$label"
       return 0
     fi
   fi
 
   fail=$((fail + 1))
   FAILED+=("$label")
-  printf '   %s %-22s rc=%s\n' "$(red FAIL)" "$label" "$rc"
+  printf '   %s %-28s rc=%s\n' "$(red FAIL)" "$label" "$rc"
   echo "        $out" | head -5
   return 1
 }
@@ -206,32 +233,55 @@ for lang in $LANGS; do
   #    environment here, so a port that quietly falls back would fail.
   check "$lang" dotenv ok SEKRETO_DOTENV="$WORK/dotenv/.env"
 
-  # 3. The secret in a HashiCorp vault.
-  check "$lang" vault ok \
+  # 3. The secret in a HashiCorp vault, over its real KV v2 wire protocol.
+  STORE= check "$lang" hashicorp ok \
     VAULT_ADDR="http://127.0.0.1:$VAULT_PORT" \
     VAULT_TOKEN="$VAULT_TOKEN" \
     VAULT_MOUNT=secret
 
-  # 4. The secret in a boru vault.
-  check "$lang" boru ok \
-    BORU_VAULT_ADDR="http://127.0.0.1:$BORU_PORT" \
-    BORU_VAULT_TOKEN="$BORU_TOKEN"
+  # 4. The secret in a real boru vault, read through the boru CLI.
+  if [ -n "$BORU" ]; then
+    STORE= check "$lang" boru ok \
+      BORU_COMMAND="$BORU" \
+      BORU_HOME="$BORU_HOME_DIR" \
+      BORU_VAULT_PASSPHRASE="$BORU_PASSPHRASE"
+  fi
 
-  # 5. The full chain, with only the vault holding the secret: this is the
-  #    real configuration, where earlier providers miss and a later one hits.
-  check "$lang" chain ok \
+  # 5. The full chain, with only the HashiCorp vault holding the secret:
+  #    this is the real configuration, where earlier providers miss and a
+  #    later one hits.
+  STORE= check "$lang" chain ok \
     SEKRETO_DOTENV="$WORK/nonexistent/.env" \
     VAULT_ADDR="http://127.0.0.1:$VAULT_PORT" \
     VAULT_TOKEN="$VAULT_TOKEN" \
-    BORU_VAULT_ADDR="http://127.0.0.1:$BORU_PORT" \
-    BORU_VAULT_TOKEN="$BORU_TOKEN"
+    BORU_COMMAND=/nonexistent/boru
 
-  # 6. No secret anywhere: the CLI must fail, not call the API unauthenticated.
-  check "$lang" env deny SEKRETO_PREFIX=NOSUCH_
+  # 6. Directed access. The whole chain is configured and every store holds
+  #    the secret, but --store names one: the answer must come from it.
+  STORE=hashicorp check "$lang" chain ok \
+    API_TOKEN="$TOKEN" \
+    SEKRETO_DOTENV="$WORK/dotenv/.env" \
+    VAULT_ADDR="http://127.0.0.1:$VAULT_PORT" \
+    VAULT_TOKEN="$VAULT_TOKEN" \
+    BORU_COMMAND=/nonexistent/boru
 
-  # 7. The wrong secret: the API must refuse it, and the CLI must not print
+  if [ -n "$BORU" ]; then
+    STORE=boru check "$lang" chain ok \
+      API_TOKEN=not-the-real-token \
+      BORU_COMMAND="$BORU" \
+      BORU_HOME="$BORU_HOME_DIR" \
+      BORU_VAULT_PASSPHRASE="$BORU_PASSPHRASE"
+  fi
+
+  # 7. A store that is not in the chain is a mistake, not a miss.
+  STORE=nosuchstore check "$lang" env deny API_TOKEN="$TOKEN"
+
+  # 8. No secret anywhere: the CLI must fail, not call the API unauthenticated.
+  STORE= check "$lang" env deny SEKRETO_PREFIX=NOSUCH_
+
+  # 9. The wrong secret: the API must refuse it, and the CLI must not print
   #    the real token while complaining.
-  check "$lang" dotenv deny SEKRETO_DOTENV="$WORK/wrong/.env"
+  STORE= check "$lang" dotenv deny SEKRETO_DOTENV="$WORK/wrong/.env"
 done
 
 # --------------------------------------------------------------- the tally
