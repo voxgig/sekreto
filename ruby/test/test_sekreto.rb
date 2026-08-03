@@ -65,6 +65,16 @@ class TestSekreto < Minitest::Test
     R[:runset].call(R[:spec]['vaultref'], ->(name) { VoxgigSekreto.vaultref(name) })
   end
 
+  def test_flatname
+    R[:runset].call(R[:spec]['flatname'],
+                    ->(vin) { VoxgigSekreto.flatname(vin['name'], vin['sep']) })
+  end
+
+  def test_awsparam
+    R[:runset].call(R[:spec]['awsparam'],
+                    ->(vin) { VoxgigSekreto.awsparam(vin['name'], vin['prefix']) })
+  end
+
   def test_parsedotenv
     R[:runset].call(R[:spec]['parsedotenv'], ->(text) { VoxgigSekreto.parsedotenv(text) })
   end
@@ -93,6 +103,10 @@ class TestSekreto < Minitest::Test
   def test_tryfrom
     R[:runset].call(R[:spec]['tryfrom'],
                     ->(vin) { chainof(vin).tryfrom(vin['store'], vin['name']) })
+  end
+
+  def test_sigv4
+    R[:runset].call(R[:spec]['sigv4'], ->(vin) { VoxgigSekreto.sigv4(vin) })
   end
 
   def test_redact
