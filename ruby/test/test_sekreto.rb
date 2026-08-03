@@ -81,6 +81,20 @@ class TestSekreto < Minitest::Test
     R[:runset].call(R[:spec]['sources'], ->(vin) { chainof(vin).sources })
   end
 
+  def test_stores
+    R[:runset].call(R[:spec]['stores'], ->(vin) { chainof(vin).stores })
+  end
+
+  def test_getfrom
+    R[:runset].call(R[:spec]['getfrom'],
+                    ->(vin) { chainof(vin).getfrom(vin['store'], vin['name']) })
+  end
+
+  def test_tryfrom
+    R[:runset].call(R[:spec]['tryfrom'],
+                    ->(vin) { chainof(vin).tryfrom(vin['store'], vin['name']) })
+  end
+
   def test_redact
     R[:runset].call(R[:spec]['redact'],
                     ->(vin) { VoxgigSekreto.redact(vin['text'], vin['values']) })

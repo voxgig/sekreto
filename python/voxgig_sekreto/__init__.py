@@ -6,7 +6,7 @@ from .providers import (
     EnvProvider,
     MemoryProvider,
     Provider,
-    VaultProvider,
+    HashicorpProvider,
     makeprovider,
 )
 from .sekreto import (
@@ -28,7 +28,7 @@ __all__ = [
     'Provider',
     'Sekreto',
     'SekretoError',
-    'VaultProvider',
+    'HashicorpProvider',
     'envkey',
     'makeprovider',
     'parsedotenv',

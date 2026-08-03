@@ -10,11 +10,12 @@
 
 import json
 import os
+import subprocess
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from .sekreto import SekretoError, envkey, parsedotenv, vaultref
+from .sekreto import SekretoError, checkname, envkey, parsedotenv, vaultref
 
 
 class Provider:
@@ -104,7 +105,32 @@ def _fetch(url, headers):
         raise SekretoError('sekreto: cannot reach ' + url + ': ' + str(err.reason))
 
 
-class VaultProvider(Provider):
+def checkaddr(addr):
+    """Refuse to send a Vault token in the clear.
+
+    Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
+    convenience. Sending `X-Vault-Token` over http to anything but the local
+    machine puts both the token and the secret it fetches on the wire for
+    anyone on the path, so sekreto will not do it. Loopback stays allowed:
+    that is `vault server -dev` and this repo's own test harness.
+    """
+    if addr.startswith('https://'):
+        return
+
+    if not addr.startswith('http://'):
+        raise SekretoError('sekreto: not an http(s) address: ' + addr)
+
+    host = addr[len('http://'):].split('/')[0].split(':')[0]
+
+    if host in ('localhost', '127.0.0.1', '::1', '[::1]'):
+        return
+
+    raise SekretoError(
+        'sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)'
+    )
+
+
+class HashicorpProvider(Provider):
     """HashiCorp Vault, KV v2.
 
     `api.token` reads `{addr}/v1/{mount}/data/api` and takes the `token`
@@ -118,6 +144,8 @@ class VaultProvider(Provider):
         self.mount = mount or 'secret'
 
     def lookup(self, name):
+        checkaddr(self.addr)
+
         ref = vaultref(name)
         url = self.addr.rstrip('/') + '/v1/' + self.mount + '/data/' + ref['path']
 
@@ -127,7 +155,7 @@ class VaultProvider(Provider):
             return None
 
         if 200 != status:
-            raise SekretoError('sekreto: vault error: ' + str(status) + ': ' + url)
+            raise SekretoError('sekreto: hashicorp error: ' + str(status) + ': ' + url)
 
         data = (body or {}).get('data', {}).get('data')
         value = data.get(ref['field']) if isinstance(data, dict) else None
@@ -135,48 +163,81 @@ class VaultProvider(Provider):
         return None if value is None else str(value)
 
     def describe(self):
-        return 'vault:' + self.addr + '/' + self.mount
+        return 'hashicorp:' + self.addr + '/' + self.mount
 
 
 class BoruProvider(Provider):
-    """A boru vault.
+    """A boru vault (https://github.com/boru-lang/boru).
 
-    The boru vault protocol as sekreto uses it: a GET of
-    `{addr}/vault/{path}?field={field}` with an `X-Boru-Token` header,
-    answering `{"ok":true,"value":"..."}` when the secret exists and
-    `{"ok":false}` (or 404) when it does not.
+    boru keeps secrets in a local encrypted keyring and hands a value out
+    through its own CLI: `boru vault get --reveal <alias>` prints the secret
+    on stdout, and nothing else.
+
+    There is deliberately no HTTP read here. boru's `vault proxy` and
+    `vault mcp` are a *credential broker*: they inject the real secret into
+    an outbound request and forward it, so an agent can call an API without
+    ever holding the credential. Handing a value back is the one thing that
+    broker is built not to do, so sekreto reads the vault the way boru
+    itself does - through the CLI.
+
+    A sekreto name is already a valid boru alias, so `api.token` crosses
+    over unchanged. A `namespace` qualifies it the way boru writes it,
+    `<namespace>:<name>`.
+
+    The passphrase is read by boru itself from `BORU_VAULT_PASSPHRASE`.
+    sekreto never accepts it as config and never puts it on a command line,
+    where it would show up in the process table.
     """
 
-    def __init__(self, addr, token):
-        self.addr = addr
-        self.token = token
+    def __init__(self, command=None, namespace=None, home=None):
+        self.command = command or 'boru'
+        self.namespace = namespace
+        self.home = home
 
     def lookup(self, name):
-        ref = vaultref(name)
-        url = (
-            self.addr.rstrip('/')
-            + '/vault/'
-            + ref['path']
-            + '?field='
-            + urllib.parse.quote(ref['field'], safe='')
+        checkname(name)
+
+        alias = self.namespace + ':' + name if self.namespace else name
+
+        env = dict(os.environ)
+        if self.home:
+            env['BORU_HOME'] = self.home
+
+        try:
+            run = subprocess.run(
+                [self.command, 'vault', 'get', '--reveal', alias],
+                capture_output=True,
+                text=True,
+                env=env,
+            )
+        except OSError as err:
+            raise SekretoError('sekreto: cannot run ' + self.command + ': ' + str(err))
+
+        if 0 == run.returncode:
+            # boru prints the value and one newline, and nothing else.
+            return run.stdout[:-1] if run.stdout.endswith('\n') else run.stdout
+
+        why = (run.stderr or '').strip()
+
+        # "no alias named" is boru saying it does not hold this secret, which
+        # is a miss: the chain carries on to the next provider. A locked vault
+        # or a wrong passphrase is not a miss - treating it as one would fall
+        # through to a weaker store without saying so.
+        if borumiss(why):
+            return None
+
+        raise SekretoError(
+            'sekreto: boru vault error: ' + (why or 'exit ' + str(run.returncode))
         )
 
-        status, body = _fetch(url, {'X-Boru-Token': self.token})
-
-        if 404 == status:
-            return None
-
-        if 200 != status:
-            raise SekretoError('sekreto: boru vault error: ' + str(status) + ': ' + url)
-
-        if not isinstance(body, dict) or True is not body.get('ok'):
-            return None
-
-        value = body.get('value')
-        return None if value is None else str(value)
-
     def describe(self):
-        return 'boru:' + self.addr
+        return 'boru' + (':' + self.namespace if self.namespace else '')
+
+
+def borumiss(why):
+    """Does this boru failure mean "no such secret" rather than "I could not
+    answer"? Matched on boru's own wording for a missing alias."""
+    return 'no alias named' in why
 
 
 def makeprovider(spec):
@@ -189,9 +250,11 @@ def makeprovider(spec):
         return DotenvProvider(spec.get('file') or '.env', spec.get('prefix'))
     if 'memory' == kind:
         return MemoryProvider(spec.get('values') or {}, spec.get('prefix'))
-    if 'vault' == kind:
-        return VaultProvider(spec.get('addr') or '', spec.get('token') or '', spec.get('mount'))
+    if 'hashicorp' == kind:
+        return HashicorpProvider(
+            spec.get('addr') or '', spec.get('token') or '', spec.get('mount')
+        )
     if 'boru' == kind:
-        return BoruProvider(spec.get('addr') or '', spec.get('token') or '')
+        return BoruProvider(spec.get('command'), spec.get('namespace'), spec.get('home'))
 
     raise SekretoError('sekreto: unknown provider kind: ' + str(kind))

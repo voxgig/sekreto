@@ -130,18 +130,42 @@ module VoxgigSekreto
     out
   end
 
+  # The store name a provider answers to when its spec does not say.
+  #
+  # `describe` opens with the provider's kind - `hashicorp:...`,
+  # `dotenv:...`, plain `env` - so the kind is the natural default, and a
+  # custom provider gets a sensible name without implementing anything extra.
+  def storename(provider, spec = nil)
+    named = spec && (spec['name'] || spec[:name])
+    return named if named
+
+    provider.describe.split(':')[0]
+  end
+
   # The secrets facade: a chain of providers plus a cache.
+  #
+  # Two ways to read. `get` is transparent - it walks the chain and takes the
+  # first hit, and the caller never learns which store answered. `getfrom` is
+  # directed - it names the store, and only that store is asked.
   class Sekreto
     def initialize(options = nil)
       opts = options || {}
 
-      @providers = (opts['providers'] || opts[:providers] || []).map do |entry|
-        entry.respond_to?(:lookup) ? entry : VoxgigSekreto.makeprovider(entry)
+      @entries = (opts['providers'] || opts[:providers] || []).map do |entry|
+        if entry.respond_to?(:lookup)
+          [VoxgigSekreto.storename(entry), entry]
+        else
+          provider = VoxgigSekreto.makeprovider(entry)
+          [VoxgigSekreto.storename(provider, entry), provider]
+        end
       end
 
       cache = opts.key?('cache') ? opts['cache'] : opts[:cache]
       @docache = false != cache
-      @cache = {}
+
+      # A list, not a hash: the store a value came from stays attached, and
+      # redaction order does not vary between runs.
+      @cache = []
     end
 
     # The secret, or a SekretoError if no provider has it.
@@ -155,25 +179,40 @@ module VoxgigSekreto
 
     # The secret, or nil if no provider has it.
     def try(name)
-      VoxgigSekreto.checkname(name)
+      resolve('', name, @entries)
+    end
 
-      return @cache[name] if @docache && @cache.key?(name)
+    # The secret from one named store, or a SekretoError if that store does
+    # not have it.
+    def getfrom(store, name)
+      found = tryfrom(store, name)
 
-      @providers.each do |provider|
-        found = provider.lookup(name)
+      raise SekretoError, 'sekreto: unknown secret: ' + store + ':' + name if found.nil?
 
-        unless found.nil?
-          @cache[name] = found if @docache
-          return found
-        end
-      end
+      found
+    end
 
-      nil
+    # The secret from one named store, or nil if that store does not have it.
+    #
+    # Naming a store that is not in the chain is an error, not a miss: `try`
+    # already means "this store may not have it", so it cannot also mean
+    # "this store may not exist" without hiding a typo.
+    def tryfrom(store, name)
+      matching = @entries.select { |entry| entry[0] == store }
+
+      raise SekretoError, 'sekreto: unknown store: ' + store if matching.empty?
+
+      resolve(store, name, matching)
     end
 
     # Does any provider have this secret?
     def has(name)
       !try(name).nil?
+    end
+
+    # Does this named store have this secret?
+    def hasin(store, name)
+      !tryfrom(store, name).nil?
     end
 
     # Every named secret at once. Missing ones are an error.
@@ -183,17 +222,45 @@ module VoxgigSekreto
 
     # A description of each provider, in resolution order.
     def sources
-      @providers.map(&:describe)
+      @entries.map { |_store, provider| provider.describe }
+    end
+
+    # The name of each store that can be named by `getfrom`, in resolution
+    # order and without repeats.
+    def stores
+      @entries.map { |store, _provider| store }.uniq
     end
 
     # Replace every value this Sekreto has resolved with `[redacted]`.
     def redact(text)
-      VoxgigSekreto.redact(text, @cache.values)
+      VoxgigSekreto.redact(text, @cache.map { |cached| cached[2] })
     end
 
     # Drop cached values, so the next `get` asks the providers again.
     def refresh
       @cache.clear
+    end
+
+    private
+
+    def resolve(store, name, entries)
+      VoxgigSekreto.checkname(name)
+
+      if @docache
+        hit = @cache.find { |cached| cached[0] == store && cached[1] == name }
+        return hit[2] unless hit.nil?
+      end
+
+      entries.each do |_store, provider|
+        found = provider.lookup(name)
+
+        unless found.nil?
+          @cache << [store, name, found] if @docache
+          return found
+        end
+      end
+
+      nil
     end
   end
 

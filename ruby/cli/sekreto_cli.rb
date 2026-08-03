@@ -7,7 +7,8 @@
 # them against the same server from all four secret sources - which is
 # what proves the library, rather than the spec alone.
 #
-# Usage: ruby sekreto_cli.rb <api-url> [--source env|dotenv|vault|boru|chain]
+# Usage: ruby sekreto_cli.rb <api-url> [--source env|dotenv|hashicorp|boru|chain]
+#                                      [--store <name>]   directed read
 
 require 'json'
 require 'net/http'
@@ -20,27 +21,28 @@ LANG = 'ruby'
 def chainfor(source)
   envspec = { 'kind' => 'env', 'prefix' => ENV.fetch('SEKRETO_PREFIX', nil) }
   dotenvspec = { 'kind' => 'dotenv', 'file' => ENV['SEKRETO_DOTENV'] || '.env' }
-  vaultspec = {
-    'kind' => 'vault',
+  hashicorpspec = {
+    'kind' => 'hashicorp',
     'addr' => ENV['VAULT_ADDR'] || '',
     'token' => ENV['VAULT_TOKEN'] || '',
     'mount' => ENV.fetch('VAULT_MOUNT', nil)
   }
   boruspec = {
     'kind' => 'boru',
-    'addr' => ENV['BORU_VAULT_ADDR'] || '',
-    'token' => ENV['BORU_VAULT_TOKEN'] || ''
+    'command' => ENV['BORU_COMMAND'] || 'boru',
+    'namespace' => ENV.fetch('BORU_NAMESPACE', nil),
+    'home' => ENV.fetch('BORU_HOME', nil)
   }
 
   case source
   when 'env' then [envspec]
   when 'dotenv' then [dotenvspec]
-  when 'vault' then [vaultspec]
+  when 'hashicorp' then [hashicorpspec]
   when 'boru' then [boruspec]
   else
     # The default: the chain an app would actually ship with - local
     # overrides first, shared vaults last.
-    [envspec, dotenvspec, vaultspec, boruspec]
+    [envspec, dotenvspec, hashicorpspec, boruspec]
   end
 end
 
@@ -51,10 +53,15 @@ def main
   flag = args.index('--source')
   source = flag.nil? ? 'chain' : args[flag + 1]
 
+  # --store names a store outright: the secret must come from that one, not
+  # from whichever provider happens to answer first.
+  storeflag = args.index('--store')
+  store = storeflag.nil? ? '' : args[storeflag + 1]
+
   secrets = VoxgigSekreto::Sekreto.new('providers' => chainfor(source))
 
   begin
-    token = secrets.get('api.token')
+    token = store.empty? ? secrets.get('api.token') : secrets.getfrom(store, 'api.token')
   rescue StandardError => e
     warn 'sekreto-cli: ' + e.message
     return 2
@@ -78,7 +85,7 @@ def main
   body = JSON.parse(response.body)
 
   puts JSON.generate({ 'ok' => true, 'lang' => LANG, 'source' => source,
-                       'caller' => body['caller'] })
+                       'store' => store, 'caller' => body['caller'] })
 
   0
 end

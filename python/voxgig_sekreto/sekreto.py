@@ -139,19 +139,46 @@ def redact(text, values):
     return out
 
 
+def storename(provider, spec=None):
+    """The store name a provider answers to when its spec does not say.
+
+    `describe()` opens with the provider's kind - `hashicorp:...`,
+    `dotenv:...`, plain `env` - so the kind is the natural default, and a
+    custom provider gets a sensible name without implementing anything
+    extra.
+    """
+    if spec and spec.get('name'):
+        return spec['name']
+    return provider.describe().split(':')[0]
+
+
 class Sekreto:
-    """The secrets facade: a chain of providers plus a cache."""
+    """The secrets facade: a chain of providers plus a cache.
+
+    Two ways to read. `get` is transparent - it walks the chain and takes
+    the first hit, and the caller never learns which store answered.
+    `getfrom` is directed - it names the store, and only that store is
+    asked.
+    """
 
     def __init__(self, options=None):
         from .providers import makeprovider
 
         opts = options or {}
-        self.providers = [
-            entry if callable(getattr(entry, 'lookup', None)) else makeprovider(entry)
-            for entry in (opts.get('providers') or [])
-        ]
+
+        self.entries = []
+        for entry in opts.get('providers') or []:
+            if callable(getattr(entry, 'lookup', None)):
+                self.entries.append((storename(entry), entry))
+            else:
+                provider = makeprovider(entry)
+                self.entries.append((storename(provider, entry), provider))
+
         self.docache = False is not opts.get('cache', True)
-        self.cache = {}
+
+        # A list, not a dict: the store a value came from stays attached,
+        # and redaction order does not vary between runs.
+        self.cache = []
 
     def get(self, name):
         """The secret, or a SekretoError if no provider has it."""
@@ -164,17 +191,47 @@ class Sekreto:
 
     def try_(self, name):
         """The secret, or None if no provider has it."""
+        return self._resolve('', name, self.entries)
+
+    def getfrom(self, store, name):
+        """The secret from one named store, or a SekretoError if that store
+        does not have it."""
+        found = self.tryfrom(store, name)
+
+        if found is None:
+            raise SekretoError('sekreto: unknown secret: ' + store + ':' + name)
+
+        return found
+
+    def tryfrom(self, store, name):
+        """The secret from one named store, or None if that store does not
+        have it.
+
+        Naming a store that is not in the chain is an error, not a miss:
+        `try` already means "this store may not have it", so it cannot also
+        mean "this store may not exist" without hiding a typo.
+        """
+        matching = [entry for entry in self.entries if entry[0] == store]
+
+        if 0 == len(matching):
+            raise SekretoError('sekreto: unknown store: ' + store)
+
+        return self._resolve(store, name, matching)
+
+    def _resolve(self, store, name, entries):
         checkname(name)
 
-        if self.docache and name in self.cache:
-            return self.cache[name]
+        if self.docache:
+            for cached in self.cache:
+                if cached[0] == store and cached[1] == name:
+                    return cached[2]
 
-        for provider in self.providers:
+        for _storename, provider in entries:
             found = provider.lookup(name)
 
             if found is not None:
                 if self.docache:
-                    self.cache[name] = found
+                    self.cache.append((store, name, found))
                 return found
 
         return None
@@ -183,17 +240,32 @@ class Sekreto:
         """Does any provider have this secret?"""
         return self.try_(name) is not None
 
+    def hasin(self, store, name):
+        """Does this named store have this secret?"""
+        return self.tryfrom(store, name) is not None
+
     def all(self, names):
         """Every named secret at once. Missing ones are an error."""
         return {name: self.get(name) for name in names}
 
     def sources(self):
         """A description of each provider, in resolution order."""
-        return [provider.describe() for provider in self.providers]
+        return [provider.describe() for _store, provider in self.entries]
+
+    def stores(self):
+        """The name of each store that can be named by `getfrom`, in
+        resolution order and without repeats."""
+        out = []
+
+        for store, _provider in self.entries:
+            if store not in out:
+                out.append(store)
+
+        return out
 
     def redact(self, text):
         """Replace every value this Sekreto has resolved with `[redacted]`."""
-        return redact(text, list(self.cache.values()))
+        return redact(text, [cached[2] for cached in self.cache])
 
     def refresh(self):
         """Drop cached values, so the next `get` asks the providers again."""

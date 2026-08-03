@@ -12,6 +12,7 @@
 
 require 'json'
 require 'net/http'
+require 'open3'
 require 'uri'
 
 module VoxgigSekreto
@@ -104,12 +105,32 @@ module VoxgigSekreto
     [response.code.to_i, body]
   end
 
+  # Refuse to send a Vault token in the clear.
+  #
+  # Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
+  # convenience. Sending `X-Vault-Token` over http to anything but the local
+  # machine puts both the token and the secret it fetches on the wire for
+  # anyone on the path, so sekreto will not do it. Loopback stays allowed:
+  # that is `vault server -dev` and this repo's own test harness.
+  def checkaddr(addr)
+    return if addr.start_with?('https://')
+
+    raise SekretoError, 'sekreto: not an http(s) address: ' + addr unless addr.start_with?('http://')
+
+    host = addr[7..].split('/')[0].split(':')[0]
+
+    return if ['localhost', '127.0.0.1', '::1', '[::1]'].include?(host)
+
+    raise SekretoError,
+          'sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)'
+  end
+
   # HashiCorp Vault, KV v2.
   #
   # `api.token` reads `{addr}/v1/{mount}/data/api` and takes the `token`
   # field of `data.data`. A 404 means "not here", which is a miss rather
   # than an error, so a vault can sit in a chain with fallbacks.
-  class VaultProvider
+  class HashicorpProvider
     def initialize(addr, token, mount = nil)
       @addr = addr
       @token = token
@@ -117,6 +138,8 @@ module VoxgigSekreto
     end
 
     def lookup(name)
+      VoxgigSekreto.checkaddr(@addr)
+
       ref = VoxgigSekreto.vaultref(name)
       url = @addr.sub(%r{/\z}, '') + '/v1/' + @mount + '/data/' + ref['path']
 
@@ -124,7 +147,7 @@ module VoxgigSekreto
 
       return nil if 404 == status
 
-      raise SekretoError, 'sekreto: vault error: ' + status.to_s + ': ' + url if 200 != status
+      raise SekretoError, 'sekreto: hashicorp error: ' + status.to_s + ': ' + url if 200 != status
 
       data = body.is_a?(Hash) && body['data'].is_a?(Hash) ? body['data']['data'] : nil
       value = data.is_a?(Hash) ? data[ref['field']] : nil
@@ -133,41 +156,75 @@ module VoxgigSekreto
     end
 
     def describe
-      'vault:' + @addr + '/' + @mount
+      'hashicorp:' + @addr + '/' + @mount
     end
   end
 
-  # A boru vault.
+  # A boru vault (https://github.com/boru-lang/boru).
   #
-  # The boru vault protocol as sekreto uses it: a GET of
-  # `{addr}/vault/{path}?field={field}` with an `X-Boru-Token` header,
-  # answering `{"ok":true,"value":"..."}` when the secret exists and
-  # `{"ok":false}` (or 404) when it does not.
+  # boru keeps secrets in a local encrypted keyring and hands a value out
+  # through its own CLI: `boru vault get --reveal <alias>` prints the secret
+  # on stdout, and nothing else.
+  #
+  # There is deliberately no HTTP read here. boru's `vault proxy` and
+  # `vault mcp` are a *credential broker*: they inject the real secret into
+  # an outbound request and forward it, so an agent can call an API without
+  # ever holding the credential. Handing a value back is the one thing that
+  # broker is built not to do, so sekreto reads the vault the way boru itself
+  # does - through the CLI.
+  #
+  # A sekreto name is already a valid boru alias, so `api.token` crosses over
+  # unchanged. A `namespace` qualifies it the way boru writes it,
+  # `<namespace>:<name>`.
+  #
+  # The passphrase is read by boru itself from `BORU_VAULT_PASSPHRASE`.
+  # sekreto never accepts it as config and never puts it on a command line,
+  # where it would show up in the process table.
   class BoruProvider
-    def initialize(addr, token)
-      @addr = addr
-      @token = token
+    def initialize(command = nil, namespace = nil, home = nil)
+      @command = command || 'boru'
+      @namespace = namespace
+      @home = home
     end
 
     def lookup(name)
-      ref = VoxgigSekreto.vaultref(name)
-      url = @addr.sub(%r{/\z}, '') + '/vault/' + ref['path'] +
-            '?field=' + URI.encode_www_form_component(ref['field'])
+      VoxgigSekreto.checkname(name)
 
-      status, body = VoxgigSekreto.httpget(url, { 'X-Boru-Token' => @token })
+      alias_name = @namespace ? @namespace + ':' + name : name
+      env = @home ? { 'BORU_HOME' => @home } : {}
 
-      return nil if 404 == status
+      begin
+        out, err, status = Open3.capture3(env, @command, 'vault', 'get', '--reveal', alias_name)
+      rescue SystemCallError => e
+        raise SekretoError, 'sekreto: cannot run ' + @command + ': ' + e.message
+      end
 
-      raise SekretoError, 'sekreto: boru vault error: ' + status.to_s + ': ' + url if 200 != status
+      # boru prints the value and one newline, and nothing else.
+      return out.sub(/\n\z/, '') if status.success?
 
-      return nil unless body.is_a?(Hash) && true == body['ok']
+      why = err.to_s.strip
 
-      body['value'].nil? ? nil : body['value'].to_s
+      # "no alias named" is boru saying it does not hold this secret, which is
+      # a miss: the chain carries on to the next provider. A locked vault or a
+      # wrong passphrase is not a miss - treating it as one would fall through
+      # to a weaker store without saying so.
+      return nil if VoxgigSekreto.borumiss(why)
+
+      raise SekretoError,
+            'sekreto: boru vault error: ' + (why.empty? ? 'exit ' + status.exitstatus.to_s : why)
     end
 
     def describe
-      'boru:' + @addr
+      'boru' + (@namespace ? ':' + @namespace : '')
     end
+  end
+
+  module_function
+
+  # Does this boru failure mean "no such secret" rather than "I could not
+  # answer"? Matched on boru's own wording for a missing alias.
+  def borumiss(why)
+    why.include?('no alias named')
   end
 
   # Build a provider from its declarative form.
@@ -179,9 +236,10 @@ module VoxgigSekreto
     when 'env' then EnvProvider.new(get.call(:prefix))
     when 'dotenv' then DotenvProvider.new(get.call(:file) || '.env', get.call(:prefix))
     when 'memory' then MemoryProvider.new(get.call(:values) || {}, get.call(:prefix))
-    when 'vault'
-      VaultProvider.new(get.call(:addr) || '', get.call(:token) || '', get.call(:mount))
-    when 'boru' then BoruProvider.new(get.call(:addr) || '', get.call(:token) || '')
+    when 'hashicorp'
+      HashicorpProvider.new(get.call(:addr) || '', get.call(:token) || '', get.call(:mount))
+    when 'boru'
+      BoruProvider.new(get.call(:command), get.call(:namespace), get.call(:home))
     else raise SekretoError, 'sekreto: unknown provider kind: ' + kind.to_s
     end
   end

@@ -80,6 +80,15 @@ class TestSekreto(unittest.TestCase):
     def test_sources(self):
         runset(spec['sources'], lambda vin: chainof(vin).sources())
 
+    def test_stores(self):
+        runset(spec['stores'], lambda vin: chainof(vin).stores())
+
+    def test_getfrom(self):
+        runset(spec['getfrom'], lambda vin: chainof(vin).getfrom(vin['store'], vin['name']))
+
+    def test_tryfrom(self):
+        runset(spec['tryfrom'], lambda vin: chainof(vin).tryfrom(vin['store'], vin['name']))
+
     def test_redact(self):
         runset(spec['redact'], lambda vin: redact(vin['text'], vin['values']))
 

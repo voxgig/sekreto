@@ -6,7 +6,8 @@
 # them against the same server from all four secret sources - which is
 # what proves the library, rather than the spec alone.
 #
-# Usage: sekreto_cli.py <api-url> [--source env|dotenv|vault|boru|chain]
+# Usage: sekreto_cli.py <api-url> [--source env|dotenv|hashicorp|boru|chain]
+#                                 [--store <name>]   directed read
 
 import json
 import os
@@ -26,30 +27,31 @@ def chainfor(source):
 
     envspec = {'kind': 'env', 'prefix': env.get('SEKRETO_PREFIX')}
     dotenvspec = {'kind': 'dotenv', 'file': env.get('SEKRETO_DOTENV') or '.env'}
-    vaultspec = {
-        'kind': 'vault',
+    hashicorpspec = {
+        'kind': 'hashicorp',
         'addr': env.get('VAULT_ADDR') or '',
         'token': env.get('VAULT_TOKEN') or '',
         'mount': env.get('VAULT_MOUNT'),
     }
     boruspec = {
         'kind': 'boru',
-        'addr': env.get('BORU_VAULT_ADDR') or '',
-        'token': env.get('BORU_VAULT_TOKEN') or '',
+        'command': env.get('BORU_COMMAND') or 'boru',
+        'namespace': env.get('BORU_NAMESPACE'),
+        'home': env.get('BORU_HOME'),
     }
 
     if 'env' == source:
         return [envspec]
     if 'dotenv' == source:
         return [dotenvspec]
-    if 'vault' == source:
-        return [vaultspec]
+    if 'hashicorp' == source:
+        return [hashicorpspec]
     if 'boru' == source:
         return [boruspec]
 
     # The default: the chain an app would actually ship with - local
     # overrides first, shared vaults last.
-    return [envspec, dotenvspec, vaultspec, boruspec]
+    return [envspec, dotenvspec, hashicorpspec, boruspec]
 
 
 def main():
@@ -58,10 +60,14 @@ def main():
 
     source = args[args.index('--source') + 1] if '--source' in args else 'chain'
 
+    # --store names a store outright: the secret must come from that one,
+    # not from whichever provider happens to answer first.
+    store = args[args.index('--store') + 1] if '--store' in args else ''
+
     secrets = Sekreto({'providers': chainfor(source)})
 
     try:
-        token = secrets.get('api.token')
+        token = secrets.getfrom(store, 'api.token') if store else secrets.get('api.token')
     except Exception as err:
         print('sekreto-cli: ' + str(err), file=sys.stderr)
         return 2
@@ -82,7 +88,13 @@ def main():
 
     print(
         json.dumps(
-            {'ok': True, 'lang': LANG, 'source': source, 'caller': body.get('caller')},
+            {
+                'ok': True,
+                'lang': LANG,
+                'source': source,
+                'store': store,
+                'caller': body.get('caller'),
+            },
             separators=(',', ':'),
         )
     )
