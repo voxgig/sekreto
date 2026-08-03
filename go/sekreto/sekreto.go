@@ -259,6 +259,11 @@ type Sekreto struct {
 	entries []entry
 	docache bool
 	cache   []cached
+	// Every value ever resolved, for Redact. Kept independently of the
+	// read cache so that redaction still works when caching is off -
+	// otherwise NoCache would silently disable Redact and leak secrets
+	// to logs.
+	seen []string
 }
 
 // New makes a Sekreto from options. Each provider answers to its own kind as
@@ -372,6 +377,7 @@ func (sek *Sekreto) resolve(store string, name string, entries []entry) (string,
 			if sek.docache {
 				sek.cache = append(sek.cache, cached{store: store, name: name, value: found})
 			}
+			sek.seen = append(sek.seen, found)
 			return found, true, nil
 		}
 	}
@@ -439,14 +445,11 @@ func (sek *Sekreto) Stores() []string {
 }
 
 // Redact replaces every value this Sekreto has resolved with `[redacted]`.
+//
+// Works whether or not caching is enabled: the redaction list is kept
+// independently of the read cache.
 func (sek *Sekreto) Redact(text string) string {
-	values := []string{}
-
-	for _, hit := range sek.cache {
-		values = append(values, hit.value)
-	}
-
-	return Redact(text, values)
+	return Redact(text, sek.seen)
 }
 
 // Refresh drops cached values, so the next Get asks the providers again.

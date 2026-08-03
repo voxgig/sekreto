@@ -148,8 +148,15 @@ export function dotenvprovider(file: string, prefix?: string): Provider {
       try {
         values = parsedotenv(readFileSync(file, 'utf8'))
       } catch (err: any) {
-        // A missing .env file is not an error: it means "no secrets here".
-        values = {}
+        // An absent file - or an absent directory - means "no secrets
+        // here", exactly like fileprovider. Anything else (permission
+        // denied, an unreadable mount) is a store that could not answer,
+        // and swallowing it would fall through to a weaker store.
+        if ('ENOENT' === err.code || 'ENOTDIR' === err.code) {
+          values = {}
+        } else {
+          throw new SekretoError('sekreto: dotenv provider cannot read ' + file + ': ' + err.message)
+        }
       }
     }
     return values
@@ -228,6 +235,10 @@ export function checkaddr(addr: string): void {
   throw new SekretoError('sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)')
 }
 
+/** How long any single vault round-trip may take before it is treated as
+ * unreachable. Ports carry the same bound. */
+const HTTP_TIMEOUT_MS = 10000
+
 /** One JSON round-trip. Network failure is always an error - an
  * unreachable store is a store that could not answer. */
 async function fetchjson(
@@ -238,7 +249,19 @@ async function fetchjson(
 ): Promise<{ status: number; body: any }> {
   let res: Response
   try {
-    res = await fetch(url, { method, headers, body })
+    res = await fetch(url, {
+      method,
+      headers,
+      body,
+      // A vault API never legitimately redirects, and a followed redirect
+      // carries X-Vault-Token to the redirect's host (and can downgrade
+      // https to http), which checkaddr - it only validates the configured
+      // address - cannot see. Refuse to follow one.
+      redirect: 'error',
+      // Bound the wait so an accepted-but-silent endpoint cannot hang the
+      // caller (and the app's startup) forever.
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    })
   } catch (err: any) {
     throw new SekretoError('sekreto: cannot reach ' + url.split('?')[0] + ': ' + err.message)
   }

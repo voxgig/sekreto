@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"sync"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -156,19 +157,26 @@ type DotenvProvider struct {
 	values map[string]string
 }
 
-func (provider *DotenvProvider) load() map[string]string {
+func (provider *DotenvProvider) load() (map[string]string, error) {
 	if nil == provider.values {
 		text, err := os.ReadFile(provider.File)
 		if nil != err {
-			// A missing .env file is not an error: it means "no secrets
-			// here".
+			// An absent file - or an absent directory - means "no secrets
+			// here", exactly like FileProvider. Anything else (permission
+			// denied, an unreadable mount) is a store that could not
+			// answer, and swallowing it would fall through to a weaker
+			// store.
+			if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR) {
+				return nil, fail("sekreto: dotenv provider cannot read " +
+					provider.File + ": " + err.Error())
+			}
 			provider.values = map[string]string{}
 		} else {
 			provider.values = ParseDotenv(string(text))
 		}
 	}
 
-	return provider.values
+	return provider.values, nil
 }
 
 func (provider *DotenvProvider) Lookup(name string) (string, bool, error) {
@@ -177,7 +185,12 @@ func (provider *DotenvProvider) Lookup(name string) (string, bool, error) {
 		return "", false, err
 	}
 
-	value, has := provider.load()[key]
+	values, err := provider.load()
+	if nil != err {
+		return "", false, err
+	}
+
+	value, has := values[key]
 	return value, has, nil
 }
 
@@ -254,7 +267,16 @@ func (provider *FileProvider) Describe() string {
 	return "file:" + provider.Dir
 }
 
-var client = &http.Client{Timeout: 10 * time.Second}
+// A vault API never legitimately redirects, and a followed redirect would
+// carry X-Vault-Token to the redirect's host (and could downgrade https to
+// http) - checkaddr only validates the configured address, so it cannot
+// see the target. Refuse to follow one.
+var client = &http.Client{
+	Timeout: 10 * time.Second,
+	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
 
 // httpjson makes one JSON round-trip, returning the status and decoded
 // body. Network failure is always an error - an unreachable store is a
@@ -429,6 +451,7 @@ type HashicorpProvider struct {
 	livetoken string
 	havetoken bool
 	renewat   time.Time
+	mu        sync.Mutex
 }
 
 func (provider *HashicorpProvider) mount() string {
@@ -502,6 +525,11 @@ func (provider *HashicorpProvider) login() (string, error) {
 }
 
 func (provider *HashicorpProvider) Lookup(name string) (string, bool, error) {
+	// Serialize per-provider access: Lookup reads and refreshes the cached
+	// login token, and a secrets client may resolve from several goroutines.
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	if err := checkaddr(provider.Addr); nil != err {
 		return "", false, err
 	}
@@ -978,6 +1006,7 @@ type GcpSecretsProvider struct {
 	livetoken string
 	havetoken bool
 	renewat   time.Time
+	mu        sync.Mutex
 }
 
 func (provider *GcpSecretsProvider) metadataaddr() string {
@@ -1018,6 +1047,11 @@ func (provider *GcpSecretsProvider) login() (string, error) {
 }
 
 func (provider *GcpSecretsProvider) Lookup(name string) (string, bool, error) {
+	// Serialize per-provider access: Lookup reads and refreshes the cached
+	// login token, and a secrets client may resolve from several goroutines.
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	if "" == provider.Project {
 		return "", false, fail("sekreto: gcp: no project")
 	}
@@ -1102,6 +1136,7 @@ type AzureSecretsProvider struct {
 	livetoken string
 	havetoken bool
 	renewat   time.Time
+	mu        sync.Mutex
 }
 
 func (provider *AzureSecretsProvider) login() (string, error) {
@@ -1162,6 +1197,11 @@ func (provider *AzureSecretsProvider) login() (string, error) {
 }
 
 func (provider *AzureSecretsProvider) Lookup(name string) (string, bool, error) {
+	// Serialize per-provider access: Lookup reads and refreshes the cached
+	// login token, and a secrets client may resolve from several goroutines.
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	if "" == provider.Vault {
 		return "", false, fail("sekreto: azure: no vault")
 	}
@@ -1445,6 +1485,7 @@ type InfisicalProvider struct {
 	livetoken string
 	havetoken bool
 	renewat   time.Time
+	mu        sync.Mutex
 }
 
 func (provider *InfisicalProvider) login(addr string) (string, error) {
@@ -1478,6 +1519,11 @@ func (provider *InfisicalProvider) login(addr string) (string, error) {
 }
 
 func (provider *InfisicalProvider) Lookup(name string) (string, bool, error) {
+	// Serialize per-provider access: Lookup reads and refreshes the cached
+	// login token, and a secrets client may resolve from several goroutines.
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	addr := provider.Addr
 	if "" == addr {
 		addr = "https://app.infisical.com"

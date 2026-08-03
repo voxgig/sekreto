@@ -276,6 +276,11 @@ pub struct Sekreto {
     // A Vec, not a map: the store a value came from stays attached, and
     // redaction order does not vary between runs.
     cache: Vec<(String, String, String)>,
+    // Every value ever resolved, for redact(). Kept independently of the
+    // read cache so that redaction still works when cache is off - otherwise
+    // an uncached Sekreto would silently disable redact() and leak secrets
+    // to logs.
+    seen: Vec<String>,
 }
 
 impl Sekreto {
@@ -309,6 +314,7 @@ impl Sekreto {
             entries,
             docache,
             cache: Vec::new(),
+            seen: Vec::new(),
         }
     }
 
@@ -388,6 +394,7 @@ impl Sekreto {
                     self.cache
                         .push((cachestore.to_string(), name.to_string(), found.clone()));
                 }
+                self.seen.push(found.clone());
                 return Ok(Some(found));
             }
         }
@@ -439,13 +446,11 @@ impl Sekreto {
     }
 
     /// Replace every value this Sekreto has resolved with `[redacted]`.
+    ///
+    /// Works whether or not caching is enabled: the redaction list is kept
+    /// independently of the read cache.
     pub fn redact(&self, text: &str) -> String {
-        let values: Vec<String> = self
-            .cache
-            .iter()
-            .map(|(_, _, value)| value.clone())
-            .collect();
-        redact(text, &values)
+        redact(text, &self.seen)
     }
 
     /// Drop cached values, so the next `get` asks the providers again.

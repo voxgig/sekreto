@@ -87,15 +87,23 @@ namespace Voxgig.Sekreto
                 {
                     values = Dotenv.Parse(File.ReadAllText(file));
                 }
-                catch (IOException)
+                catch (FileNotFoundException)
                 {
-                    // A missing .env file is not an error: it means "no
-                    // secrets here".
+                    // An absent file - or an absent directory - means "no
+                    // secrets here", exactly like FileProvider. Anything else
+                    // (permission denied, an unreadable mount) is a store
+                    // that could not answer, and swallowing it would fall
+                    // through to a weaker store.
                     values = new Dictionary<string, object>();
                 }
-                catch (UnauthorizedAccessException)
+                catch (DirectoryNotFoundException)
                 {
                     values = new Dictionary<string, object>();
+                }
+                catch (Exception err)
+                {
+                    throw new SekretoError(
+                        "sekreto: dotenv provider cannot read " + file + ": " + err.Message);
                 }
             }
 
@@ -279,8 +287,13 @@ namespace Voxgig.Sekreto
 
     internal static class Http
     {
+        // AllowAutoRedirect = false: a vault API never legitimately
+        // redirects, and a followed redirect carries X-Vault-Token to the
+        // target host, which checkaddr - it validates only the configured
+        // address - cannot see. A 3xx then surfaces as a store error.
         private static readonly HttpClient Client =
-            new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+            new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            { Timeout = TimeSpan.FromSeconds(10) };
 
         /// <summary>
         /// One JSON round-trip. Network failure is always an error - an

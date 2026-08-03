@@ -96,11 +96,21 @@ sub urlenc { return Voxgig::Sekreto::Sigv4::uriescape(@_) }
         if ( !defined $self->{values} ) {
             my $text = '';
 
-            # A missing .env file is not an error: it means "no secrets here".
             if ( open( my $handle, '<', $self->{file} ) ) {
                 local $/ = undef;
                 $text = <$handle>;
                 close($handle);
+            }
+            else {
+                # An absent file - or an absent directory - means "no secrets
+                # here", exactly like the file provider. Anything else
+                # (permission denied, an unreadable mount) is a store that
+                # could not answer, and swallowing it would fall through to a
+                # weaker store.
+                if ( !( $!{ENOENT} || $!{ENOTDIR} ) ) {
+                    Voxgig::Sekreto::Providers::fail(
+                        'sekreto: dotenv provider cannot read ' . $self->{file} . ': ' . $! );
+                }
             }
 
             $self->{values} = Voxgig::Sekreto::parsedotenv($text);
@@ -203,7 +213,7 @@ sub fetchjson {
     my $options = { headers => $headers || {} };
     $options->{content} = $body if defined $body;
 
-    my $response = HTTP::Tiny->new( timeout => 10 )->request( $method, $url, $options );
+    my $response = HTTP::Tiny->new( timeout => 10, verify_SSL => 1, max_redirect => 0 )->request( $method, $url, $options );
 
     # HTTP::Tiny reports transport failures as a synthetic 599.
     if ( 599 == $response->{status} ) {

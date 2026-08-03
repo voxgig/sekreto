@@ -497,6 +497,14 @@ done
 # --------------------------------------------------------------- the tally
 
 echo
+# Zero checks is not a pass: if every port was skipped (nothing built, no
+# boru), the suite proved nothing. AGENTS.md tells developers to run this
+# before pushing, so a vacuous green here is worse than a red.
+if [ $pass -eq 0 ] && [ $fail -eq 0 ]; then
+  echo "$(red FAIL) 0 checks ran - nothing was built or exercised"
+  exit 1
+fi
+
 if [ $fail -eq 0 ]; then
   echo "$(green PASS) $pass checks"
   exit 0

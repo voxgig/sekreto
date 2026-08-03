@@ -156,26 +156,52 @@ pub struct DotenvProvider {
     pub file: String,
     pub prefix: String,
     values: BTreeMap<String, String>,
+    // A read failure other than "file not found", kept for lookup to
+    // raise: construction stays infallible, but the failure must not be
+    // swallowed as "no secrets here".
+    fail: Option<SekretoError>,
 }
 
 impl DotenvProvider {
     pub fn new(file: &str, prefix: &str) -> Self {
-        // A missing .env file is not an error: it means "no secrets here".
-        let values = match fs::read_to_string(file) {
-            Ok(text) => crate::sekreto::parsedotenv(&text),
-            Err(_) => BTreeMap::new(),
+        // An absent file - or an absent directory - means "no secrets
+        // here", exactly like FileProvider. Anything else (permission
+        // denied, an unreadable mount) is a store that could not answer,
+        // and swallowing it would fall through to a weaker store.
+        let (values, fail) = match fs::read_to_string(file) {
+            Ok(text) => (crate::sekreto::parsedotenv(&text), None),
+            Err(err) => {
+                if matches!(
+                    err.kind(),
+                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory
+                ) {
+                    (BTreeMap::new(), None)
+                } else {
+                    (
+                        BTreeMap::new(),
+                        Some(SekretoError::new(format!(
+                            "sekreto: dotenv provider cannot read {}: {}",
+                            file, err
+                        ))),
+                    )
+                }
+            }
         };
 
         DotenvProvider {
             file: file.to_string(),
             prefix: prefix.to_string(),
             values,
+            fail,
         }
     }
 }
 
 impl Provider for DotenvProvider {
     fn lookup(&self, name: &str) -> Answer<Option<String>> {
+        if let Some(fail) = &self.fail {
+            return Err(fail.clone());
+        }
         Ok(self.values.get(&envkey(name, &self.prefix)?).cloned())
     }
 
@@ -369,8 +395,12 @@ fn fetchjson(
 /// none - a store that does not say when a token dies cannot have it
 /// renewed on a guess.
 fn renewtime(seconds: f64) -> Option<Instant> {
-    if 0.0 < seconds {
-        Some(Instant::now() + Duration::from_secs_f64((seconds - 60.0).max(1.0)))
+    if 0.0 < seconds && seconds.is_finite() {
+        // Clamp before constructing the Duration: from_secs_f64 panics on a
+        // non-finite or too-large value, and a token expiry comes from the
+        // (untrusted) auth response. A century is more than any real lease.
+        let bounded = (seconds - 60.0).max(1.0).min(3_153_600_000.0);
+        Some(Instant::now() + Duration::from_secs_f64(bounded))
     } else {
         None
     }

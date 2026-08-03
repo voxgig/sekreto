@@ -73,10 +73,17 @@ class DotenvProvider(Provider):
             try:
                 with open(self.file, 'r', encoding='utf8') as handle:
                     self.values = parsedotenv(handle.read())
-            except OSError:
-                # A missing .env file is not an error: it means "no
-                # secrets here".
+            except (FileNotFoundError, NotADirectoryError):
+                # An absent file - or an absent directory - means "no
+                # secrets here", exactly like FileProvider. Anything else
+                # (permission denied, an unreadable mount) is a store that
+                # could not answer, and swallowing it would fall through to
+                # a weaker store.
                 self.values = {}
+            except OSError as err:
+                raise SekretoError(
+                    'sekreto: dotenv provider cannot read ' + self.file + ': ' + str(err)
+                )
         return self.values
 
     def lookup(self, name):
@@ -142,6 +149,21 @@ class FileProvider(Provider):
         return 'file:' + self.dir
 
 
+_HTTP_TIMEOUT = 10  # seconds; the same bound every port carries
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A redirect handler that refuses to follow: a vault API never
+    legitimately redirects, and following one would resend the vault token
+    to the redirect's host."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_opener = urllib.request.build_opener(_NoRedirect)
+
+
 def _fetchjson(method, url, headers, body=None):
     """One JSON round-trip, returning (status, parsed-json-or-None).
 
@@ -153,7 +175,11 @@ def _fetchjson(method, url, headers, body=None):
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
 
     try:
-        with urllib.request.urlopen(request) as response:
+        # No redirects (a followed one carries X-Vault-Token to the target,
+        # which checkaddr cannot see) and a bounded wait (an accepted-but-
+        # silent endpoint must not hang the caller forever). A 3xx surfaces
+        # as an HTTPError below and is treated as a store error.
+        with _opener.open(request, timeout=_HTTP_TIMEOUT) as response:
             status = response.status
             text = response.read().decode('utf8')
     except urllib.error.HTTPError as err:

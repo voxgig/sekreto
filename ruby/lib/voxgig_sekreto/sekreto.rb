@@ -195,6 +195,12 @@ module VoxgigSekreto
       # A list, not a hash: the store a value came from stays attached, and
       # redaction order does not vary between runs.
       @cache = []
+
+      # Every value ever resolved, for redact. Kept independently of the
+      # read cache so that redaction still works when cache is off -
+      # otherwise `cache: false` would silently disable redact and leak
+      # secrets to logs.
+      @seen = []
     end
 
     # The secret, or a SekretoError if no provider has it.
@@ -261,8 +267,11 @@ module VoxgigSekreto
     end
 
     # Replace every value this Sekreto has resolved with `[redacted]`.
+    #
+    # Works whether or not caching is enabled: the redaction list is kept
+    # independently of the read cache.
     def redact(text)
-      VoxgigSekreto.redact(text, @cache.map { |cached| cached[2] })
+      VoxgigSekreto.redact(text, @seen)
     end
 
     # Drop cached values, so the next `get` asks the providers again.
@@ -285,6 +294,7 @@ module VoxgigSekreto
 
         unless found.nil?
           @cache << [store, name, found] if @docache
+          @seen << found
           return found
         end
       end

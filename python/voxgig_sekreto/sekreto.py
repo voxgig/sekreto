@@ -213,6 +213,12 @@ class Sekreto:
         # and redaction order does not vary between runs.
         self.cache = []
 
+        # Every value ever resolved, for redact(). Kept independently of
+        # the read cache so that redaction still works when cache is off -
+        # otherwise `cache: False` would silently disable redact() and leak
+        # secrets to logs.
+        self.seen = []
+
     def get(self, name):
         """The secret, or a SekretoError if no provider has it."""
         found = self.try_(name)
@@ -265,6 +271,7 @@ class Sekreto:
             if found is not None:
                 if self.docache:
                     self.cache.append((store, name, found))
+                self.seen.append(found)
                 return found
 
         return None
@@ -297,8 +304,12 @@ class Sekreto:
         return out
 
     def redact(self, text):
-        """Replace every value this Sekreto has resolved with `[redacted]`."""
-        return redact(text, [cached[2] for cached in self.cache])
+        """Replace every value this Sekreto has resolved with `[redacted]`.
+
+        Works whether or not caching is enabled: the redaction list is kept
+        independently of the read cache.
+        """
+        return redact(text, self.seen)
 
     def refresh(self):
         """Drop cached values, so the next `get` asks the providers again."""

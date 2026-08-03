@@ -53,8 +53,15 @@ function dotenvprovider(file, prefix) {
       try {
         values = parsedotenv(readFileSync(file, 'utf8'))
       } catch (err) {
-        // A missing .env file is not an error: it means "no secrets here".
-        values = {}
+        // An absent file - or an absent directory - means "no secrets
+        // here", exactly like fileprovider. Anything else (permission
+        // denied, an unreadable mount) is a store that could not answer,
+        // and swallowing it would fall through to a weaker store.
+        if ('ENOENT' === err.code || 'ENOTDIR' === err.code) {
+          values = {}
+        } else {
+          throw new SekretoError('sekreto: dotenv provider cannot read ' + file + ': ' + err.message)
+        }
       }
     }
     return values
