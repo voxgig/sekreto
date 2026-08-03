@@ -147,8 +147,7 @@ def _fetchjson(method, url, headers, body=None):
 
     A 404 is a normal answer here, not an exception: callers decide on
     status. Network failure is always an error - an unreachable store is a
-    store that could not answer. A body that is not JSON only matters when
-    the status promised one; callers decide on status first.
+    store that could not answer.
     """
     data = None if body is None else body.encode('utf8')
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -168,6 +167,12 @@ def _fetchjson(method, url, headers, body=None):
     try:
         return status, json.loads(text)
     except ValueError:
+        # A success status promised JSON; a body that does not parse means
+        # the store could not answer coherently, and treating it as a miss
+        # would fall through to a weaker store. Error statuses may carry
+        # any body - they are decided on status alone.
+        if 200 == status:
+            raise SekretoError('sekreto: malformed response from ' + url.split('?')[0])
         return status, None
 
 
@@ -176,6 +181,16 @@ def urlpart(text):
     the addresses built here must match the canonical port's byte for
     byte."""
     return urllib.parse.quote(str(text), safe="-_.!~*'()")
+
+
+def _tonumber(value):
+    """The canonical port's Number() as expiry fields need it: a number
+    or numeric string converts (expires_in may arrive as a string);
+    anything else becomes 0, which means "never renew"."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def checkaddr(addr):
@@ -227,9 +242,18 @@ class HashicorpProvider(Provider):
         self.vaultnamespace = vaultnamespace
         self.auth = auth
 
-        # The working token, resolved once and reused. A configured token
-        # wins; otherwise the first lookup logs in.
+        # A version typo like kv: 3 must not quietly behave as v2 and turn
+        # its 404s into misses; there is nothing safe to assume it meant.
+        if 1 != self.kv and 2 != self.kv:
+            raise SekretoError(
+                'sekreto: hashicorp: unsupported kv version: ' + str(self.kv)
+            )
+
+        # The working token: a configured token is kept forever, a logged-in
+        # token is renewed shortly before its lease runs out - a long-running
+        # process must not keep presenting a token the vault already expired.
         self.livetoken = None if '' == token else token
+        self.renewat = float('inf')
 
     def baseheaders(self):
         headers = {}
@@ -279,12 +303,15 @@ class HashicorpProvider(Provider):
                 'sekreto: hashicorp login failed: ' + str(status) + ': ' + url
             )
 
+        lease = _tonumber(((resbody or {}).get('auth') or {}).get('lease_duration'))
+        self.renewat = time.time() + max(lease - 60, 1) if 0 < lease else float('inf')
+
         return str(got)
 
     def lookup(self, name):
         checkaddr(self.addr)
 
-        if self.livetoken is None:
+        if self.livetoken is None or time.time() >= self.renewat:
             self.livetoken = self.login()
 
         ref = vaultref(name)
@@ -452,7 +479,10 @@ def awsauth(opts):
 def awscall(opts, service, target, payload):
     """One signed call to an AWS JSON-1.1 API."""
     auth = awsauth(opts)
-    addr = opts.get('addr') or 'https://' + service + '.' + auth['region'] + '.amazonaws.com'
+    # The China partition lives under its own suffix; every other
+    # commercial region is plain amazonaws.com.
+    suffix = '.amazonaws.com.cn' if auth['region'].startswith('cn-') else '.amazonaws.com'
+    addr = opts.get('addr') or 'https://' + service + '.' + auth['region'] + suffix
     checkaddr(addr)
 
     url = addr.rstrip('/') + '/'
@@ -592,7 +622,11 @@ class GcpsecretsProvider(Provider):
 
     def __init__(self, options=None):
         self.opts = options or {}
+
+        # A configured token is kept forever; a metadata-server token carries
+        # expires_in and is renewed shortly before it runs out.
         self.livetoken = None
+        self.renewat = float('inf')
 
     def metadataaddr(self):
         if self.opts.get('metadataaddr'):
@@ -614,6 +648,9 @@ class GcpsecretsProvider(Provider):
         if 200 != status or not got:
             raise SekretoError('sekreto: gcp: no token and metadata server did not answer')
 
+        expires = _tonumber((body or {}).get('expires_in'))
+        self.renewat = time.time() + max(expires - 60, 1) if 0 < expires else float('inf')
+
         return str(got)
 
     def lookup(self, name):
@@ -624,7 +661,7 @@ class GcpsecretsProvider(Provider):
         addr = self.opts.get('addr') or 'https://secretmanager.googleapis.com'
         checkaddr(addr)
 
-        if self.livetoken is None:
+        if self.livetoken is None or time.time() >= self.renewat:
             self.livetoken = self.login()
 
         url = (addr.rstrip('/') + '/v1/projects/' + project + '/secrets/'
@@ -666,7 +703,15 @@ class AzuresecretsProvider(Provider):
 
     def __init__(self, options=None):
         self.opts = options or {}
+
+        # A configured token is kept forever; logged-in and IMDS tokens carry
+        # expires_in and are renewed shortly before they run out.
         self.livetoken = None
+        self.renewat = float('inf')
+
+    def expiry(self, expires):
+        seconds = _tonumber(expires)
+        return time.time() + max(seconds - 60, 1) if 0 < seconds else float('inf')
 
     def login(self):
         opts = self.opts
@@ -691,6 +736,7 @@ class AzuresecretsProvider(Provider):
             if 200 != status or not got:
                 raise SekretoError('sekreto: azure login failed: ' + str(status))
 
+            self.renewat = self.expiry((body or {}).get('expires_in'))
             return str(got)
 
         imds = ((opts.get('imdsaddr') or 'http://169.254.169.254').rstrip('/')
@@ -705,6 +751,7 @@ class AzuresecretsProvider(Provider):
                 'sekreto: azure: no token, no client credentials, and IMDS did not answer'
             )
 
+        self.renewat = self.expiry((body or {}).get('expires_in'))
         return str(got)
 
     def lookup(self, name):
@@ -712,10 +759,15 @@ class AzuresecretsProvider(Provider):
         if '' == vault:
             raise SekretoError('sekreto: azure: no vault')
 
-        vaulturl = vault if vault.startswith('http') else 'https://' + vault + '.vault.azure.net'
+        # Only an explicit scheme is a URL; a vault NAMED httpvault must
+        # still become https://httpvault.vault.azure.net.
+        if vault.startswith('http://') or vault.startswith('https://'):
+            vaulturl = vault
+        else:
+            vaulturl = 'https://' + vault + '.vault.azure.net'
         checkaddr(vaulturl)
 
-        if self.livetoken is None:
+        if self.livetoken is None or time.time() >= self.renewat:
             self.livetoken = self.login()
 
         url = (vaulturl.rstrip('/') + '/secrets/' + flatname(name, '-')
@@ -886,7 +938,11 @@ class InfisicalProvider(Provider):
 
     def __init__(self, options=None):
         self.opts = options or {}
+
+        # A configured token is kept forever; a universal-auth token carries
+        # expiresIn and is renewed shortly before it runs out.
         self.livetoken = None
+        self.renewat = float('inf')
 
     def login(self, addr):
         if self.opts.get('token'):
@@ -909,6 +965,9 @@ class InfisicalProvider(Provider):
         if 200 != status or not got:
             raise SekretoError('sekreto: infisical login failed: ' + str(status))
 
+        expires = _tonumber((body or {}).get('expiresIn'))
+        self.renewat = time.time() + max(expires - 60, 1) if 0 < expires else float('inf')
+
         return str(got)
 
     def lookup(self, name):
@@ -920,7 +979,7 @@ class InfisicalProvider(Provider):
         if '' == project or '' == environment:
             raise SekretoError('sekreto: infisical: no project/environment')
 
-        if self.livetoken is None:
+        if self.livetoken is None or time.time() >= self.renewat:
             self.livetoken = self.login(addr)
 
         url = (addr + '/api/v3/secrets/raw/' + envkey(name)

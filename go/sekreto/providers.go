@@ -258,8 +258,7 @@ var client = &http.Client{Timeout: 10 * time.Second}
 
 // httpjson makes one JSON round-trip, returning the status and decoded
 // body. Network failure is always an error - an unreachable store is a
-// store that could not answer. A body that is not JSON only matters when
-// the status promised one; callers decide on status first.
+// store that could not answer.
 func httpjson(method string, target string, headers map[string]string, payload string) (int, any, error) {
 	var reader io.Reader
 	if "" != payload {
@@ -288,7 +287,17 @@ func httpjson(method string, target string, headers map[string]string, payload s
 	}
 
 	var body any
-	_ = json.Unmarshal(text, &body)
+	if err := json.Unmarshal(text, &body); nil != err {
+		// A success status promised JSON; a body that does not parse means
+		// the store could not answer coherently, and treating it as a miss
+		// would fall through to a weaker store. Error statuses may carry
+		// any body - they are decided on status alone.
+		if http.StatusOK == response.StatusCode {
+			return response.StatusCode, nil, fail("sekreto: malformed response from " +
+				strings.SplitN(target, "?", 2)[0])
+		}
+		body = nil
+	}
 
 	return response.StatusCode, body, nil
 }
@@ -323,6 +332,48 @@ func digtext(body any, keys ...string) string {
 		return ""
 	}
 	return tostring(value)
+}
+
+// tonumber reads a decoded JSON value as a number the way the canonical
+// port's Number() does: numbers pass through, numeric strings parse
+// (Azure's IMDS hands expires_in back as a string), and anything else -
+// missing, malformed - is zero.
+func tonumber(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case string:
+		number, err := strconv.ParseFloat(typed, 64)
+		if nil != err {
+			return 0
+		}
+		return number
+	default:
+		return 0
+	}
+}
+
+// expiry is the moment a login token should be renewed: shortly before
+// its lifetime (in seconds, from the login response) runs out. A missing
+// or zero lifetime answers the zero time, which means never renew.
+func expiry(lifetime any) time.Time {
+	seconds := tonumber(lifetime)
+	if 0 >= seconds {
+		return time.Time{}
+	}
+
+	wait := seconds - 60
+	if 1 > wait {
+		wait = 1
+	}
+
+	return time.Now().Add(time.Duration(wait * float64(time.Second)))
+}
+
+// due reports whether a renewal moment has arrived; the zero time never
+// arrives.
+func due(renewat time.Time) bool {
+	return !renewat.IsZero() && !time.Now().Before(renewat)
 }
 
 // checkaddr refuses to send a Vault token in the clear.
@@ -372,10 +423,12 @@ type HashicorpProvider struct {
 	KV             int
 	VaultNamespace string
 	Auth           *AuthSpec
-	// The working token, resolved once and reused. A configured token
-	// wins; otherwise the first lookup logs in.
+	// The working token: a configured token is kept forever, a logged-in
+	// token is renewed shortly before its lease runs out - a long-running
+	// process must not keep presenting a token the vault already expired.
 	livetoken string
 	havetoken bool
+	renewat   time.Time
 }
 
 func (provider *HashicorpProvider) mount() string {
@@ -443,6 +496,8 @@ func (provider *HashicorpProvider) login() (string, error) {
 		return "", fail("sekreto: hashicorp login failed: " + strconv.Itoa(status) + ": " + target)
 	}
 
+	provider.renewat = expiry(dig(body, "auth", "lease_duration"))
+
 	return got, nil
 }
 
@@ -451,7 +506,7 @@ func (provider *HashicorpProvider) Lookup(name string) (string, bool, error) {
 		return "", false, err
 	}
 
-	if !provider.havetoken {
+	if !provider.havetoken || due(provider.renewat) {
 		if "" != provider.Token {
 			provider.livetoken = provider.Token
 		} else {
@@ -718,7 +773,13 @@ func awscall(
 	}
 
 	if "" == addr {
-		addr = "https://" + service + "." + auth.region + ".amazonaws.com"
+		// The China partition lives under its own suffix; every other
+		// commercial region is plain amazonaws.com.
+		suffix := ".amazonaws.com"
+		if strings.HasPrefix(auth.region, "cn-") {
+			suffix = ".amazonaws.com.cn"
+		}
+		addr = "https://" + service + "." + auth.region + suffix
 	}
 	if err := checkaddr(addr); nil != err {
 		return 0, nil, err
@@ -912,8 +973,11 @@ type GcpSecretsProvider struct {
 	Token        string
 	Addr         string
 	MetadataAddr string
-	livetoken    string
-	havetoken    bool
+	// A configured token is kept forever; a metadata-server token carries
+	// expires_in and is renewed shortly before it runs out.
+	livetoken string
+	havetoken bool
+	renewat   time.Time
 }
 
 func (provider *GcpSecretsProvider) metadataaddr() string {
@@ -948,6 +1012,8 @@ func (provider *GcpSecretsProvider) login() (string, error) {
 		return "", fail("sekreto: gcp: no token and metadata server did not answer")
 	}
 
+	provider.renewat = expiry(dig(body, "expires_in"))
+
 	return got, nil
 }
 
@@ -964,7 +1030,7 @@ func (provider *GcpSecretsProvider) Lookup(name string) (string, bool, error) {
 		return "", false, err
 	}
 
-	if !provider.havetoken {
+	if !provider.havetoken || due(provider.renewat) {
 		token, err := provider.login()
 		if nil != err {
 			return "", false, err
@@ -1031,8 +1097,11 @@ type AzureSecretsProvider struct {
 	LoginAddr    string
 	ImdsAddr     string
 	ApiVersion   string
-	livetoken    string
-	havetoken    bool
+	// A configured token is kept forever; logged-in and IMDS tokens carry
+	// expires_in and are renewed shortly before they run out.
+	livetoken string
+	havetoken bool
+	renewat   time.Time
 }
 
 func (provider *AzureSecretsProvider) login() (string, error) {
@@ -1066,6 +1135,7 @@ func (provider *AzureSecretsProvider) login() (string, error) {
 			return "", fail("sekreto: azure login failed: " + strconv.Itoa(status))
 		}
 
+		provider.renewat = expiry(dig(body, "expires_in"))
 		return got, nil
 	}
 
@@ -1087,6 +1157,7 @@ func (provider *AzureSecretsProvider) login() (string, error) {
 		return "", fail("sekreto: azure: no token, no client credentials, and IMDS did not answer")
 	}
 
+	provider.renewat = expiry(dig(body, "expires_in"))
 	return got, nil
 }
 
@@ -1095,15 +1166,17 @@ func (provider *AzureSecretsProvider) Lookup(name string) (string, bool, error) 
 		return "", false, fail("sekreto: azure: no vault")
 	}
 
+	// Only an explicit scheme is a URL; a vault NAMED httpvault must
+	// still become https://httpvault.vault.azure.net.
 	vaulturl := provider.Vault
-	if !strings.HasPrefix(vaulturl, "http") {
+	if !strings.HasPrefix(vaulturl, "http://") && !strings.HasPrefix(vaulturl, "https://") {
 		vaulturl = "https://" + vaulturl + ".vault.azure.net"
 	}
 	if err := checkaddr(vaulturl); nil != err {
 		return "", false, err
 	}
 
-	if !provider.havetoken {
+	if !provider.havetoken || due(provider.renewat) {
 		token, err := provider.login()
 		if nil != err {
 			return "", false, err
@@ -1367,8 +1440,11 @@ type InfisicalProvider struct {
 	Project      string
 	Environment  string
 	Path         string
-	livetoken    string
-	havetoken    bool
+	// A configured token is kept forever; a universal-auth token carries
+	// expiresIn and is renewed shortly before it runs out.
+	livetoken string
+	havetoken bool
+	renewat   time.Time
 }
 
 func (provider *InfisicalProvider) login(addr string) (string, error) {
@@ -1396,6 +1472,8 @@ func (provider *InfisicalProvider) login(addr string) (string, error) {
 		return "", fail("sekreto: infisical login failed: " + strconv.Itoa(status))
 	}
 
+	provider.renewat = expiry(dig(body, "expiresIn"))
+
 	return got, nil
 }
 
@@ -1413,7 +1491,7 @@ func (provider *InfisicalProvider) Lookup(name string) (string, bool, error) {
 		return "", false, fail("sekreto: infisical: no project/environment")
 	}
 
-	if !provider.havetoken {
+	if !provider.havetoken || due(provider.renewat) {
 		token, err := provider.login(addr)
 		if nil != err {
 			return "", false, err
@@ -1501,6 +1579,15 @@ func MakeProvider(spec *ProviderSpec) (Provider, error) {
 	case "file":
 		return &FileProvider{Dir: spec.Dir, Prefix: spec.Prefix}, nil
 	case "hashicorp":
+		kv := spec.KV
+		if 0 == kv {
+			kv = 2
+		}
+		// A version typo like kv: 3 must not quietly behave as v2 and turn
+		// its 404s into misses; there is nothing safe to assume it meant.
+		if 1 != kv && 2 != kv {
+			return nil, fail("sekreto: hashicorp: unsupported kv version: " + strconv.Itoa(kv))
+		}
 		return &HashicorpProvider{
 			Addr:           spec.Addr,
 			Token:          spec.Token,

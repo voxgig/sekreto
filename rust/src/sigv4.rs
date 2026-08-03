@@ -161,9 +161,15 @@ pub fn sigv4(input: &Sigv4Input) -> Answer<Sigv4Output> {
     // x-amz-date (and the session token when present), lower-cased and
     // trimmed the way the canonical form requires. A BTreeMap keeps them in
     // the sorted order the canonical form also requires.
+    // Canonical header values are trimmed AND internally collapsed -
+    // AWS folds sequential whitespace to one space before signing, so a
+    // header like "a  b" must sign as "a b" or the service refuses it.
     let mut headers: BTreeMap<String, String> = BTreeMap::new();
     for (key, value) in &input.headers {
-        headers.insert(key.to_lowercase(), value.trim().to_string());
+        headers.insert(
+            key.to_lowercase(),
+            value.split_whitespace().collect::<Vec<&str>>().join(" "),
+        );
     }
     headers.insert("host".to_string(), host);
     headers.insert("x-amz-date".to_string(), input.datetime.clone());

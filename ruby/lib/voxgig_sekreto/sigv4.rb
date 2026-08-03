@@ -70,9 +70,12 @@ module VoxgigSekreto
     # Every header that will be signed: the caller's extras, plus host and
     # x-amz-date (and the session token when present), lower-cased and
     # trimmed the way the canonical form requires.
+    # Canonical header values are trimmed AND internally collapsed -
+    # AWS folds sequential whitespace to one space before signing, so a
+    # header like "a  b" must sign as "a b" or the service refuses it.
     headers = {}
     (get.call(:headers) || {}).each do |key, value|
-      headers[key.to_s.downcase] = value.to_s.strip
+      headers[key.to_s.downcase] = value.to_s.strip.gsub(/\s+/, ' ')
     end
 
     # The host includes the port only when it is not the scheme's default,

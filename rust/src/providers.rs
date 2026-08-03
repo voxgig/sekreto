@@ -21,7 +21,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::http;
 use crate::json::{self, Json};
@@ -336,9 +336,7 @@ struct JsonResponse {
 }
 
 /// One JSON round-trip. Network failure is always an error - an
-/// unreachable store is a store that could not answer. A body that is not
-/// JSON only matters when the status promised one; callers decide on
-/// status first.
+/// unreachable store is a store that could not answer.
 fn fetchjson(
     method: &str,
     url: &str,
@@ -347,10 +345,50 @@ fn fetchjson(
 ) -> Answer<JsonResponse> {
     let response = http::request(method, url, headers, body)?;
 
+    let parsed = json::parse(&response.body);
+
+    // A success status promised JSON; a body that does not parse means
+    // the store could not answer coherently, and treating it as a miss
+    // would fall through to a weaker store. Error statuses may carry
+    // any body - they are decided on status alone.
+    if 200 == response.status && parsed.is_none() {
+        return Err(SekretoError::new(format!(
+            "sekreto: malformed response from {}",
+            url.split('?').next().unwrap_or(url)
+        )));
+    }
+
     Ok(JsonResponse {
         status: response.status,
-        body: json::parse(&response.body),
+        body: parsed,
     })
+}
+
+/// When a token obtained by a login should be renewed: shortly before
+/// the expiry the login response named, or never (None) when it named
+/// none - a store that does not say when a token dies cannot have it
+/// renewed on a guess.
+fn renewtime(seconds: f64) -> Option<Instant> {
+    if 0.0 < seconds {
+        Some(Instant::now() + Duration::from_secs_f64((seconds - 60.0).max(1.0)))
+    } else {
+        None
+    }
+}
+
+/// The expiry a login response named, in seconds - zero when it named
+/// none (or named it unreadably). Some stores send the number as a JSON
+/// string, so the text form is parsed rather than the number taken.
+fn expiryseconds(body: &Option<Json>, path: &[&str]) -> f64 {
+    textat(body, path)
+        .and_then(|text| text.parse::<f64>().ok())
+        .unwrap_or(0.0)
+}
+
+/// Is a cached login token due for renewal? A token that never expires
+/// (a configured one, or one whose login named no expiry) never is.
+fn renewdue(renewat: &RefCell<Option<Instant>>) -> bool {
+    renewat.borrow().map_or(false, |at| Instant::now() >= at)
 }
 
 /// The value at a path of map keys, as text - or None when absent or null.
@@ -391,9 +429,11 @@ pub struct HashicorpProvider {
     pub kv: u32,
     pub vaultnamespace: String,
     pub auth: Option<AuthSpec>,
-    // The working token, resolved once and reused. A configured token
-    // wins; otherwise the first lookup logs in.
+    // The working token: a configured token is kept forever, a logged-in
+    // token is renewed shortly before its lease runs out - a long-running
+    // process must not keep presenting a token the vault already expired.
     livetoken: RefCell<Option<String>>,
+    renewat: RefCell<Option<Instant>>,
 }
 
 impl HashicorpProvider {
@@ -483,6 +523,9 @@ impl HashicorpProvider {
             )));
         }
 
+        let lease = expiryseconds(&response.body, &["auth", "lease_duration"]);
+        *self.renewat.borrow_mut() = renewtime(lease);
+
         Ok(got)
     }
 }
@@ -491,7 +534,7 @@ impl Provider for HashicorpProvider {
     fn lookup(&self, name: &str) -> Answer<Option<String>> {
         checkaddr(&self.addr)?;
 
-        if self.livetoken.borrow().is_none() {
+        if self.livetoken.borrow().is_none() || renewdue(&self.renewat) {
             let token = if self.token.is_empty() {
                 self.login()?
             } else {
@@ -767,7 +810,14 @@ fn awscall(
     payload: &Json,
 ) -> Answer<JsonResponse> {
     let addr = if addr.is_empty() {
-        format!("https://{}.{}.amazonaws.com", service, auth.region)
+        // The China partition lives under its own suffix; every other
+        // commercial region is plain amazonaws.com.
+        let suffix = if auth.region.starts_with("cn-") {
+            ".amazonaws.com.cn"
+        } else {
+            ".amazonaws.com"
+        };
+        format!("https://{}.{}{}", service, auth.region, suffix)
     } else {
         addr.to_string()
     };
@@ -961,7 +1011,10 @@ pub struct GcpSecretsProvider {
     pub token: String,
     pub addr: String,
     pub metadataaddr: String,
+    // A configured token is kept forever; a metadata-server token carries
+    // expires_in and is renewed shortly before it runs out.
     livetoken: RefCell<Option<String>>,
+    renewat: RefCell<Option<Instant>>,
 }
 
 impl GcpSecretsProvider {
@@ -996,6 +1049,9 @@ impl GcpSecretsProvider {
             ));
         }
 
+        let expires = expiryseconds(&response.body, &["expires_in"]);
+        *self.renewat.borrow_mut() = renewtime(expires);
+
         Ok(got)
     }
 }
@@ -1013,7 +1069,7 @@ impl Provider for GcpSecretsProvider {
         };
         checkaddr(addr)?;
 
-        if self.livetoken.borrow().is_none() {
+        if self.livetoken.borrow().is_none() || renewdue(&self.renewat) {
             *self.livetoken.borrow_mut() = Some(self.login()?);
         }
         let livetoken = self.livetoken.borrow().clone().unwrap_or_default();
@@ -1078,7 +1134,10 @@ pub struct AzureSecretsProvider {
     pub loginaddr: String,
     pub imdsaddr: String,
     pub apiversion: String,
+    // A configured token is kept forever; logged-in and IMDS tokens carry
+    // expires_in and are renewed shortly before they run out.
     livetoken: RefCell<Option<String>>,
+    renewat: RefCell<Option<Instant>>,
 }
 
 /// The OAuth resource a Key Vault token is scoped to.
@@ -1122,6 +1181,9 @@ impl AzureSecretsProvider {
                 )));
             }
 
+            // expires_in may arrive as a string; expiryseconds reads both.
+            *self.renewat.borrow_mut() =
+                renewtime(expiryseconds(&response.body, &["expires_in"]));
             return Ok(got);
         }
 
@@ -1145,6 +1207,7 @@ impl AzureSecretsProvider {
             ));
         }
 
+        *self.renewat.borrow_mut() = renewtime(expiryseconds(&response.body, &["expires_in"]));
         Ok(got)
     }
 }
@@ -1155,14 +1218,16 @@ impl Provider for AzureSecretsProvider {
             return Err(SekretoError::new("sekreto: azure: no vault"));
         }
 
-        let vaulturl = if self.vault.starts_with("http") {
+        // Only an explicit scheme is a URL; a vault NAMED httpvault must
+        // still become https://httpvault.vault.azure.net.
+        let vaulturl = if self.vault.starts_with("http://") || self.vault.starts_with("https://") {
             self.vault.clone()
         } else {
             format!("https://{}.vault.azure.net", self.vault)
         };
         checkaddr(&vaulturl)?;
 
-        if self.livetoken.borrow().is_none() {
+        if self.livetoken.borrow().is_none() || renewdue(&self.renewat) {
             *self.livetoken.borrow_mut() = Some(self.login()?);
         }
         let livetoken = self.livetoken.borrow().clone().unwrap_or_default();
@@ -1433,7 +1498,10 @@ pub struct InfisicalProvider {
     pub project: String,
     pub environment: String,
     pub path: String,
+    // A configured token is kept forever; a universal-auth token carries
+    // expiresIn and is renewed shortly before it runs out.
     livetoken: RefCell<Option<String>>,
+    renewat: RefCell<Option<Instant>>,
 }
 
 impl InfisicalProvider {
@@ -1472,6 +1540,9 @@ impl InfisicalProvider {
             )));
         }
 
+        let expires = expiryseconds(&response.body, &["expiresIn"]);
+        *self.renewat.borrow_mut() = renewtime(expires);
+
         Ok(got)
     }
 }
@@ -1492,7 +1563,7 @@ impl Provider for InfisicalProvider {
             ));
         }
 
-        if self.livetoken.borrow().is_none() {
+        if self.livetoken.borrow().is_none() || renewdue(&self.renewat) {
             *self.livetoken.borrow_mut() = Some(self.login(&addr)?);
         }
         let livetoken = self.livetoken.borrow().clone().unwrap_or_default();
@@ -1550,19 +1621,33 @@ pub fn makeprovider(spec: &ProviderSpec) -> Answer<Box<dyn Provider>> {
             dir: spec.dir.clone(),
             prefix: spec.prefix.clone(),
         })),
-        "hashicorp" => Ok(Box::new(HashicorpProvider {
-            addr: spec.addr.clone(),
-            token: spec.token.clone(),
-            mount: if spec.mount.is_empty() {
-                "secret".to_string()
-            } else {
-                spec.mount.clone()
-            },
-            kv: if 0 == spec.kv { 2 } else { spec.kv },
-            vaultnamespace: spec.vaultnamespace.clone(),
-            auth: spec.auth.clone(),
-            ..Default::default()
-        })),
+        "hashicorp" => {
+            let kv = if 0 == spec.kv { 2 } else { spec.kv };
+
+            // A version typo like kv: 3 must not quietly behave as v2 and
+            // turn its 404s into misses; there is nothing safe to assume
+            // it meant.
+            if 1 != kv && 2 != kv {
+                return Err(SekretoError::new(format!(
+                    "sekreto: hashicorp: unsupported kv version: {}",
+                    kv
+                )));
+            }
+
+            Ok(Box::new(HashicorpProvider {
+                addr: spec.addr.clone(),
+                token: spec.token.clone(),
+                mount: if spec.mount.is_empty() {
+                    "secret".to_string()
+                } else {
+                    spec.mount.clone()
+                },
+                kv,
+                vaultnamespace: spec.vaultnamespace.clone(),
+                auth: spec.auth.clone(),
+                ..Default::default()
+            }))
+        }
         "boru" => Ok(Box::new(BoruProvider {
             command: if spec.command.is_empty() {
                 "boru".to_string()

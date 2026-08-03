@@ -137,17 +137,37 @@ class FileProvider implements Provider
     {
         $file = $this->dir . '/' . Name::envkey($name, $this->prefix);
 
-        // An absent file - or an absent directory - means "no secrets
-        // here", exactly like a missing .env. Anything else (permission
-        // denied, an unreadable mount) is a store that could not answer.
-        if (!file_exists($file)) {
-            return null;
-        }
-
+        // Attempt the read outright rather than pre-checking with
+        // file_exists(): that also reports false when a parent directory
+        // is unreadable for permission reasons, which is a store that
+        // could not answer, not a store without the secret. Any raised
+        // error counts as a failed read, not only a false return - PHP
+        // reports reading a directory as '' plus a notice.
+        error_clear_last();
         $text = @file_get_contents($file);
+        $raised = error_get_last();
 
-        if (false === $text) {
-            throw new SekretoError('sekreto: file provider cannot read ' . $file);
+        if (false === $text || null !== $raised) {
+            $why = $raised['message'] ?? 'unknown error';
+
+            // PHP's warning text carries the OS reason after its
+            // "Failed to open stream:" preamble; keep just the reason.
+            if (1 === preg_match('/Failed to open stream: (.*)$/s', $why, $match)) {
+                $why = $match[1];
+            }
+
+            // An absent file - or an absent directory - means "no secrets
+            // here", exactly like a missing .env. Anything else (permission
+            // denied, an unreadable mount) is a store that could not answer.
+            if (str_contains($why, 'No such file or directory')
+                || str_contains($why, 'Not a directory')
+            ) {
+                return null;
+            }
+
+            throw new SekretoError(
+                'sekreto: file provider cannot read ' . $file . ': ' . $why
+            );
         }
 
         return preg_replace('/\r?\n$/', '', $text);
@@ -199,7 +219,20 @@ function fetchjson(string $method, string $url, array $headers, ?string $body = 
         }
     }
 
-    return [$status, json_decode($text, true)];
+    $parsed = json_decode($text, true);
+
+    if (null === $parsed && JSON_ERROR_NONE !== json_last_error()) {
+        // A success status promised JSON; a body that does not parse means
+        // the store could not answer coherently, and treating it as a miss
+        // would fall through to a weaker store. Error statuses may carry
+        // any body - they are decided on status alone.
+        if (200 === $status) {
+            throw new SekretoError('sekreto: malformed response from ' . explode('?', $url)[0]);
+        }
+        $parsed = null;
+    }
+
+    return [$status, $parsed];
 }
 
 /**
@@ -265,10 +298,12 @@ class HashicorpProvider implements Provider
     private int $kv;
 
     /**
-     * The working token, resolved once and reused. A configured token
-     * wins; otherwise the first lookup logs in.
+     * The working token: a configured token is kept forever, a logged-in
+     * token is renewed shortly before its lease runs out - a long-running
+     * process must not keep presenting a token the vault already expired.
      */
     private ?string $livetoken;
+    private float $renewat = INF;
 
     /** @param array<string, mixed>|null $auth */
     public function __construct(
@@ -281,6 +316,15 @@ class HashicorpProvider implements Provider
     ) {
         $this->mount = $mount ?? 'secret';
         $this->kv = $kv ?: 2;
+
+        // A version typo like kv: 3 must not quietly behave as v2 and turn
+        // its 404s into misses; there is nothing safe to assume it meant.
+        if (1 !== $this->kv && 2 !== $this->kv) {
+            throw new SekretoError(
+                'sekreto: hashicorp: unsupported kv version: ' . $this->kv
+            );
+        }
+
         $this->livetoken = '' === $token ? null : $token;
     }
 
@@ -338,6 +382,9 @@ class HashicorpProvider implements Provider
             throw new SekretoError('sekreto: hashicorp login failed: ' . $status . ': ' . $url);
         }
 
+        $lease = (float) ($answer['auth']['lease_duration'] ?? 0);
+        $this->renewat = 0 < $lease ? microtime(true) + max($lease - 60, 1) : INF;
+
         return (string) $got;
     }
 
@@ -345,7 +392,7 @@ class HashicorpProvider implements Provider
     {
         checkaddr($this->addr);
 
-        if (null === $this->livetoken) {
+        if (null === $this->livetoken || microtime(true) >= $this->renewat) {
             $this->livetoken = $this->login();
         }
 
@@ -558,8 +605,11 @@ function awsauth(array $opts): array
 function awscall(array $opts, string $service, string $target, array $payload): array
 {
     $auth = awsauth($opts);
+    // The China partition lives under its own suffix; every other
+    // commercial region is plain amazonaws.com.
+    $suffix = str_starts_with($auth['region'], 'cn-') ? '.amazonaws.com.cn' : '.amazonaws.com';
     $addr = ($opts['addr'] ?? null)
-        ?: 'https://' . $service . '.' . $auth['region'] . '.amazonaws.com';
+        ?: 'https://' . $service . '.' . $auth['region'] . $suffix;
     checkaddr($addr);
 
     $url = preg_replace('#/$#', '', $addr) . '/';
@@ -734,7 +784,10 @@ class AwsParamsProvider implements Provider
  */
 class GcpSecretsProvider implements Provider
 {
+    // A configured token is kept forever; a metadata-server token carries
+    // expires_in and is renewed shortly before it runs out.
     private ?string $livetoken = null;
+    private float $renewat = INF;
 
     /** @param array<string, mixed> $opts */
     public function __construct(private array $opts = [])
@@ -770,6 +823,9 @@ class GcpSecretsProvider implements Provider
             throw new SekretoError('sekreto: gcp: no token and metadata server did not answer');
         }
 
+        $expires = (float) ($body['expires_in'] ?? 0);
+        $this->renewat = 0 < $expires ? microtime(true) + max($expires - 60, 1) : INF;
+
         return (string) $got;
     }
 
@@ -783,7 +839,7 @@ class GcpSecretsProvider implements Provider
         $addr = ($this->opts['addr'] ?? null) ?: 'https://secretmanager.googleapis.com';
         checkaddr($addr);
 
-        if (null === $this->livetoken) {
+        if (null === $this->livetoken || microtime(true) >= $this->renewat) {
             $this->livetoken = $this->login();
         }
 
@@ -831,11 +887,22 @@ class AzureSecretsProvider implements Provider
 {
     private const RESOURCE = 'https://vault.azure.net';
 
+    // A configured token is kept forever; logged-in and IMDS tokens carry
+    // expires_in and are renewed shortly before they run out.
     private ?string $livetoken = null;
+    private float $renewat = INF;
 
     /** @param array<string, mixed> $opts */
     public function __construct(private array $opts = [])
     {
+    }
+
+    /** The renewal moment for an expires_in (which may be a string). */
+    private function expiry(mixed $expires): float
+    {
+        $seconds = (float) $expires;
+
+        return 0 < $seconds ? microtime(true) + max($seconds - 60, 1) : INF;
     }
 
     private function login(): string
@@ -870,6 +937,8 @@ class AzureSecretsProvider implements Provider
                 throw new SekretoError('sekreto: azure login failed: ' . $status);
             }
 
+            $this->renewat = $this->expiry($body['expires_in'] ?? null);
+
             return (string) $got;
         }
 
@@ -886,6 +955,8 @@ class AzureSecretsProvider implements Provider
             );
         }
 
+        $this->renewat = $this->expiry($body['expires_in'] ?? null);
+
         return (string) $got;
     }
 
@@ -896,12 +967,14 @@ class AzureSecretsProvider implements Provider
             throw new SekretoError('sekreto: azure: no vault');
         }
 
-        $vaulturl = str_starts_with($vault, 'http')
+        // Only an explicit scheme is a URL; a vault NAMED httpvault must
+        // still become https://httpvault.vault.azure.net.
+        $vaulturl = str_starts_with($vault, 'http://') || str_starts_with($vault, 'https://')
             ? $vault
             : 'https://' . $vault . '.vault.azure.net';
         checkaddr($vaulturl);
 
-        if (null === $this->livetoken) {
+        if (null === $this->livetoken || microtime(true) >= $this->renewat) {
             $this->livetoken = $this->login();
         }
 
@@ -1125,7 +1198,10 @@ class DopplerProvider implements Provider
  */
 class InfisicalProvider implements Provider
 {
+    // A configured token is kept forever; a universal-auth token carries
+    // expiresIn and is renewed shortly before it runs out.
     private ?string $livetoken = null;
+    private float $renewat = INF;
 
     /** @param array<string, mixed> $opts */
     public function __construct(private array $opts = [])
@@ -1156,6 +1232,9 @@ class InfisicalProvider implements Provider
             throw new SekretoError('sekreto: infisical login failed: ' . $status);
         }
 
+        $expires = (float) ($body['expiresIn'] ?? 0);
+        $this->renewat = 0 < $expires ? microtime(true) + max($expires - 60, 1) : INF;
+
         return (string) $got;
     }
 
@@ -1172,7 +1251,7 @@ class InfisicalProvider implements Provider
             throw new SekretoError('sekreto: infisical: no project/environment');
         }
 
-        if (null === $this->livetoken) {
+        if (null === $this->livetoken || microtime(true) >= $this->renewat) {
             $this->livetoken = $this->login($addr);
         }
 

@@ -16,11 +16,14 @@ using System;
 using System.Collections.Generic;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Voxgig.Sekreto
 {
     public static class Sigv4
     {
+        private static readonly Regex Whitespace = new Regex("\\s+", RegexOptions.Compiled);
+
         /// <summary>
         /// Sign one request. Input keys: method, url, headers?, body?,
         /// service, region, keyid, secret, session?, and datetime
@@ -47,13 +50,18 @@ namespace Voxgig.Sekreto
             // Every header that will be signed: the caller's extras, plus
             // host and x-amz-date (and the session token when present),
             // lower-cased and trimmed the way the canonical form requires.
+            // Canonical header values are trimmed AND internally collapsed -
+            // AWS folds sequential whitespace to one space before signing, so
+            // a header like "a  b" must sign as "a b" or the service refuses
+            // it.
             var headers = new Dictionary<string, string>();
 
             if (input.GetValueOrDefault("headers") is Dictionary<string, object> extra)
             {
                 foreach (var entry in extra)
                 {
-                    headers[entry.Key.ToLowerInvariant()] = Convert.ToString(entry.Value).Trim();
+                    headers[entry.Key.ToLowerInvariant()] =
+                        Whitespace.Replace(Convert.ToString(entry.Value).Trim(), " ");
                 }
             }
 

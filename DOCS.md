@@ -48,9 +48,15 @@ A name flattened to one segment, for stores whose ids have no hierarchy
 and reject dots: GCP Secret Manager (`_`) and Azure Key Vault (`-`).
 
 ```
-flatname('api.token', '_')     // 'api_token'   (GCP)
-flatname('api.token', '-')     // 'api-token'   (Azure)
+flatname('api.token', '_')       // 'api_token'       (GCP)
+flatname('api.token', '-')       // 'api-token'       (Azure)
+flatname('with_underscore', '-') // 'with-underscore' (Azure has no '_')
 ```
+
+With `-` as the separator, underscores flatten too — Azure Key Vault's
+alphabet is letters, digits and hyphens only, so a valid name like
+`with_underscore` must still be representable. The resulting `.`/`_`
+collision mirrors `envkey`, where both already map to `_`.
 
 ### `awsparam(name, prefix?): string`
 
@@ -275,8 +281,10 @@ tools that write these files disagree about it.
 KV v2 (the default): `api.token` reads `{addr}/v1/{mount}/data/api` with
 an `X-Vault-Token` header and takes the `token` field of `data.data`.
 KV v1 (`kv: 1`) reads `{addr}/v1/{mount}/api` and takes the field of
-`data`. This is Vault's published HTTP API, so the provider talks to a
-real Vault — or an [OpenBao](https://openbao.org) — unmodified.
+`data`. Any other `kv` value raises — a version typo must not quietly
+behave as v2 and turn its 404s into misses. This is Vault's published
+HTTP API, so the provider talks to a real Vault — or an
+[OpenBao](https://openbao.org) — unmodified.
 
 A `vaultnamespace` rides the `X-Vault-Namespace` header on every request,
 logins included. With an empty `token` and an `auth` block, the provider
@@ -383,7 +391,9 @@ allowed case.
 Region and credentials come from config first, then AWS's own environment
 convention (`AWS_REGION`/`AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`); missing either raises.
-Requests are SigV4-signed in-tree (see `sigv4` above).
+Requests are SigV4-signed in-tree (see `sigv4` above). Default endpoints
+follow the region's partition: a `cn-*` region resolves under
+`.amazonaws.com.cn`.
 
 `awssecrets`: `api.token` reads the secret named `api` (the `vaultref`
 path) and takes the `token` field of its JSON `SecretString` — the AWS
@@ -408,7 +418,8 @@ itself, under the conventional field `value`. A
 reject them), latest version, base64-decoded. The token comes from
 config, then `GOOGLE_OAUTH_ACCESS_TOKEN`, then the GCE/GKE metadata
 server — on Google's platform no credential configuration is needed. A
-404 is a miss.
+metadata token is renewed shortly before its `expires_in` runs out, so a
+long-running process keeps working past the first hour. A 404 is a miss.
 
 `describe()` → `gcpsecrets:<project>`
 
@@ -425,7 +436,8 @@ or a full URL. `api.token` reads secret `api-token` (dots flattened, Key
 Vault names allow nothing else). The token comes from config, then a
 client-credentials login when tenant/clientid/clientsecret are given,
 then the IMDS managed identity — on Azure's platform no credential
-configuration is needed. A 404 is a miss.
+configuration is needed. Logged-in and IMDS tokens are renewed shortly
+before their `expires_in` runs out. A 404 is a miss.
 
 `describe()` → `azuresecrets:<vault>`
 
@@ -502,6 +514,8 @@ every port:
 | `sekreto: infisical login failed: <status>` / `sekreto: infisical error: <status>` | Infisical refused login or answered badly |
 | `sekreto: file provider cannot read <file>: <why>` | a secret file that exists but cannot be read |
 | `sekreto: cannot reach <url>: <why>` | the store could not be contacted |
+| `sekreto: malformed response from <url>` | a store answered 200 with a body that is not JSON |
+| `sekreto: hashicorp: unsupported kv version: <kv>` | a `kv` other than 1 or 2 |
 
 Those messages are pinned by `spec/sekreto.json`, so they cannot drift
 between ports without a test going red.

@@ -203,6 +203,27 @@
               "sep": "_"
             },
             "err": "invalid name"
+          },
+          {
+            "in": {
+              "name": "with_underscore",
+              "sep": "-"
+            },
+            "out": "with-underscore"
+          },
+          {
+            "in": {
+              "name": "db_pass.main",
+              "sep": "-"
+            },
+            "out": "db-pass-main"
+          },
+          {
+            "in": {
+              "name": "with_underscore",
+              "sep": "_"
+            },
+            "out": "with_underscore"
           }
         ]
       },
@@ -506,6 +527,20 @@
               "name": "api.token"
             },
             "out": "FT1"
+          },
+          {
+            "in": {
+              "chain": [
+                {
+                  "kind": "hashicorp",
+                  "addr": "http://127.0.0.1:1",
+                  "token": "t",
+                  "kv": 3
+                }
+              ],
+              "name": "api.token"
+            },
+            "err": "unsupported kv version"
           }
         ]
       },
@@ -1161,6 +1196,25 @@
             },
             "out": {
               "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=eff4168718a416b2d30f67b2ade46372495930d2f8b0026395b61bfcb3a32b03",
+              "x-amz-date": "20150830T123600Z"
+            }
+          },
+          {
+            "in": {
+              "method": "POST",
+              "url": "https://example.amazonaws.com/",
+              "headers": {
+                "x-amz-target": "a  b\tc"
+              },
+              "body": "",
+              "service": "service",
+              "region": "us-east-1",
+              "keyid": "AKIDEXAMPLE",
+              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+              "datetime": "20150830T123600Z"
+            },
+            "out": {
+              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date;x-amz-target, Signature=19e8a3f4b467cf96fd355ae7642f439d2df7698aafd1ec373ea2c6af42b8b273",
               "x-amz-date": "20150830T123600Z"
             }
           }

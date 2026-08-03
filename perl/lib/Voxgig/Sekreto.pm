@@ -98,13 +98,19 @@ sub vaultref {
 # Manager, `_`) or `api-token` (Azure Key Vault, `-`).
 #
 # Those stores have no path hierarchy and reject dots in ids, so the dots
-# become the store's conventional separator.
+# become the store's conventional separator. With `-` as the separator,
+# underscores flatten too: Azure Key Vault's alphabet is letters, digits
+# and hyphens only, and a valid sekreto name like `with_underscore` must
+# still be representable there. (The resulting `.`/`_` collision mirrors
+# the documented envkey behaviour, where both already map to `_`.)
 sub flatname {
     my ( $name, $sep ) = @_;
 
     checkname($name);
 
-    return join( $sep, split( /\./, $name, -1 ) );
+    my $flat = join( $sep, split( /\./, $name, -1 ) );
+
+    return '-' eq $sep ? join( '-', split( /_/, $flat, -1 ) ) : $flat;
 }
 
 # The AWS SSM Parameter Store name for a name: dots become the path

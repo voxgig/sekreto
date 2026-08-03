@@ -18,19 +18,32 @@ namespace Voxgig.Sekreto
         /// <summary>Parse JSON text, answering null for anything unreadable.</summary>
         public static object Parse(string text)
         {
+            return TryParse(text, out object value) ? value : null;
+        }
+
+        /// <summary>
+        /// Parse JSON text, answering false when the text is not JSON at all
+        /// - which a null answer from Parse cannot say, since JSON `null`
+        /// parses to the same thing.
+        /// </summary>
+        internal static bool TryParse(string text, out object value)
+        {
+            value = null;
+
             if (string.IsNullOrEmpty(text))
             {
-                return null;
+                return false;
             }
 
             try
             {
                 using var doc = JsonDocument.Parse(text);
-                return Convert(doc.RootElement);
+                value = Convert(doc.RootElement);
+                return true;
             }
             catch (JsonException)
             {
-                return null;
+                return false;
             }
         }
 

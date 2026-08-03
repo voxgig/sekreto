@@ -12,8 +12,8 @@
 // Usage: node mockazure.js <port> <tenant> <clientid> <clientsecret>
 //          <token> <name=value>...
 //
-// Secret names are dotted names flattened with dashes: api.token is
-// served as secret "api-token".
+// Secret names are flattened with dashes (dots AND underscores - Key
+// Vault's alphabet has neither): api.token is served as "api-token".
 
 const http = require('node:http')
 
@@ -27,7 +27,7 @@ const secrets = {}
 for (const pair of process.argv.slice(7)) {
   const eq = pair.indexOf('=')
   if (0 < eq) {
-    secrets[pair.slice(0, eq).split('.').join('-')] = pair.slice(eq + 1)
+    secrets[pair.slice(0, eq).replace(/[._]/g, '-')] = pair.slice(eq + 1)
   }
 }
 

@@ -213,6 +213,15 @@ sub fetchjson {
 
     my $parsed = eval { JSON::PP->new->decode( $response->{content} ) };
 
+    # A success status promised JSON; a body that does not parse means
+    # the store could not answer coherently, and treating it as a miss
+    # would fall through to a weaker store. Error statuses may carry
+    # any body - they are decided on status alone.
+    if ( $@ && 200 == $response->{status} ) {
+        ( my $plain = $url ) =~ s/\?.*//s;
+        fail( 'sekreto: malformed response from ' . $plain );
+    }
+
     return ( $response->{status}, $parsed );
 }
 
@@ -239,6 +248,30 @@ sub checkaddr {
     fail( 'sekreto: refusing to send a token in plaintext to ' . $addr . ' (use https)' );
 }
 
+# When a logged-in token must be renewed: shortly before its lease runs
+# out, now + max(seconds - 60, 1). A missing or non-positive expiry means
+# "never renew" - undef here, the canonical port's Infinity.
+sub renewafter {
+    my ($seconds) = @_;
+
+    no warnings 'numeric';
+    my $lease = ( defined $seconds && !ref($seconds) ) ? 0 + $seconds : 0;
+
+    return undef if !( 0 < $lease );
+
+    my $delta = $lease - 60;
+    $delta = 1 if 1 > $delta;
+
+    return time() + $delta;
+}
+
+# Is this token due for renewal? A configured token (renewat undef) never
+# is.
+sub renewdue {
+    my ($renewat) = @_;
+    return defined $renewat && time() >= $renewat ? 1 : 0;
+}
+
 # HashiCorp Vault.
 #
 # KV v2 (the default): `api.token` reads `{addr}/v1/{mount}/data/api` and
@@ -262,17 +295,27 @@ sub checkaddr {
 
         my $opts = $options || {};
         my $usetoken = defined $token ? $token : '';
+        my $kv = $opts->{kv} || 2;
+
+        # A version typo like kv: 3 must not quietly behave as v2 and turn
+        # its 404s into misses; there is nothing safe to assume it meant.
+        Voxgig::Sekreto::Providers::fail(
+            'sekreto: hashicorp: unsupported kv version: ' . $kv )
+          if 1 != $kv && 2 != $kv;
 
         return bless {
             addr           => defined $addr ? $addr : '',
             mount          => $opts->{mount} || 'secret',
-            kv             => $opts->{kv} || 2,
+            kv             => $kv,
             vaultnamespace => $opts->{vaultnamespace},
             auth           => $opts->{auth},
 
-            # The working token, resolved once and reused. A configured
-            # token wins; otherwise the first lookup logs in.
+            # The working token: a configured token is kept forever, a
+            # logged-in token is renewed shortly before its lease runs
+            # out - a long-running process must not keep presenting a
+            # token the vault already expired.
             livetoken => '' eq $usetoken ? undef : $usetoken,
+            renewat   => undef,
         }, $class;
     }
 
@@ -340,6 +383,9 @@ sub checkaddr {
             'sekreto: hashicorp login failed: ' . $status . ': ' . $url )
           if 200 != $status || !$got;
 
+        $self->{renewat} =
+          Voxgig::Sekreto::Providers::renewafter( $resbody->{auth}{lease_duration} );
+
         return Voxgig::Sekreto::Providers::stringof($got);
     }
 
@@ -348,7 +394,9 @@ sub checkaddr {
 
         Voxgig::Sekreto::Providers::checkaddr( $self->{addr} );
 
-        $self->{livetoken} = $self->login() if !defined $self->{livetoken};
+        $self->{livetoken} = $self->login()
+          if !defined $self->{livetoken}
+          || Voxgig::Sekreto::Providers::renewdue( $self->{renewat} );
 
         my $ref = Voxgig::Sekreto::Providers::vaultref($name);
 
@@ -587,7 +635,12 @@ sub awscall {
     my ( $opts, $service, $target, $payload ) = @_;
 
     my $auth = awsauth($opts);
-    my $addr = $opts->{addr} || 'https://' . $service . '.' . $auth->{region} . '.amazonaws.com';
+
+    # The China partition lives under its own suffix; every other
+    # commercial region is plain amazonaws.com.
+    my $suffix =
+      0 == index( $auth->{region}, 'cn-' ) ? '.amazonaws.com.cn' : '.amazonaws.com';
+    my $addr = $opts->{addr} || 'https://' . $service . '.' . $auth->{region} . $suffix;
     checkaddr($addr);
 
     ( my $base = $addr ) =~ s{/$}{};
@@ -760,9 +813,11 @@ sub awsmiss {
 
     package Voxgig::Sekreto::Providers::Gcpsecrets;
 
+    # A configured token is kept forever; a metadata-server token carries
+    # expires_in and is renewed shortly before it runs out.
     sub new {
         my ( $class, $opts ) = @_;
-        return bless { opts => $opts || {}, livetoken => undef }, $class;
+        return bless { opts => $opts || {}, livetoken => undef, renewat => undef }, $class;
     }
 
     sub metadataaddr {
@@ -790,6 +845,8 @@ sub awsmiss {
             'sekreto: gcp: no token and metadata server did not answer')
           if 200 != $status || !$got;
 
+        $self->{renewat} = Voxgig::Sekreto::Providers::renewafter( $body->{expires_in} );
+
         return Voxgig::Sekreto::Providers::stringof($got);
     }
 
@@ -802,7 +859,9 @@ sub awsmiss {
         my $addr = $self->{opts}{addr} || 'https://secretmanager.googleapis.com';
         Voxgig::Sekreto::Providers::checkaddr($addr);
 
-        $self->{livetoken} = $self->login() if !defined $self->{livetoken};
+        $self->{livetoken} = $self->login()
+          if !defined $self->{livetoken}
+          || Voxgig::Sekreto::Providers::renewdue( $self->{renewat} );
 
         ( my $base = $addr ) =~ s{/$}{};
         my $url =
@@ -854,9 +913,11 @@ sub awsmiss {
 
     my $RESOURCE = 'https://vault.azure.net';
 
+    # A configured token is kept forever; logged-in and IMDS tokens carry
+    # expires_in and are renewed shortly before they run out.
     sub new {
         my ( $class, $opts ) = @_;
-        return bless { opts => $opts || {}, livetoken => undef }, $class;
+        return bless { opts => $opts || {}, livetoken => undef, renewat => undef }, $class;
     }
 
     sub login {
@@ -887,6 +948,8 @@ sub awsmiss {
             Voxgig::Sekreto::Providers::fail( 'sekreto: azure login failed: ' . $status )
               if 200 != $status || !$got;
 
+            $self->{renewat} = Voxgig::Sekreto::Providers::renewafter( $body->{expires_in} );
+
             return Voxgig::Sekreto::Providers::stringof($got);
         }
 
@@ -905,6 +968,8 @@ sub awsmiss {
             'sekreto: azure: no token, no client credentials, and IMDS did not answer')
           if 200 != $status || !$got;
 
+        $self->{renewat} = Voxgig::Sekreto::Providers::renewafter( $body->{expires_in} );
+
         return Voxgig::Sekreto::Providers::stringof($got);
     }
 
@@ -915,11 +980,17 @@ sub awsmiss {
         my $vault = $opts->{vault} || '';
         Voxgig::Sekreto::Providers::fail('sekreto: azure: no vault') if '' eq $vault;
 
+        # Only an explicit scheme is a URL; a vault NAMED httpvault must
+        # still become https://httpvault.vault.azure.net.
         my $vaulturl =
-          0 == index( $vault, 'http' ) ? $vault : 'https://' . $vault . '.vault.azure.net';
+          ( 0 == index( $vault, 'http://' ) || 0 == index( $vault, 'https://' ) )
+          ? $vault
+          : 'https://' . $vault . '.vault.azure.net';
         Voxgig::Sekreto::Providers::checkaddr($vaulturl);
 
-        $self->{livetoken} = $self->login() if !defined $self->{livetoken};
+        $self->{livetoken} = $self->login()
+          if !defined $self->{livetoken}
+          || Voxgig::Sekreto::Providers::renewdue( $self->{renewat} );
 
         ( my $base = $vaulturl ) =~ s{/$}{};
         my $url =
@@ -1116,9 +1187,11 @@ sub awsmiss {
 
     package Voxgig::Sekreto::Providers::Infisical;
 
+    # A configured token is kept forever; a universal-auth token carries
+    # expiresIn and is renewed shortly before it runs out.
     sub new {
         my ( $class, $opts ) = @_;
-        return bless { opts => $opts || {}, livetoken => undef }, $class;
+        return bless { opts => $opts || {}, livetoken => undef, renewat => undef }, $class;
     }
 
     sub login {
@@ -1145,6 +1218,8 @@ sub awsmiss {
         Voxgig::Sekreto::Providers::fail( 'sekreto: infisical login failed: ' . $status )
           if 200 != $status || !$got;
 
+        $self->{renewat} = Voxgig::Sekreto::Providers::renewafter( $body->{expiresIn} );
+
         return Voxgig::Sekreto::Providers::stringof($got);
     }
 
@@ -1160,7 +1235,9 @@ sub awsmiss {
         Voxgig::Sekreto::Providers::fail('sekreto: infisical: no project/environment')
           if '' eq $project || '' eq $environment;
 
-        $self->{livetoken} = $self->login($addr) if !defined $self->{livetoken};
+        $self->{livetoken} = $self->login($addr)
+          if !defined $self->{livetoken}
+          || Voxgig::Sekreto::Providers::renewdue( $self->{renewat} );
 
         my $url =
             $addr

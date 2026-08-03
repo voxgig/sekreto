@@ -118,10 +118,20 @@ pub fn vaultref(name: &str) -> Answer<VaultRef> {
 /// Secret Manager, `_`) or `api-token` (Azure Key Vault, `-`).
 ///
 /// Those stores have no path hierarchy and reject dots in ids, so the
-/// dots become the store's conventional separator.
+/// dots become the store's conventional separator. With `-` as the
+/// separator, underscores flatten too: Azure Key Vault's alphabet is
+/// letters, digits and hyphens only, and a valid sekreto name like
+/// `with_underscore` must still be representable there. (The resulting
+/// `.`/`_` collision mirrors the documented envkey behaviour, where
+/// both already map to `_`.)
 pub fn flatname(name: &str, sep: &str) -> Answer<String> {
     checkname(name)?;
-    Ok(name.split('.').collect::<Vec<&str>>().join(sep))
+    let flat = name.split('.').collect::<Vec<&str>>().join(sep);
+    Ok(if "-" == sep {
+        flat.replace('_', "-")
+    } else {
+        flat
+    })
 }
 
 /// The AWS SSM Parameter Store name for a name: dots become the path

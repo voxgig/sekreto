@@ -164,11 +164,16 @@ public final class Sigv4 {
     // x-amz-date (and the session token when present), lower-cased and
     // trimmed the way the canonical form requires. A TreeMap keeps them
     // sorted by name, which is the canonical order.
+    // Canonical header values are trimmed AND internally collapsed -
+    // AWS folds sequential whitespace to one space before signing, so a
+    // header like "a  b" must sign as "a b" or the service refuses it.
     TreeMap<String, String> headers = new TreeMap<>();
     Object rawheaders = input.get("headers");
     if (rawheaders instanceof Map) {
       for (Map.Entry<String, Object> entry : ((Map<String, Object>) rawheaders).entrySet()) {
-        headers.put(entry.getKey().toLowerCase(), String.valueOf(entry.getValue()).trim());
+        headers.put(
+            entry.getKey().toLowerCase(),
+            String.valueOf(entry.getValue()).trim().replaceAll("\\s+", " "));
       }
     }
     headers.put("host", url.getHost() + (-1 == url.getPort() ? "" : ":" + url.getPort()));

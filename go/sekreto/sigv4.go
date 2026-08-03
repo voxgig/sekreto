@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"net/url"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -44,6 +45,10 @@ type Sigv4Input struct {
 	// sampled, so the function stays pure.
 	Datetime string `json:"datetime"`
 }
+
+// whitespace is one run of whitespace, collapsed to a single space in
+// canonical header values.
+var whitespace = regexp.MustCompile(`\s+`)
 
 func sha256hex(text string) string {
 	sum := sha256.Sum256([]byte(text))
@@ -143,9 +148,12 @@ func SigV4(input *Sigv4Input) (map[string]string, error) {
 	// Every header that will be signed: the caller's extras, plus host and
 	// x-amz-date (and the session token when present), lower-cased and
 	// trimmed the way the canonical form requires.
+	// Canonical header values are trimmed AND internally collapsed -
+	// AWS folds sequential whitespace to one space before signing, so a
+	// header like "a  b" must sign as "a b" or the service refuses it.
 	headers := map[string]string{}
 	for key, value := range input.Headers {
-		headers[strings.ToLower(key)] = strings.TrimSpace(value)
+		headers[strings.ToLower(key)] = whitespace.ReplaceAllString(strings.TrimSpace(value), " ")
 	}
 	headers["host"] = parsed.Host
 	headers["x-amz-date"] = input.Datetime

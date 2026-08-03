@@ -92,13 +92,20 @@ final class Name
      * Secret Manager, `_`) or `api-token` (Azure Key Vault, `-`).
      *
      * Those stores have no path hierarchy and reject dots in ids, so the
-     * dots become the store's conventional separator.
+     * dots become the store's conventional separator. With `-` as the
+     * separator, underscores flatten too: Azure Key Vault's alphabet is
+     * letters, digits and hyphens only, and a valid sekreto name like
+     * `with_underscore` must still be representable there. (The resulting
+     * `.`/`_` collision mirrors the documented envkey behaviour, where
+     * both already map to `_`.)
      */
     public static function flatname(string $name, string $sep): string
     {
         self::check($name);
 
-        return implode($sep, explode('.', $name));
+        $flat = implode($sep, explode('.', $name));
+
+        return '-' === $sep ? str_replace('_', '-', $flat) : $flat;
     }
 
     /**

@@ -260,9 +260,20 @@ public final class Providers {
       throw new SekretoError("sekreto: cannot reach " + url.split("\\?")[0] + ": interrupted");
     }
 
-    // A body that is not JSON only matters when the status promised one;
-    // callers decide on status first.
-    return new Answer(response.statusCode(), Json.parse(response.body()));
+    // A success status promised JSON; a body that does not parse means
+    // the store could not answer coherently, and treating it as a miss
+    // would fall through to a weaker store. Error statuses may carry
+    // any body - they are decided on status alone. (Json.parse answers
+    // null for anything unreadable, and only a literal `null` body is a
+    // genuine JSON null.)
+    Object parsed = Json.parse(response.body());
+    if (200 == response.statusCode()
+        && null == parsed
+        && !"null".equals(response.body().trim())) {
+      throw new SekretoError("sekreto: malformed response from " + url.split("\\?")[0]);
+    }
+
+    return new Answer(response.statusCode(), parsed);
   }
 
   /** A one-pair header map, the shape most requests here need. */
@@ -297,6 +308,30 @@ public final class Providers {
   }
 
   /**
+   * When a logged-in token must be renewed, from its expiry in seconds
+   * (a JSON number, or a string as Azure IMDS sends it): now +
+   * max(seconds - 60, 1). A missing or zero expiry means never renew.
+   */
+  static long renewtime(Object expires) {
+    double seconds = 0;
+    if (expires instanceof Number) {
+      seconds = ((Number) expires).doubleValue();
+    } else if (expires instanceof String) {
+      try {
+        seconds = Double.parseDouble((String) expires);
+      } catch (NumberFormatException err) {
+        seconds = 0;
+      }
+    }
+
+    if (0 >= seconds || Double.isNaN(seconds)) {
+      return Long.MAX_VALUE;
+    }
+
+    return System.currentTimeMillis() + (long) (Math.max(seconds - 60, 1) * 1000);
+  }
+
+  /**
    * HashiCorp Vault.
    *
    * <p>KV v2 (the default): `api.token` reads `{addr}/v1/{mount}/data/api`
@@ -319,9 +354,11 @@ public final class Providers {
     private final String vaultnamespace;
     private final Map<String, Object> auth;
 
-    // The working token, resolved once and reused. A configured token
-    // wins; otherwise the first lookup logs in.
+    // The working token: a configured token is kept forever, a logged-in
+    // token is renewed shortly before its lease runs out - a long-running
+    // process must not keep presenting a token the vault already expired.
     private String livetoken;
+    private long renewat = Long.MAX_VALUE;
 
     public Hashicorp(String addr, String token, String mount) {
       this(addr, token, mount, 0, null, null);
@@ -332,6 +369,13 @@ public final class Providers {
       this.addr = null == addr ? "" : addr;
       this.mount = null == mount || mount.isEmpty() ? "secret" : mount;
       this.kv = 0 == kv ? 2 : kv;
+
+      // A version typo like kv: 3 must not quietly behave as v2 and turn
+      // its 404s into misses; there is nothing safe to assume it meant.
+      if (1 != this.kv && 2 != this.kv) {
+        throw new SekretoError("sekreto: hashicorp: unsupported kv version: " + this.kv);
+      }
+
       this.vaultnamespace = vaultnamespace;
       this.auth = auth;
       this.livetoken = null == token || token.isEmpty() ? null : token;
@@ -383,6 +427,8 @@ public final class Providers {
         throw new SekretoError("sekreto: hashicorp login failed: " + res.status + ": " + url);
       }
 
+      renewat = renewtime(dig(res.body, "auth", "lease_duration"));
+
       return String.valueOf(got);
     }
 
@@ -391,7 +437,7 @@ public final class Providers {
     public String lookup(String name) {
       checkaddr(addr);
 
-      if (null == livetoken) {
+      if (null == livetoken || System.currentTimeMillis() >= renewat) {
         livetoken = login();
       }
 
@@ -613,7 +659,10 @@ public final class Providers {
   static Answer awscall(String region, String keyid, String secret, String session,
       String addr, String service, String target, String payload) {
     Awsauth auth = awsauth(region, keyid, secret, session);
-    String useaddr = first(addr, "https://" + service + "." + auth.region + ".amazonaws.com");
+    // The China partition lives under its own suffix; every other
+    // commercial region is plain amazonaws.com.
+    String suffix = auth.region.startsWith("cn-") ? ".amazonaws.com.cn" : ".amazonaws.com";
+    String useaddr = first(addr, "https://" + service + "." + auth.region + suffix);
     checkaddr(useaddr);
 
     String url = trimslash(useaddr) + "/";
@@ -811,7 +860,10 @@ public final class Providers {
     private final String addr;
     private final String metadataaddr;
 
+    // A configured token is kept forever; a metadata-server token carries
+    // expires_in and is renewed shortly before it runs out.
     private String livetoken;
+    private long renewat = Long.MAX_VALUE;
 
     public Gcpsecrets(String project, String token, String addr, String metadataaddr) {
       this.project = project;
@@ -845,6 +897,8 @@ public final class Providers {
         throw new SekretoError("sekreto: gcp: no token and metadata server did not answer");
       }
 
+      renewat = renewtime(dig(res.body, "expires_in"));
+
       return String.valueOf(got);
     }
 
@@ -858,7 +912,7 @@ public final class Providers {
       String useaddr = first(addr, "https://secretmanager.googleapis.com");
       checkaddr(useaddr);
 
-      if (null == livetoken) {
+      if (null == livetoken || System.currentTimeMillis() >= renewat) {
         livetoken = login();
       }
 
@@ -914,7 +968,10 @@ public final class Providers {
     private final String imdsaddr;
     private final String apiversion;
 
+    // A configured token is kept forever; logged-in and IMDS tokens carry
+    // expires_in and are renewed shortly before they run out.
     private String livetoken;
+    private long renewat = Long.MAX_VALUE;
 
     public Azuresecrets(String vault, String token, String tenant, String clientid,
         String clientsecret, String loginaddr, String imdsaddr, String apiversion) {
@@ -952,6 +1009,7 @@ public final class Providers {
           throw new SekretoError("sekreto: azure login failed: " + res.status);
         }
 
+        renewat = renewtime(dig(res.body, "expires_in"));
         return String.valueOf(got);
       }
 
@@ -967,6 +1025,7 @@ public final class Providers {
             "sekreto: azure: no token, no client credentials, and IMDS did not answer");
       }
 
+      renewat = renewtime(dig(res.body, "expires_in"));
       return String.valueOf(got);
     }
 
@@ -977,11 +1036,15 @@ public final class Providers {
         throw new SekretoError("sekreto: azure: no vault");
       }
 
+      // Only an explicit scheme is a URL; a vault NAMED httpvault must
+      // still become https://httpvault.vault.azure.net.
       String vaulturl =
-          usevault.startsWith("http") ? usevault : "https://" + usevault + ".vault.azure.net";
+          usevault.startsWith("http://") || usevault.startsWith("https://")
+              ? usevault
+              : "https://" + usevault + ".vault.azure.net";
       checkaddr(vaulturl);
 
-      if (null == livetoken) {
+      if (null == livetoken || System.currentTimeMillis() >= renewat) {
         livetoken = login();
       }
 
@@ -1205,7 +1268,10 @@ public final class Providers {
     private final String environment;
     private final String path;
 
+    // A configured token is kept forever; a universal-auth token carries
+    // expiresIn and is renewed shortly before it runs out.
     private String livetoken;
+    private long renewat = Long.MAX_VALUE;
 
     public Infisical(String addr, String token, String clientid, String clientsecret,
         String project, String environment, String path) {
@@ -1240,6 +1306,8 @@ public final class Providers {
         throw new SekretoError("sekreto: infisical login failed: " + res.status);
       }
 
+      renewat = renewtime(dig(res.body, "expiresIn"));
+
       return String.valueOf(got);
     }
 
@@ -1254,7 +1322,7 @@ public final class Providers {
         throw new SekretoError("sekreto: infisical: no project/environment");
       }
 
-      if (null == livetoken) {
+      if (null == livetoken || System.currentTimeMillis() >= renewat) {
         livetoken = login(useaddr);
       }
 

@@ -86,9 +86,12 @@ export function sigv4(input: Sigv4Input): Sigv4Output {
   // Every header that will be signed: the caller's extras, plus host and
   // x-amz-date (and the session token when present), lower-cased and
   // trimmed the way the canonical form requires.
+  // Canonical header values are trimmed AND internally collapsed -
+  // AWS folds sequential whitespace to one space before signing, so a
+  // header like "a  b" must sign as "a b" or the service refuses it.
   const headers: Record<string, string> = {}
   for (const [key, value] of Object.entries(input.headers || {})) {
-    headers[key.toLowerCase()] = String(value).trim()
+    headers[key.toLowerCase()] = String(value).trim().replace(/\s+/g, ' ')
   }
   headers['host'] = url.host
   headers['x-amz-date'] = input.datetime

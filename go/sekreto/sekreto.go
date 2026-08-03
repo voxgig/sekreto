@@ -95,13 +95,22 @@ func NameVaultRef(name string) (*VaultRef, error) {
 // Secret Manager, `_`) or api-token (Azure Key Vault, `-`).
 //
 // Those stores have no path hierarchy and reject dots in ids, so the dots
-// become the store's conventional separator.
+// become the store's conventional separator. With `-` as the separator,
+// underscores flatten too: Azure Key Vault's alphabet is letters, digits
+// and hyphens only, and a valid sekreto name like with_underscore must
+// still be representable there. (The resulting `.`/`_` collision mirrors
+// the documented EnvKey behaviour, where both already map to `_`.)
 func FlatName(name string, sep string) (string, error) {
 	if err := checkname(name); nil != err {
 		return "", err
 	}
 
-	return strings.Join(strings.Split(name, "."), sep), nil
+	flat := strings.Join(strings.Split(name, "."), sep)
+	if "-" == sep {
+		flat = strings.Join(strings.Split(flat, "_"), "-")
+	}
+
+	return flat, nil
 }
 
 // AwsParam is the AWS SSM Parameter Store name for a name: dots become the

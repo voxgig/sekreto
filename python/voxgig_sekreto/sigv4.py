@@ -14,6 +14,7 @@
 
 import hashlib
 import hmac as hmaclib
+import re
 import urllib.parse
 
 
@@ -66,9 +67,12 @@ def sigv4(input):
     # Every header that will be signed: the caller's extras, plus host and
     # x-amz-date (and the session token when present), lower-cased and
     # trimmed the way the canonical form requires.
+    # Canonical header values are trimmed AND internally collapsed -
+    # AWS folds sequential whitespace to one space before signing, so a
+    # header like "a  b" must sign as "a b" or the service refuses it.
     headers = {}
     for key, value in (input.get('headers') or {}).items():
-        headers[key.lower()] = str(value).strip()
+        headers[key.lower()] = re.sub(r'\s+', ' ', str(value).strip())
     headers['host'] = url.netloc
     headers['x-amz-date'] = datetime
     if session:

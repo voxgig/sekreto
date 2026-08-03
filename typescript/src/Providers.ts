@@ -247,8 +247,13 @@ async function fetchjson(
   try {
     parsed = await res.json()
   } catch (err: any) {
-    // A body that is not JSON only matters when the status promised one;
-    // callers decide on status first.
+    // A success status promised JSON; a body that does not parse means
+    // the store could not answer coherently, and treating it as a miss
+    // would fall through to a weaker store. Error statuses may carry
+    // any body - they are decided on status alone.
+    if (200 === res.status) {
+      throw new SekretoError('sekreto: malformed response from ' + url.split('?')[0])
+    }
   }
 
   return { status: res.status, body: parsed }
@@ -282,9 +287,17 @@ export function hashicorpprovider(
   const usemount = opts.mount || 'secret'
   const kv = opts.kv || 2
 
-  // The working token, resolved once and reused. A configured token
-  // wins; otherwise the first lookup logs in.
+  // A version typo like kv: 3 must not quietly behave as v2 and turn
+  // its 404s into misses; there is nothing safe to assume it meant.
+  if (1 !== kv && 2 !== kv) {
+    throw new SekretoError('sekreto: hashicorp: unsupported kv version: ' + String(kv))
+  }
+
+  // The working token: a configured token is kept forever, a logged-in
+  // token is renewed shortly before its lease runs out - a long-running
+  // process must not keep presenting a token the vault already expired.
   let livetoken: string | undefined = '' === token ? undefined : token
+  let renewat = Infinity
 
   const baseheaders = (): Record<string, string> => {
     const headers: Record<string, string> = {}
@@ -328,6 +341,9 @@ export function hashicorpprovider(
       throw new SekretoError('sekreto: hashicorp login failed: ' + res.status + ': ' + url)
     }
 
+    const lease = Number(res.body.auth.lease_duration)
+    renewat = 0 < lease ? Date.now() + Math.max(lease - 60, 1) * 1000 : Infinity
+
     return String(got)
   }
 
@@ -335,7 +351,7 @@ export function hashicorpprovider(
     lookup: async (name: string) => {
       checkaddr(addr)
 
-      if (undefined === livetoken) {
+      if (undefined === livetoken || Date.now() >= renewat) {
         livetoken = await login()
       }
 
@@ -525,7 +541,10 @@ async function awscall(
   payload: any,
 ): Promise<{ status: number; body: any }> {
   const auth = awsauth(opts)
-  const addr = opts.addr || 'https://' + service + '.' + auth.region + '.amazonaws.com'
+  // The China partition lives under its own suffix; every other
+  // commercial region is plain amazonaws.com.
+  const suffix = auth.region.startsWith('cn-') ? '.amazonaws.com.cn' : '.amazonaws.com'
+  const addr = opts.addr || 'https://' + service + '.' + auth.region + suffix
   checkaddr(addr)
 
   const url = addr.replace(/\/$/, '') + '/'
@@ -667,7 +686,10 @@ export function gcpsecretsprovider(options?: {
 }): Provider {
   const opts = options || {}
 
+  // A configured token is kept forever; a metadata-server token carries
+  // expires_in and is renewed shortly before it runs out.
   let livetoken: string | undefined
+  let renewat = Infinity
 
   const metadataaddr = (): string => {
     if (opts.metadataaddr) {
@@ -694,6 +716,9 @@ export function gcpsecretsprovider(options?: {
       throw new SekretoError('sekreto: gcp: no token and metadata server did not answer')
     }
 
+    const expires = Number(res.body.expires_in)
+    renewat = 0 < expires ? Date.now() + Math.max(expires - 60, 1) * 1000 : Infinity
+
     return String(got)
   }
 
@@ -707,7 +732,7 @@ export function gcpsecretsprovider(options?: {
       const addr = opts.addr || 'https://secretmanager.googleapis.com'
       checkaddr(addr)
 
-      if (undefined === livetoken) {
+      if (undefined === livetoken || Date.now() >= renewat) {
         livetoken = await login()
       }
 
@@ -764,7 +789,15 @@ export function azuresecretsprovider(options?: {
   const opts = options || {}
   const resource = 'https://vault.azure.net'
 
+  // A configured token is kept forever; logged-in and IMDS tokens carry
+  // expires_in and are renewed shortly before they run out.
   let livetoken: string | undefined
+  let renewat = Infinity
+
+  const expiry = (expires: any): number => {
+    const seconds = Number(expires)
+    return 0 < seconds ? Date.now() + Math.max(seconds - 60, 1) * 1000 : Infinity
+  }
 
   const login = async (): Promise<string> => {
     if (opts.token) {
@@ -796,6 +829,7 @@ export function azuresecretsprovider(options?: {
         throw new SekretoError('sekreto: azure login failed: ' + res.status)
       }
 
+      renewat = expiry(res.body.expires_in)
       return String(got)
     }
 
@@ -813,6 +847,7 @@ export function azuresecretsprovider(options?: {
       )
     }
 
+    renewat = expiry(res.body.expires_in)
     return String(got)
   }
 
@@ -823,10 +858,15 @@ export function azuresecretsprovider(options?: {
         throw new SekretoError('sekreto: azure: no vault')
       }
 
-      const vaulturl = vault.startsWith('http') ? vault : 'https://' + vault + '.vault.azure.net'
+      // Only an explicit scheme is a URL; a vault NAMED httpvault must
+      // still become https://httpvault.vault.azure.net.
+      const vaulturl =
+        vault.startsWith('http://') || vault.startsWith('https://')
+          ? vault
+          : 'https://' + vault + '.vault.azure.net'
       checkaddr(vaulturl)
 
-      if (undefined === livetoken) {
+      if (undefined === livetoken || Date.now() >= renewat) {
         livetoken = await login()
       }
 
@@ -1030,7 +1070,10 @@ export function infisicalprovider(options?: {
 }): Provider {
   const opts = options || {}
 
+  // A configured token is kept forever; a universal-auth token carries
+  // expiresIn and is renewed shortly before it runs out.
   let livetoken: string | undefined
+  let renewat = Infinity
 
   const login = async (addr: string): Promise<string> => {
     if (opts.token) {
@@ -1053,6 +1096,9 @@ export function infisicalprovider(options?: {
       throw new SekretoError('sekreto: infisical login failed: ' + res.status)
     }
 
+    const expires = Number(res.body.expiresIn)
+    renewat = 0 < expires ? Date.now() + Math.max(expires - 60, 1) * 1000 : Infinity
+
     return String(got)
   }
 
@@ -1067,7 +1113,7 @@ export function infisicalprovider(options?: {
         throw new SekretoError('sekreto: infisical: no project/environment')
       }
 
-      if (undefined === livetoken) {
+      if (undefined === livetoken || Date.now() >= renewat) {
         livetoken = await login(addr)
       }
 

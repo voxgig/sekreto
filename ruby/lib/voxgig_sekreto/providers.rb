@@ -151,8 +151,14 @@ module VoxgigSekreto
     parsed = begin
       JSON.parse(response.body)
     rescue JSON::ParserError, TypeError
-      # A body that is not JSON only matters when the status promised one;
-      # callers decide on status first.
+      # A success status promised JSON; a body that does not parse means
+      # the store could not answer coherently, and treating it as a miss
+      # would fall through to a weaker store. Error statuses may carry
+      # any body - they are decided on status alone.
+      if 200 == response.code.to_i
+        raise SekretoError, 'sekreto: malformed response from ' + url.split('?')[0]
+      end
+
       nil
     end
 
@@ -203,9 +209,17 @@ module VoxgigSekreto
       @vaultnamespace = opts['vaultnamespace']
       @auth = opts['auth']
 
-      # The working token, resolved once and reused. A configured token
-      # wins; otherwise the first lookup logs in.
+      # A version typo like kv: 3 must not quietly behave as v2 and turn
+      # its 404s into misses; there is nothing safe to assume it meant.
+      if 1 != @kv && 2 != @kv
+        raise SekretoError, 'sekreto: hashicorp: unsupported kv version: ' + @kv.to_s
+      end
+
+      # The working token: a configured token is kept forever, a logged-in
+      # token is renewed shortly before its lease runs out - a long-running
+      # process must not keep presenting a token the vault already expired.
       @livetoken = VoxgigSekreto.given(token) ? token : nil
+      @renewat = Float::INFINITY
     end
 
     def baseheaders
@@ -245,13 +259,16 @@ module VoxgigSekreto
         raise SekretoError, 'sekreto: hashicorp login failed: ' + status.to_s + ': ' + url
       end
 
+      lease = resbody['auth']['lease_duration'].to_f
+      @renewat = 0 < lease ? Time.now.to_f + [lease - 60, 1].max : Float::INFINITY
+
       got.to_s
     end
 
     def lookup(name)
       VoxgigSekreto.checkaddr(@addr)
 
-      @livetoken = login if @livetoken.nil?
+      @livetoken = login if @livetoken.nil? || Time.now.to_f >= @renewat
 
       ref = VoxgigSekreto.vaultref(name)
       base = @addr.sub(%r{/\z}, '') + '/v1/' + @mount
@@ -407,7 +424,10 @@ module VoxgigSekreto
   # One signed call to an AWS JSON-1.1 API.
   def awscall(opts, service, target, payload)
     auth = awsauth(opts)
-    addr = opts['addr'] || 'https://' + service + '.' + auth['region'] + '.amazonaws.com'
+    # The China partition lives under its own suffix; every other
+    # commercial region is plain amazonaws.com.
+    suffix = auth['region'].start_with?('cn-') ? '.amazonaws.com.cn' : '.amazonaws.com'
+    addr = opts['addr'] || 'https://' + service + '.' + auth['region'] + suffix
     checkaddr(addr)
 
     url = addr.sub(%r{/\z}, '') + '/'
@@ -539,7 +559,11 @@ module VoxgigSekreto
   class GcpsecretsProvider
     def initialize(opts = nil)
       @opts = opts || {}
+
+      # A configured token is kept forever; a metadata-server token carries
+      # expires_in and is renewed shortly before it runs out.
       @livetoken = nil
+      @renewat = Float::INFINITY
     end
 
     def metadataaddr
@@ -563,6 +587,9 @@ module VoxgigSekreto
         raise SekretoError, 'sekreto: gcp: no token and metadata server did not answer'
       end
 
+      expires = body['expires_in'].to_f
+      @renewat = 0 < expires ? Time.now.to_f + [expires - 60, 1].max : Float::INFINITY
+
       got.to_s
     end
 
@@ -573,7 +600,7 @@ module VoxgigSekreto
       addr = @opts['addr'] || 'https://secretmanager.googleapis.com'
       VoxgigSekreto.checkaddr(addr)
 
-      @livetoken = login if @livetoken.nil?
+      @livetoken = login if @livetoken.nil? || Time.now.to_f >= @renewat
 
       url = addr.sub(%r{/\z}, '') + '/v1/projects/' + project + '/secrets/' +
             VoxgigSekreto.flatname(name, '_') + '/versions/latest:access'
@@ -612,7 +639,16 @@ module VoxgigSekreto
 
     def initialize(opts = nil)
       @opts = opts || {}
+
+      # A configured token is kept forever; logged-in and IMDS tokens carry
+      # expires_in and are renewed shortly before they run out.
       @livetoken = nil
+      @renewat = Float::INFINITY
+    end
+
+    def expiry(expires)
+      seconds = expires.to_f
+      0 < seconds ? Time.now.to_f + [seconds - 60, 1].max : Float::INFINITY
     end
 
     def login
@@ -638,6 +674,7 @@ module VoxgigSekreto
           raise SekretoError, 'sekreto: azure login failed: ' + status.to_s
         end
 
+        @renewat = expiry(body['expires_in'])
         return got.to_s
       end
 
@@ -653,6 +690,7 @@ module VoxgigSekreto
               'sekreto: azure: no token, no client credentials, and IMDS did not answer'
       end
 
+      @renewat = expiry(body['expires_in'])
       got.to_s
     end
 
@@ -660,10 +698,16 @@ module VoxgigSekreto
       vault = @opts['vault'] || ''
       raise SekretoError, 'sekreto: azure: no vault' if '' == vault
 
-      vaulturl = vault.start_with?('http') ? vault : 'https://' + vault + '.vault.azure.net'
+      # Only an explicit scheme is a URL; a vault NAMED httpvault must
+      # still become https://httpvault.vault.azure.net.
+      vaulturl = if vault.start_with?('http://', 'https://')
+                   vault
+                 else
+                   'https://' + vault + '.vault.azure.net'
+                 end
       VoxgigSekreto.checkaddr(vaulturl)
 
-      @livetoken = login if @livetoken.nil?
+      @livetoken = login if @livetoken.nil? || Time.now.to_f >= @renewat
 
       url = vaulturl.sub(%r{/\z}, '') + '/secrets/' + VoxgigSekreto.flatname(name, '-') +
             '?api-version=' + (@opts['apiversion'] || '7.4')
@@ -823,7 +867,11 @@ module VoxgigSekreto
   class InfisicalProvider
     def initialize(opts = nil)
       @opts = opts || {}
+
+      # A configured token is kept forever; a universal-auth token carries
+      # expiresIn and is renewed shortly before it runs out.
       @livetoken = nil
+      @renewat = Float::INFINITY
     end
 
     def login(addr)
@@ -844,6 +892,9 @@ module VoxgigSekreto
         raise SekretoError, 'sekreto: infisical login failed: ' + status.to_s
       end
 
+      expires = body['expiresIn'].to_f
+      @renewat = 0 < expires ? Time.now.to_f + [expires - 60, 1].max : Float::INFINITY
+
       got.to_s
     end
 
@@ -857,7 +908,7 @@ module VoxgigSekreto
         raise SekretoError, 'sekreto: infisical: no project/environment'
       end
 
-      @livetoken = login(addr) if @livetoken.nil?
+      @livetoken = login(addr) if @livetoken.nil? || Time.now.to_f >= @renewat
 
       url = addr + '/api/v3/secrets/raw/' + VoxgigSekreto.envkey(name) +
             '?workspaceId=' + VoxgigSekreto.uriescape(project) +

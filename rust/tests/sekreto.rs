@@ -59,6 +59,11 @@ fn specof(value: &OmniJson) -> ProviderSpec {
         }
     }
 
+    let kv = match field(value, "kv") {
+        OmniJson::Num(entry) => entry as u32,
+        _ => 0,
+    };
+
     ProviderSpec {
         kind: text(&field(value, "kind")),
         name: text(&field(value, "name")),
@@ -69,6 +74,7 @@ fn specof(value: &OmniJson) -> ProviderSpec {
         addr: text(&field(value, "addr")),
         token: text(&field(value, "token")),
         mount: text(&field(value, "mount")),
+        kv,
         command: text(&field(value, "command")),
         namespace: text(&field(value, "namespace")),
         home: text(&field(value, "home")),

@@ -101,13 +101,20 @@ namespace Voxgig.Sekreto
         /// Secret Manager, `_`) or `api-token` (Azure Key Vault, `-`).
         ///
         /// <para>Those stores have no path hierarchy and reject dots in ids,
-        /// so the dots become the store's conventional separator.</para>
+        /// so the dots become the store's conventional separator. With `-` as
+        /// the separator, underscores flatten too: Azure Key Vault's alphabet
+        /// is letters, digits and hyphens only, and a valid sekreto name like
+        /// `with_underscore` must still be representable there. (The
+        /// resulting `.`/`_` collision mirrors the documented envkey
+        /// behaviour, where both already map to `_`.)</para>
         /// </summary>
         public static string FlatName(object name, string sep)
         {
             CheckName(name);
 
-            return string.Join(sep, ((string)name).Split('.'));
+            string flat = string.Join(sep, ((string)name).Split('.'));
+
+            return "-" == sep ? string.Join("-", flat.Split('_')) : flat;
         }
 
         /// <summary>

@@ -284,9 +284,11 @@ namespace Voxgig.Sekreto
 
         /// <summary>
         /// One JSON round-trip. Network failure is always an error - an
-        /// unreachable store is a store that could not answer. A body that
-        /// is not JSON only matters when the status promised one; callers
-        /// decide on status first.
+        /// unreachable store is a store that could not answer. So is a
+        /// status-200 body that fails to parse as JSON: a success status
+        /// promised JSON, and treating the garble as a miss would fall
+        /// through to a weaker store. Error statuses may carry any body -
+        /// they are decided on status alone.
         /// </summary>
         internal static (int Status, object Body) FetchJson(
             string method, string url, Dictionary<string, string> headers, string body = null)
@@ -326,7 +328,13 @@ namespace Voxgig.Sekreto
                     "sekreto: cannot reach " + url.Split('?')[0] + ": " + err.Message);
             }
 
-            return (status, Json.Parse(text));
+            if (!Json.TryParse(text, out object parsed) && 200 == status)
+            {
+                throw new SekretoError(
+                    "sekreto: malformed response from " + url.Split('?')[0]);
+            }
+
+            return (status, parsed);
         }
     }
 
@@ -355,9 +363,12 @@ namespace Voxgig.Sekreto
         private readonly string vaultnamespace;
         private readonly Dictionary<string, object> auth;
 
-        // The working token, resolved once and reused. A configured token
-        // wins; otherwise the first lookup logs in.
+        // The working token: a configured token is kept forever, a logged-in
+        // token is renewed shortly before its lease runs out - a
+        // long-running process must not keep presenting a token the vault
+        // already expired.
         private string livetoken;
+        private DateTimeOffset renewat = DateTimeOffset.MaxValue;
 
         public HashicorpProvider(string addr, string token, string mount = null, int kv = 0,
             string vaultnamespace = null, Dictionary<string, object> auth = null)
@@ -365,6 +376,16 @@ namespace Voxgig.Sekreto
             this.addr = addr ?? "";
             this.mount = string.IsNullOrEmpty(mount) ? "secret" : mount;
             this.kv = 0 == kv ? 2 : kv;
+
+            // A version typo like kv: 3 must not quietly behave as v2 and
+            // turn its 404s into misses; there is nothing safe to assume it
+            // meant.
+            if (1 != this.kv && 2 != this.kv)
+            {
+                throw new SekretoError(
+                    "sekreto: hashicorp: unsupported kv version: " + this.kv);
+            }
+
             this.vaultnamespace = vaultnamespace;
             this.auth = auth;
             this.livetoken = string.IsNullOrEmpty(token) ? null : token;
@@ -438,14 +459,17 @@ namespace Voxgig.Sekreto
 
             var (status, resbody) = Http.FetchJson("POST", url, BaseHeaders(), Json.Stringify(body));
 
-            object got = ((resbody as Dictionary<string, object>)?.GetValueOrDefault("auth")
-                as Dictionary<string, object>)?.GetValueOrDefault("client_token");
+            var authbody = (resbody as Dictionary<string, object>)?.GetValueOrDefault("auth")
+                as Dictionary<string, object>;
+            object got = authbody?.GetValueOrDefault("client_token");
             string token = null == got ? null : Convert.ToString(got);
 
             if (200 != status || string.IsNullOrEmpty(token))
             {
                 throw new SekretoError("sekreto: hashicorp login failed: " + status + ": " + url);
             }
+
+            renewat = Providers.RenewAt(authbody.GetValueOrDefault("lease_duration"));
 
             return token;
         }
@@ -454,7 +478,7 @@ namespace Voxgig.Sekreto
         {
             Addr.Check(addr);
 
-            if (null == livetoken)
+            if (null == livetoken || DateTimeOffset.UtcNow >= renewat)
             {
                 livetoken = Login();
             }
@@ -735,8 +759,13 @@ namespace Voxgig.Sekreto
         {
             var (region, keyid, secret, session) = Auth(opts);
 
+            // The China partition lives under its own suffix; every other
+            // commercial region is plain amazonaws.com.
+            string suffix = region.StartsWith("cn-", StringComparison.Ordinal)
+                ? ".amazonaws.com.cn"
+                : ".amazonaws.com";
             string addr = string.IsNullOrEmpty(opts.Addr)
-                ? "https://" + service + "." + region + ".amazonaws.com"
+                ? "https://" + service + "." + region + suffix
                 : opts.Addr;
             Addr.Check(addr);
 
@@ -949,7 +978,10 @@ namespace Voxgig.Sekreto
         private readonly string addr;
         private readonly string metadataaddr;
 
+        // A configured token is kept forever; a metadata-server token
+        // carries expires_in and is renewed shortly before it runs out.
         private string livetoken;
+        private DateTimeOffset renewat = DateTimeOffset.MaxValue;
 
         public GcpSecretsProvider(string project = null, string token = null,
             string addr = null, string metadataaddr = null)
@@ -997,6 +1029,9 @@ namespace Voxgig.Sekreto
                 throw new SekretoError("sekreto: gcp: no token and metadata server did not answer");
             }
 
+            renewat = Providers.RenewAt(
+                (body as Dictionary<string, object>)?.GetValueOrDefault("expires_in"));
+
             return text;
         }
 
@@ -1010,7 +1045,7 @@ namespace Voxgig.Sekreto
             string useaddr = string.IsNullOrEmpty(addr) ? "https://secretmanager.googleapis.com" : addr;
             Addr.Check(useaddr);
 
-            if (null == livetoken)
+            if (null == livetoken || DateTimeOffset.UtcNow >= renewat)
             {
                 livetoken = Login();
             }
@@ -1075,7 +1110,10 @@ namespace Voxgig.Sekreto
         private readonly string imdsaddr;
         private readonly string apiversion;
 
+        // A configured token is kept forever; logged-in and IMDS tokens
+        // carry expires_in and are renewed shortly before they run out.
         private string livetoken;
+        private DateTimeOffset renewat = DateTimeOffset.MaxValue;
 
         public AzureSecretsProvider(string vault = null, string token = null, string tenant = null,
             string clientid = null, string clientsecret = null, string loginaddr = null,
@@ -1126,6 +1164,9 @@ namespace Voxgig.Sekreto
                     throw new SekretoError("sekreto: azure login failed: " + status);
                 }
 
+                renewat = Providers.RenewAt(
+                    (body as Dictionary<string, object>)?.GetValueOrDefault("expires_in"));
+
                 return text;
             }
 
@@ -1146,6 +1187,9 @@ namespace Voxgig.Sekreto
                     "sekreto: azure: no token, no client credentials, and IMDS did not answer");
             }
 
+            renewat = Providers.RenewAt(
+                (imdsbody as Dictionary<string, object>)?.GetValueOrDefault("expires_in"));
+
             return foundtext;
         }
 
@@ -1156,12 +1200,15 @@ namespace Voxgig.Sekreto
                 throw new SekretoError("sekreto: azure: no vault");
             }
 
-            string vaulturl = vault.StartsWith("http", StringComparison.Ordinal)
+            // Only an explicit scheme is a URL; a vault NAMED httpvault must
+            // still become https://httpvault.vault.azure.net.
+            string vaulturl = vault.StartsWith("http://", StringComparison.Ordinal)
+                || vault.StartsWith("https://", StringComparison.Ordinal)
                 ? vault
                 : "https://" + vault + ".vault.azure.net";
             Addr.Check(vaulturl);
 
-            if (null == livetoken)
+            if (null == livetoken || DateTimeOffset.UtcNow >= renewat)
             {
                 livetoken = Login();
             }
@@ -1428,7 +1475,10 @@ namespace Voxgig.Sekreto
         private readonly string environment;
         private readonly string path;
 
+        // A configured token is kept forever; a universal-auth token
+        // carries expiresIn and is renewed shortly before it runs out.
         private string livetoken;
+        private DateTimeOffset renewat = DateTimeOffset.MaxValue;
 
         public InfisicalProvider(string addr = null, string token = null, string clientid = null,
             string clientsecret = null, string project = null, string environment = null,
@@ -1474,6 +1524,9 @@ namespace Voxgig.Sekreto
                 throw new SekretoError("sekreto: infisical login failed: " + status);
             }
 
+            renewat = Providers.RenewAt(
+                (body as Dictionary<string, object>)?.GetValueOrDefault("expiresIn"));
+
             return text;
         }
 
@@ -1488,7 +1541,7 @@ namespace Voxgig.Sekreto
                 throw new SekretoError("sekreto: infisical: no project/environment");
             }
 
-            if (null == livetoken)
+            if (null == livetoken || DateTimeOffset.UtcNow >= renewat)
             {
                 livetoken = Login(useaddr);
             }
@@ -1533,6 +1586,47 @@ namespace Voxgig.Sekreto
         internal static string TextOr(object value, string fallback)
         {
             return null == value ? fallback : Convert.ToString(value);
+        }
+
+        /// <summary>
+        /// The instant a logged-in token should be renewed: shortly before
+        /// an expiry given in seconds runs out (now + max(seconds - 60, 1)),
+        /// or never when the expiry is missing, zero or unreadable. Azure's
+        /// endpoints may send expires_in as a string, so numeric text
+        /// counts.
+        /// </summary>
+        internal static DateTimeOffset RenewAt(object expires)
+        {
+            double seconds;
+
+            try
+            {
+                seconds = null == expires
+                    ? 0
+                    : Convert.ToDouble(expires, CultureInfo.InvariantCulture);
+            }
+            catch (FormatException)
+            {
+                seconds = 0;
+            }
+            catch (InvalidCastException)
+            {
+                seconds = 0;
+            }
+            catch (OverflowException)
+            {
+                seconds = 0;
+            }
+
+            // A century outruns any real lease; anything longer (or NaN)
+            // simply never renews, like a missing expiry - and stays
+            // representable as a timestamp.
+            if (double.IsNaN(seconds) || 0 >= seconds || 3153600000d < seconds)
+            {
+                return DateTimeOffset.MaxValue;
+            }
+
+            return DateTimeOffset.UtcNow.AddSeconds(Math.Max(seconds - 60, 1));
         }
 
         /// <summary>Build a provider from its declarative form.</summary>

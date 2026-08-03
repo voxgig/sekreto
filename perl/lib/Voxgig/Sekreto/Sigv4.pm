@@ -119,11 +119,15 @@ sub sigv4 {
     # Every header that will be signed: the caller's extras, plus host and
     # x-amz-date (and the session token when present), lower-cased and
     # trimmed the way the canonical form requires.
+    # Canonical header values are trimmed AND internally collapsed -
+    # AWS folds sequential whitespace to one space before signing, so a
+    # header like "a  b" must sign as "a b" or the service refuses it.
     my %headers;
     my $extra = $input->{headers} || {};
     for my $key ( keys %$extra ) {
         my $value = defined $extra->{$key} ? "$extra->{$key}" : '';
         $value =~ s/^\s+|\s+$//g;
+        $value =~ s/\s+/ /g;
         $headers{ lc($key) } = $value;
     }
     $headers{host}                   = $host;
