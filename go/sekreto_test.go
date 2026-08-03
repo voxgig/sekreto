@@ -88,6 +88,42 @@ var (
 		return map[string]any{"path": ref.Path, "field": ref.Field}, nil
 	})
 
+	FLATNAME = omni.Subject(func(args ...any) (any, error) {
+		entry, _ := args[0].(map[string]any)
+		return sekreto.FlatName(text(entry["name"]), text(entry["sep"]))
+	})
+
+	AWSPARAM = omni.Subject(func(args ...any) (any, error) {
+		entry, _ := args[0].(map[string]any)
+		return sekreto.AwsParam(text(entry["name"]), text(entry["prefix"]))
+	})
+
+	SIGV4 = omni.Subject(func(args ...any) (any, error) {
+		// Re-encoding is the shortest honest route from omni's `any` to
+		// the library's typed input, exactly as chainof does for chains.
+		data, err := json.Marshal(args[0])
+		if nil != err {
+			return nil, err
+		}
+
+		var input sekreto.Sigv4Input
+		if err := json.Unmarshal(data, &input); nil != err {
+			return nil, err
+		}
+
+		signed, err := sekreto.SigV4(&input)
+		if nil != err {
+			return nil, err
+		}
+
+		// omni compares against the spec's JSON, so answer in that shape.
+		out := map[string]any{}
+		for key, value := range signed {
+			out[key] = value
+		}
+		return out, nil
+	})
+
 	PARSEDOTENV = omni.Subject(func(args ...any) (any, error) {
 		out := map[string]any{}
 		for key, value := range sekreto.ParseDotenv(text(args[0])) {
@@ -207,6 +243,8 @@ func TestSekreto(t *testing.T) {
 		{"validname", VALIDNAME, omni.Flags{"null": false}},
 		{"envkey", ENVKEY, nil},
 		{"vaultref", VAULTREF, nil},
+		{"flatname", FLATNAME, nil},
+		{"awsparam", AWSPARAM, nil},
 		{"parsedotenv", PARSEDOTENV, nil},
 		{"resolve", RESOLVE, nil},
 		{"trysecret", TRYSECRET, nil},
@@ -214,6 +252,7 @@ func TestSekreto(t *testing.T) {
 		{"stores", STORES, nil},
 		{"getfrom", GETFROM, nil},
 		{"tryfrom", TRYFROM, nil},
+		{"sigv4", SIGV4, nil},
 		{"redact", REDACT, nil},
 	}
 

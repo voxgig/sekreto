@@ -91,6 +91,36 @@ func NameVaultRef(name string) (*VaultRef, error) {
 	}, nil
 }
 
+// FlatName is a name flattened to one segment: api.token -> api_token (GCP
+// Secret Manager, `_`) or api-token (Azure Key Vault, `-`).
+//
+// Those stores have no path hierarchy and reject dots in ids, so the dots
+// become the store's conventional separator.
+func FlatName(name string, sep string) (string, error) {
+	if err := checkname(name); nil != err {
+		return "", err
+	}
+
+	return strings.Join(strings.Split(name, "."), sep), nil
+}
+
+// AwsParam is the AWS SSM Parameter Store name for a name: dots become the
+// path hierarchy, rooted at `/` (or at a prefix): db.pass.main ->
+// /db/pass/main, or /app/db/pass/main under prefix `/app`.
+func AwsParam(name string, prefix string) (string, error) {
+	if err := checkname(name); nil != err {
+		return "", err
+	}
+
+	base := prefix
+	if "" != base && !strings.HasPrefix(base, "/") {
+		base = "/" + base
+	}
+	base = strings.TrimSuffix(base, "/")
+
+	return base + "/" + strings.Join(strings.Split(name, "."), "/"), nil
+}
+
 // ParseDotenv parses `.env` text into a map of raw keys to values.
 //
 // Deliberately small: KEY=value, optional `export`, `#` comments on their

@@ -2,12 +2,17 @@
 //
 // It asks sekreto for `api.token` and calls the token-protected API with
 // it. Every port ships this same CLI, and test/integration.sh runs all of
-// them against the same server from all four secret sources - which is what
+// them against the same server from every secret source - which is what
 // proves the library, rather than the spec alone.
 //
-// Usage: sekreto-cli <api-url> [--source env|dotenv|hashicorp|boru|chain]
+// Usage: sekreto-cli <api-url> [--source <source>] [--store <name>]
 //
-//	[--store <name>]   directed read
+// Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
+// gcpsecrets azuresecrets onepassword doppler infisical chain
+//
+// Each source's configuration arrives in the environment variables its
+// own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
+// in chainfor below.
 package main
 
 import (
@@ -16,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/voxgig/sekreto/go/sekreto"
 )
@@ -35,11 +41,33 @@ func chainfor(source string) []*sekreto.ProviderSpec {
 		Kind: "dotenv",
 		File: envor("SEKRETO_DOTENV", ".env"),
 	}
+	filespec := &sekreto.ProviderSpec{
+		Kind: "file",
+		Dir:  envor("SEKRETO_FILEDIR", "/run/secrets"),
+	}
+
+	// A kv of 0 means "unset", and the provider defaults it to 2.
+	kv, _ := strconv.Atoi(os.Getenv("VAULT_KV"))
+
+	var auth *sekreto.AuthSpec
+	if "" != os.Getenv("VAULT_AUTH") {
+		auth = &sekreto.AuthSpec{
+			Method:   os.Getenv("VAULT_AUTH"),
+			Role:     os.Getenv("VAULT_ROLE"),
+			JwtFile:  os.Getenv("VAULT_JWT_FILE"),
+			RoleID:   os.Getenv("VAULT_ROLE_ID"),
+			SecretID: os.Getenv("VAULT_SECRET_ID"),
+		}
+	}
+
 	hashicorpspec := &sekreto.ProviderSpec{
-		Kind:  "hashicorp",
-		Addr:  os.Getenv("VAULT_ADDR"),
-		Token: os.Getenv("VAULT_TOKEN"),
-		Mount: os.Getenv("VAULT_MOUNT"),
+		Kind:           "hashicorp",
+		Addr:           os.Getenv("VAULT_ADDR"),
+		Token:          os.Getenv("VAULT_TOKEN"),
+		Mount:          os.Getenv("VAULT_MOUNT"),
+		KV:             kv,
+		VaultNamespace: os.Getenv("VAULT_NAMESPACE"),
+		Auth:           auth,
 	}
 	boruspec := &sekreto.ProviderSpec{
 		Kind:      "boru",
@@ -48,15 +76,99 @@ func chainfor(source string) []*sekreto.ProviderSpec {
 		Home:      os.Getenv("BORU_HOME"),
 	}
 
+	// The same vault over its wire protocol (`boru vault serve`) instead
+	// of the CLI: an address plus a capability token from `vault grant`.
+	boruwirespec := &sekreto.ProviderSpec{
+		Kind:      "boru",
+		Addr:      os.Getenv("BORU_ADDR"),
+		Token:     os.Getenv("BORU_TOKEN"),
+		Namespace: os.Getenv("BORU_NAMESPACE"),
+	}
+
+	awssecretsspec := &sekreto.ProviderSpec{
+		Kind:   "awssecrets",
+		Region: os.Getenv("AWS_REGION"),
+		Addr:   os.Getenv("AWS_ENDPOINT"),
+	}
+
+	awsparamsspec := &sekreto.ProviderSpec{
+		Kind:   "awsparams",
+		Region: os.Getenv("AWS_REGION"),
+		Addr:   os.Getenv("AWS_ENDPOINT"),
+		Prefix: os.Getenv("AWS_PARAM_PREFIX"),
+	}
+
+	gcpspec := &sekreto.ProviderSpec{
+		Kind:         "gcpsecrets",
+		Project:      os.Getenv("GCP_PROJECT"),
+		Addr:         os.Getenv("GCP_ADDR"),
+		MetadataAddr: os.Getenv("GCP_METADATA_ADDR"),
+	}
+
+	azurespec := &sekreto.ProviderSpec{
+		Kind:         "azuresecrets",
+		Vault:        os.Getenv("AZURE_VAULT"),
+		Token:        os.Getenv("AZURE_TOKEN"),
+		Tenant:       os.Getenv("AZURE_TENANT"),
+		ClientID:     os.Getenv("AZURE_CLIENT_ID"),
+		ClientSecret: os.Getenv("AZURE_CLIENT_SECRET"),
+		LoginAddr:    os.Getenv("AZURE_LOGIN_ADDR"),
+		ImdsAddr:     os.Getenv("AZURE_IMDS_ADDR"),
+	}
+
+	onepasswordspec := &sekreto.ProviderSpec{
+		Kind:  "onepassword",
+		Addr:  os.Getenv("OP_CONNECT_HOST"),
+		Token: os.Getenv("OP_CONNECT_TOKEN"),
+		Vault: os.Getenv("OP_VAULT"),
+	}
+
+	dopplerspec := &sekreto.ProviderSpec{
+		Kind:    "doppler",
+		Token:   os.Getenv("DOPPLER_TOKEN"),
+		Project: os.Getenv("DOPPLER_PROJECT"),
+		Config:  os.Getenv("DOPPLER_CONFIG"),
+		Addr:    os.Getenv("DOPPLER_ADDR"),
+	}
+
+	infisicalspec := &sekreto.ProviderSpec{
+		Kind:         "infisical",
+		Addr:         os.Getenv("INFISICAL_ADDR"),
+		Token:        os.Getenv("INFISICAL_TOKEN"),
+		ClientID:     os.Getenv("INFISICAL_CLIENT_ID"),
+		ClientSecret: os.Getenv("INFISICAL_CLIENT_SECRET"),
+		Project:      os.Getenv("INFISICAL_PROJECT"),
+		Environment:  os.Getenv("INFISICAL_ENV"),
+		Path:         os.Getenv("INFISICAL_PATH"),
+	}
+
 	switch source {
 	case "env":
 		return []*sekreto.ProviderSpec{envspec}
 	case "dotenv":
 		return []*sekreto.ProviderSpec{dotenvspec}
+	case "file":
+		return []*sekreto.ProviderSpec{filespec}
 	case "hashicorp":
 		return []*sekreto.ProviderSpec{hashicorpspec}
 	case "boru":
 		return []*sekreto.ProviderSpec{boruspec}
+	case "boruwire":
+		return []*sekreto.ProviderSpec{boruwirespec}
+	case "awssecrets":
+		return []*sekreto.ProviderSpec{awssecretsspec}
+	case "awsparams":
+		return []*sekreto.ProviderSpec{awsparamsspec}
+	case "gcpsecrets":
+		return []*sekreto.ProviderSpec{gcpspec}
+	case "azuresecrets":
+		return []*sekreto.ProviderSpec{azurespec}
+	case "onepassword":
+		return []*sekreto.ProviderSpec{onepasswordspec}
+	case "doppler":
+		return []*sekreto.ProviderSpec{dopplerspec}
+	case "infisical":
+		return []*sekreto.ProviderSpec{infisicalspec}
 	default:
 		// The default: the chain an app would actually ship with - local
 		// overrides first, shared vaults last.
