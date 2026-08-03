@@ -161,13 +161,22 @@ jobs:
           npm --prefix typescript install
           npm --prefix api install
 
+      # Not `make build`: the top-level build-% rule tolerates a port
+      # without a build target, which also swallows a port whose build
+      # *fails*. Here each one must succeed on its own.
       - name: Build every port
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
-        run: make build
+        run: |
+          for lang in typescript javascript python ruby php perl go rust java csharp; do
+            echo "======== $lang ========"
+            make -C "$lang" build
+          done
 
       - name: Integration
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
           BORU: ${{ steps.boru.outcome == 'success' && format('{0}/boru-bin', github.workspace) || '' }}
+          # A port that did not build must fail the job, not be skipped.
+          REQUIRE_ALL: '1'
         run: ./test/integration.sh

@@ -60,7 +60,8 @@ exist" without hiding a typo.
 | [csharp](csharp/) | ✅ | ✅ |
 
 Every port has **zero third-party dependencies, with one deliberate
-exception**: the Rust port takes `rustls` for TLS. Everywhere else, where a
+exception**: the Rust port takes `rustls` (with `webpki-roots` for the
+trust anchors, which rustls deliberately does not ship) for TLS. Everywhere else, where a
 standard library lacks something — JSON in Java and Rust, HTTP in Rust — the
 port carries a small one of its own rather than taking on a package. TLS is
 the line: hand-rolling it for a secrets library would be far worse than

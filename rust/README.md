@@ -9,8 +9,9 @@ make test                     # the conformance suite
 
 std has no HTTP client and no JSON, so this port carries small ones of both.
 
-It is also the **one port that takes a dependency**: `rustls` (plus
-`webpki-roots`) for TLS. A secrets library reaching a remote vault needs
+It is also the **one port that takes dependencies**: `rustls` and
+`webpki-roots` for TLS — two crates, one exception. rustls deliberately
+ships no trust roots, so something has to supply them. A secrets library reaching a remote vault needs
 TLS, and hand-rolling TLS would be far worse than taking a well-audited,
 pure-Rust crate. Nothing else is pulled in.
 

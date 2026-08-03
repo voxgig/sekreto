@@ -38,7 +38,13 @@ pub struct Response {
 
 /// A url split into the parts a request needs.
 struct Target {
+    /// The bare host: what we connect to, and what the certificate is
+    /// checked against. An IPv6 literal appears here without brackets.
     host: String,
+    /// The authority as it goes in the `Host:` header. An IPv6 literal
+    /// keeps its brackets, because `Host: 2001:db8::1:8200` is not a valid
+    /// authority and an intermediary may reject or misroute it.
+    authority: String,
     port: u16,
     path: String,
     tls: bool,
@@ -70,11 +76,22 @@ fn split(url: &str) -> Result<Target, String> {
         _ => (authority, defaultport),
     };
 
+    let bare = host
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .to_string();
+
+    // Re-bracketed only if it really is an IPv6 literal, because
+    // `Host: 2001:db8::1:8200` is not a valid authority.
+    let hostheader = if bare.contains(':') {
+        format!("[{}]", bare)
+    } else {
+        bare.clone()
+    };
+
     Ok(Target {
-        host: host
-            .trim_start_matches('[')
-            .trim_end_matches(']')
-            .to_string(),
+        host: bare,
+        authority: hostheader,
         port,
         path: path.to_string(),
         tls,
@@ -207,7 +224,7 @@ fn exchange(
 ) -> Result<Response, String> {
     let mut request = format!(
         "GET {} HTTP/1.1\r\nHost: {}:{}\r\nAccept: application/json\r\nConnection: close\r\n",
-        target.path, target.host, target.port
+        target.path, target.authority, target.port
     );
 
     for (name, value) in headers {
@@ -225,14 +242,13 @@ fn exchange(
         .read_to_end(&mut raw)
         .map_err(|err| format!("sekreto: cannot read {}: {}", url, err))?;
 
-    let text = String::from_utf8_lossy(&raw).to_string();
-
-    let split_at = text
-        .find("\r\n\r\n")
+    let split_at = findbytes(&raw, b"\r\n\r\n")
         .ok_or_else(|| format!("sekreto: malformed response from {}", url))?;
 
-    let head = &text[..split_at];
-    let raw_body = &text[split_at + 4..];
+    // Headers are ASCII; the body is not necessarily, so it stays bytes
+    // until every length-counted slice has been taken.
+    let head = String::from_utf8_lossy(&raw[..split_at]).to_string();
+    let rawbody = &raw[split_at + 4..];
 
     // "HTTP/1.1 200 OK" - the second field is the status.
     let status = head
@@ -253,28 +269,44 @@ fn exchange(
                 && value.to_ascii_lowercase().contains("chunked")
         });
 
-    let body = if chunked {
-        dechunk(raw_body).ok_or_else(|| format!("sekreto: malformed chunks from {}", url))?
+    let bodybytes = if chunked {
+        dechunk(rawbody).ok_or_else(|| format!("sekreto: malformed chunks from {}", url))?
     } else {
-        raw_body.to_string()
+        rawbody.to_vec()
     };
 
+    let body = String::from_utf8_lossy(&bodybytes).to_string();
+
     Ok(Response { status, body })
+}
+
+/// The offset of `needle` in `hay`, if it is there.
+fn findbytes(hay: &[u8], needle: &[u8]) -> Option<usize> {
+    hay.windows(needle.len())
+        .position(|window| window == needle)
 }
 
 /// Join a chunked body back together.
 ///
 /// Each chunk is a hex length, CRLF, that many bytes, CRLF. A zero length
 /// ends the body; any trailer after it is ignored.
-fn dechunk(text: &str) -> Option<String> {
-    let mut out = String::new();
-    let mut rest = text;
+///
+/// Bytes, not `str`: a chunk length counts bytes, and a boundary may fall
+/// inside a multibyte character. Slicing a `str` at such an offset panics,
+/// so a secret containing any non-ASCII character could take the process
+/// down rather than come back.
+fn dechunk(raw: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut rest = raw;
 
     loop {
-        let (header, body) = rest.split_once("\r\n")?;
+        let at = findbytes(rest, b"\r\n")?;
 
         // A chunk length may carry extensions after a `;`.
+        let header = std::str::from_utf8(&rest[..at]).ok()?;
         let size = usize::from_str_radix(header.split(';').next()?.trim(), 16).ok()?;
+
+        let body = rest.get(at + 2..)?;
 
         if 0 == size {
             return Some(out);
@@ -284,7 +316,7 @@ fn dechunk(text: &str) -> Option<String> {
             return None;
         }
 
-        out.push_str(&body[..size]);
+        out.extend_from_slice(&body[..size]);
 
         rest = body.get(size + 2..)?;
     }
