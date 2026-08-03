@@ -2,11 +2,18 @@
 //
 // It asks sekreto for `api.token` and calls the token-protected API with
 // it. Every port ships this same CLI, and test/integration.sh runs all of
-// them against the same server from all four secret sources - which is what
+// them against the same server from every secret source - which is what
 // proves the library, rather than the spec alone.
 //
 // Usage: java -cp build/classes sekreto.Cli <api-url> [--source <source>]
 //                                                     [--store <name>]
+//
+// Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
+//          gcpsecrets azuresecrets onepassword doppler infisical chain
+//
+// Each source's configuration arrives in the environment variables its
+// own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
+// in chainspecs below.
 
 package sekreto;
 
@@ -47,16 +54,92 @@ public final class Cli {
     Map<String, Object> envspec = spec("kind", "env", "prefix", System.getenv("SEKRETO_PREFIX"));
     Map<String, Object> dotenvspec =
         spec("kind", "dotenv", "file", envor("SEKRETO_DOTENV", ".env"));
+    Map<String, Object> filespec =
+        spec("kind", "file", "dir", envor("SEKRETO_FILEDIR", "/run/secrets"));
+
     Map<String, Object> hashicorpspec = spec(
         "kind", "hashicorp",
         "addr", envor("VAULT_ADDR", ""),
         "token", envor("VAULT_TOKEN", ""),
-        "mount", System.getenv("VAULT_MOUNT"));
+        "mount", System.getenv("VAULT_MOUNT"),
+        "vaultnamespace", System.getenv("VAULT_NAMESPACE"));
+    String vaultkv = System.getenv("VAULT_KV");
+    if (null != vaultkv && !vaultkv.isEmpty()) {
+      hashicorpspec.put("kv", Integer.parseInt(vaultkv));
+    }
+    String vaultauth = System.getenv("VAULT_AUTH");
+    if (null != vaultauth && !vaultauth.isEmpty()) {
+      hashicorpspec.put("auth", spec(
+          "method", vaultauth,
+          "role", System.getenv("VAULT_ROLE"),
+          "jwtfile", System.getenv("VAULT_JWT_FILE"),
+          "roleid", System.getenv("VAULT_ROLE_ID"),
+          "secretid", System.getenv("VAULT_SECRET_ID")));
+    }
+
     Map<String, Object> boruspec = spec(
         "kind", "boru",
         "command", envor("BORU_COMMAND", "boru"),
         "namespace", System.getenv("BORU_NAMESPACE"),
         "home", System.getenv("BORU_HOME"));
+
+    // The same vault over its wire protocol (`boru vault serve`) instead
+    // of the CLI: an address plus a capability token from `vault grant`.
+    Map<String, Object> boruwirespec = spec(
+        "kind", "boru",
+        "addr", envor("BORU_ADDR", ""),
+        "token", envor("BORU_TOKEN", ""),
+        "namespace", System.getenv("BORU_NAMESPACE"));
+
+    Map<String, Object> awssecretsspec = spec(
+        "kind", "awssecrets",
+        "region", System.getenv("AWS_REGION"),
+        "addr", System.getenv("AWS_ENDPOINT"));
+
+    Map<String, Object> awsparamsspec = spec(
+        "kind", "awsparams",
+        "region", System.getenv("AWS_REGION"),
+        "addr", System.getenv("AWS_ENDPOINT"),
+        "prefix", System.getenv("AWS_PARAM_PREFIX"));
+
+    Map<String, Object> gcpspec = spec(
+        "kind", "gcpsecrets",
+        "project", System.getenv("GCP_PROJECT"),
+        "addr", System.getenv("GCP_ADDR"),
+        "metadataaddr", System.getenv("GCP_METADATA_ADDR"));
+
+    Map<String, Object> azurespec = spec(
+        "kind", "azuresecrets",
+        "vault", System.getenv("AZURE_VAULT"),
+        "token", System.getenv("AZURE_TOKEN"),
+        "tenant", System.getenv("AZURE_TENANT"),
+        "clientid", System.getenv("AZURE_CLIENT_ID"),
+        "clientsecret", System.getenv("AZURE_CLIENT_SECRET"),
+        "loginaddr", System.getenv("AZURE_LOGIN_ADDR"),
+        "imdsaddr", System.getenv("AZURE_IMDS_ADDR"));
+
+    Map<String, Object> onepasswordspec = spec(
+        "kind", "onepassword",
+        "addr", System.getenv("OP_CONNECT_HOST"),
+        "token", System.getenv("OP_CONNECT_TOKEN"),
+        "vault", System.getenv("OP_VAULT"));
+
+    Map<String, Object> dopplerspec = spec(
+        "kind", "doppler",
+        "token", System.getenv("DOPPLER_TOKEN"),
+        "project", System.getenv("DOPPLER_PROJECT"),
+        "config", System.getenv("DOPPLER_CONFIG"),
+        "addr", System.getenv("DOPPLER_ADDR"));
+
+    Map<String, Object> infisicalspec = spec(
+        "kind", "infisical",
+        "addr", System.getenv("INFISICAL_ADDR"),
+        "token", System.getenv("INFISICAL_TOKEN"),
+        "clientid", System.getenv("INFISICAL_CLIENT_ID"),
+        "clientsecret", System.getenv("INFISICAL_CLIENT_SECRET"),
+        "project", System.getenv("INFISICAL_PROJECT"),
+        "environment", System.getenv("INFISICAL_ENV"),
+        "path", System.getenv("INFISICAL_PATH"));
 
     List<Object> chain = new ArrayList<>();
 
@@ -64,10 +147,28 @@ public final class Cli {
       chain.add(envspec);
     } else if ("dotenv".equals(source)) {
       chain.add(dotenvspec);
+    } else if ("file".equals(source)) {
+      chain.add(filespec);
     } else if ("hashicorp".equals(source)) {
       chain.add(hashicorpspec);
     } else if ("boru".equals(source)) {
       chain.add(boruspec);
+    } else if ("boruwire".equals(source)) {
+      chain.add(boruwirespec);
+    } else if ("awssecrets".equals(source)) {
+      chain.add(awssecretsspec);
+    } else if ("awsparams".equals(source)) {
+      chain.add(awsparamsspec);
+    } else if ("gcpsecrets".equals(source)) {
+      chain.add(gcpspec);
+    } else if ("azuresecrets".equals(source)) {
+      chain.add(azurespec);
+    } else if ("onepassword".equals(source)) {
+      chain.add(onepasswordspec);
+    } else if ("doppler".equals(source)) {
+      chain.add(dopplerspec);
+    } else if ("infisical".equals(source)) {
+      chain.add(infisicalspec);
     } else {
       // The default: the chain an app would actually ship with - local
       // overrides first, shared vaults last.
