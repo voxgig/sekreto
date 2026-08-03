@@ -184,13 +184,37 @@ function redact($text, $values): string
     return $out;
 }
 
-/** The secrets facade: a chain of providers plus a cache. */
+/**
+ * The store name a provider answers to when its spec does not say.
+ *
+ * `describe()` opens with the provider's kind - `hashicorp:...`,
+ * `dotenv:...`, plain `env` - so the kind is the natural default, and a
+ * custom provider gets a sensible name without implementing anything extra.
+ *
+ * @param array<string, mixed>|null $spec
+ */
+function storename(Provider $provider, ?array $spec = null): string
+{
+    if (null !== $spec && !empty($spec['name'])) {
+        return (string) $spec['name'];
+    }
+
+    return explode(':', $provider->describe())[0];
+}
+
+/**
+ * The secrets facade: a chain of providers plus a cache.
+ *
+ * Two ways to read. `get` is transparent - it walks the chain and takes the
+ * first hit, and the caller never learns which store answered. `getfrom` is
+ * directed - it names the store, and only that store is asked.
+ */
 class Sekreto
 {
-    /** @var array<int, Provider> */
-    private array $providers;
+    /** @var array<int, array{0: string, 1: Provider}> */
+    private array $entries = [];
     private bool $docache;
-    /** @var array<string, string> */
+    /** @var array<int, array{0: string, 1: string, 2: string}> */
     private array $cache = [];
 
     /** @param array<string, mixed>|null $options */
@@ -198,10 +222,15 @@ class Sekreto
     {
         $opts = $options ?? [];
 
-        $this->providers = array_map(
-            fn($entry) => $entry instanceof Provider ? $entry : makeprovider($entry),
-            $opts['providers'] ?? []
-        );
+        foreach ($opts['providers'] ?? [] as $entry) {
+            if ($entry instanceof Provider) {
+                $this->entries[] = [storename($entry), $entry];
+                continue;
+            }
+
+            $provider = makeprovider($entry);
+            $this->entries[] = [storename($provider, $entry), $provider];
+        }
 
         $this->docache = false !== ($opts['cache'] ?? true);
     }
@@ -221,18 +250,64 @@ class Sekreto
     /** The secret, or null if no provider has it. */
     public function try(string $name): ?string
     {
-        Name::check($name);
+        return $this->resolve('', $name, $this->entries);
+    }
 
-        if ($this->docache && array_key_exists($name, $this->cache)) {
-            return $this->cache[$name];
+    /**
+     * The secret from one named store, or a SekretoError if that store does
+     * not have it.
+     */
+    public function getfrom(string $store, string $name): string
+    {
+        $found = $this->tryfrom($store, $name);
+
+        if (null === $found) {
+            throw new SekretoError('sekreto: unknown secret: ' . $store . ':' . $name);
         }
 
-        foreach ($this->providers as $provider) {
+        return $found;
+    }
+
+    /**
+     * The secret from one named store, or null if that store does not have
+     * it.
+     *
+     * Naming a store that is not in the chain is an error, not a miss: `try`
+     * already means "this store may not have it", so it cannot also mean
+     * "this store may not exist" without hiding a typo.
+     */
+    public function tryfrom(string $store, string $name): ?string
+    {
+        $matching = array_values(
+            array_filter($this->entries, fn(array $entry) => $entry[0] === $store)
+        );
+
+        if (0 === count($matching)) {
+            throw new SekretoError('sekreto: unknown store: ' . $store);
+        }
+
+        return $this->resolve($store, $name, $matching);
+    }
+
+    /** @param array<int, array{0: string, 1: Provider}> $entries */
+    private function resolve(string $store, string $name, array $entries): ?string
+    {
+        Name::check($name);
+
+        if ($this->docache) {
+            foreach ($this->cache as $cached) {
+                if ($cached[0] === $store && $cached[1] === $name) {
+                    return $cached[2];
+                }
+            }
+        }
+
+        foreach ($entries as [$entrystore, $provider]) {
             $found = $provider->lookup($name);
 
             if (null !== $found) {
                 if ($this->docache) {
-                    $this->cache[$name] = $found;
+                    $this->cache[] = [$store, $name, $found];
                 }
                 return $found;
             }
@@ -245,6 +320,12 @@ class Sekreto
     public function has(string $name): bool
     {
         return null !== $this->try($name);
+    }
+
+    /** Does this named store have this secret? */
+    public function hasin(string $store, string $name): bool
+    {
+        return null !== $this->tryfrom($store, $name);
     }
 
     /**
@@ -271,13 +352,32 @@ class Sekreto
      */
     public function sources(): array
     {
-        return array_values(array_map(fn(Provider $p) => $p->describe(), $this->providers));
+        return array_values(array_map(fn(array $entry) => $entry[1]->describe(), $this->entries));
+    }
+
+    /**
+     * The name of each store that can be named by `getfrom`, in resolution
+     * order and without repeats.
+     *
+     * @return array<int, string>
+     */
+    public function stores(): array
+    {
+        $out = [];
+
+        foreach ($this->entries as [$store, $provider]) {
+            if (!in_array($store, $out, true)) {
+                $out[] = $store;
+            }
+        }
+
+        return $out;
     }
 
     /** Replace every value this Sekreto has resolved with `[redacted]`. */
     public function redact(string $text): string
     {
-        return redact($text, array_values($this->cache));
+        return redact($text, array_map(fn(array $cached) => $cached[2], $this->cache));
     }
 
     /** Drop cached values, so the next `get` asks the providers again. */

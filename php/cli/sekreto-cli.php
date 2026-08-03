@@ -8,7 +8,8 @@
  * them against the same server from all four secret sources - which is what
  * proves the library, rather than the spec alone.
  *
- * Usage: php sekreto-cli.php <api-url> [--source env|dotenv|vault|boru|chain]
+ * Usage: php sekreto-cli.php <api-url> [--source env|dotenv|hashicorp|boru|chain]
+ *                                      [--store <name>]   directed read
  */
 
 declare(strict_types=1);
@@ -28,26 +29,27 @@ function chainfor(string $source): array
 {
     $envspec = ['kind' => 'env', 'prefix' => getenv('SEKRETO_PREFIX') ?: null];
     $dotenvspec = ['kind' => 'dotenv', 'file' => getenv('SEKRETO_DOTENV') ?: '.env'];
-    $vaultspec = [
-        'kind' => 'vault',
+    $hashicorpspec = [
+        'kind' => 'hashicorp',
         'addr' => getenv('VAULT_ADDR') ?: '',
         'token' => getenv('VAULT_TOKEN') ?: '',
         'mount' => getenv('VAULT_MOUNT') ?: null,
     ];
     $boruspec = [
         'kind' => 'boru',
-        'addr' => getenv('BORU_VAULT_ADDR') ?: '',
-        'token' => getenv('BORU_VAULT_TOKEN') ?: '',
+        'command' => getenv('BORU_COMMAND') ?: 'boru',
+        'namespace' => getenv('BORU_NAMESPACE') ?: null,
+        'home' => getenv('BORU_HOME') ?: null,
     ];
 
     return match ($source) {
         'env' => [$envspec],
         'dotenv' => [$dotenvspec],
-        'vault' => [$vaultspec],
+        'hashicorp' => [$hashicorpspec],
         'boru' => [$boruspec],
         // The default: the chain an app would actually ship with - local
         // overrides first, shared vaults last.
-        default => [$envspec, $dotenvspec, $vaultspec, $boruspec],
+        default => [$envspec, $dotenvspec, $hashicorpspec, $boruspec],
     };
 }
 
@@ -59,10 +61,17 @@ function main(array $argv): int
     $flag = array_search('--source', $args, true);
     $source = false === $flag ? 'chain' : ($args[$flag + 1] ?? 'chain');
 
+    // --store names a store outright: the secret must come from that one,
+    // not from whichever provider happens to answer first.
+    $storeflag = array_search('--store', $args, true);
+    $store = false === $storeflag ? '' : ($args[$storeflag + 1] ?? '');
+
     $secrets = new Sekreto(['providers' => chainfor($source)]);
 
     try {
-        $token = $secrets->get('api.token');
+        $token = '' === $store
+            ? $secrets->get('api.token')
+            : $secrets->getfrom($store, 'api.token');
     } catch (\Throwable $err) {
         fwrite(STDERR, 'sekreto-cli: ' . $err->getMessage() . "\n");
         return 2;
@@ -83,6 +92,7 @@ function main(array $argv): int
         'ok' => true,
         'lang' => LANG,
         'source' => $source,
+        'store' => $store,
         'caller' => $body['caller'] ?? null,
     ]) . "\n";
 

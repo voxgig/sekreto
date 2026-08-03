@@ -149,13 +149,43 @@ function httpget(string $url, array $headers): array
 }
 
 /**
+ * Refuse to send a Vault token in the clear.
+ *
+ * Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
+ * convenience. Sending `X-Vault-Token` over http to anything but the local
+ * machine puts both the token and the secret it fetches on the wire for
+ * anyone on the path, so sekreto will not do it. Loopback stays allowed:
+ * that is `vault server -dev` and this repo's own test harness.
+ */
+function checkaddr(string $addr): void
+{
+    if (str_starts_with($addr, 'https://')) {
+        return;
+    }
+
+    if (!str_starts_with($addr, 'http://')) {
+        throw new SekretoError('sekreto: not an http(s) address: ' . $addr);
+    }
+
+    $host = explode(':', explode('/', substr($addr, 7))[0])[0];
+
+    if (in_array($host, ['localhost', '127.0.0.1', '::1', '[::1]'], true)) {
+        return;
+    }
+
+    throw new SekretoError(
+        'sekreto: refusing to send a token in plaintext to ' . $addr . ' (use https)'
+    );
+}
+
+/**
  * HashiCorp Vault, KV v2.
  *
  * `api.token` reads `{addr}/v1/{mount}/data/api` and takes the `token` field
  * of `data.data`. A 404 means "not here", which is a miss rather than an
  * error, so a vault can sit in a chain with fallbacks.
  */
-class VaultProvider implements Provider
+class HashicorpProvider implements Provider
 {
     private string $mount;
 
@@ -166,6 +196,8 @@ class VaultProvider implements Provider
 
     public function lookup(string $name): ?string
     {
+        checkaddr($this->addr);
+
         $ref = Name::vaultref($name);
         $url = rtrim($this->addr, '/') . '/v1/' . $this->mount . '/data/' . $ref['path'];
 
@@ -176,7 +208,7 @@ class VaultProvider implements Provider
         }
 
         if (200 !== $status) {
-            throw new SekretoError('sekreto: vault error: ' . $status . ': ' . $url);
+            throw new SekretoError('sekreto: hashicorp error: ' . $status . ': ' . $url);
         }
 
         $data = $body['data']['data'] ?? null;
@@ -187,53 +219,102 @@ class VaultProvider implements Provider
 
     public function describe(): string
     {
-        return 'vault:' . $this->addr . '/' . $this->mount;
+        return 'hashicorp:' . $this->addr . '/' . $this->mount;
     }
 }
 
 /**
- * A boru vault.
+ * A boru vault (https://github.com/boru-lang/boru).
  *
- * The boru vault protocol as sekreto uses it: a GET of
- * `{addr}/vault/{path}?field={field}` with an `X-Boru-Token` header,
- * answering `{"ok":true,"value":"..."}` when the secret exists and
- * `{"ok":false}` (or 404) when it does not.
+ * boru keeps secrets in a local encrypted keyring and hands a value out
+ * through its own CLI: `boru vault get --reveal <alias>` prints the secret
+ * on stdout, and nothing else.
+ *
+ * There is deliberately no HTTP read here. boru's `vault proxy` and
+ * `vault mcp` are a *credential broker*: they inject the real secret into an
+ * outbound request and forward it, so an agent can call an API without ever
+ * holding the credential. Handing a value back is the one thing that broker
+ * is built not to do, so sekreto reads the vault the way boru itself does -
+ * through the CLI.
+ *
+ * A sekreto name is already a valid boru alias, so `api.token` crosses over
+ * unchanged. A `namespace` qualifies it the way boru writes it,
+ * `<namespace>:<name>`.
+ *
+ * The passphrase is read by boru itself from `BORU_VAULT_PASSPHRASE`.
+ * sekreto never accepts it as config and never puts it on a command line,
+ * where it would show up in the process table.
  */
 class BoruProvider implements Provider
 {
-    public function __construct(private string $addr, private string $token)
-    {
+    private string $command;
+
+    public function __construct(
+        ?string $command = null,
+        private ?string $namespace = null,
+        private ?string $home = null
+    ) {
+        $this->command = $command ?? 'boru';
     }
 
     public function lookup(string $name): ?string
     {
-        $ref = Name::vaultref($name);
-        $url = rtrim($this->addr, '/') . '/vault/' . $ref['path']
-            . '?field=' . rawurlencode($ref['field']);
+        Name::check($name);
 
-        [$status, $body] = httpget($url, ['X-Boru-Token: ' . $this->token]);
+        $alias = $this->namespace ? $this->namespace . ':' . $name : $name;
 
-        if (404 === $status) {
+        $cmd = escapeshellarg($this->command) . ' vault get --reveal ' . escapeshellarg($alias);
+
+        if ($this->home) {
+            $cmd = 'BORU_HOME=' . escapeshellarg($this->home) . ' ' . $cmd;
+        }
+
+        $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        $process = @proc_open($cmd, $descriptors, $pipes);
+
+        if (!is_resource($process)) {
+            throw new SekretoError('sekreto: cannot run ' . $this->command);
+        }
+
+        $out = stream_get_contents($pipes[1]);
+        $err = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $status = proc_close($process);
+
+        if (0 === $status) {
+            // boru prints the value and one newline, and nothing else.
+            return preg_replace('/\n$/', '', $out);
+        }
+
+        $why = trim($err);
+
+        // "no alias named" is boru saying it does not hold this secret, which
+        // is a miss: the chain carries on to the next provider. A locked vault
+        // or a wrong passphrase is not a miss - treating it as one would fall
+        // through to a weaker store without saying so.
+        if (borumiss($why)) {
             return null;
         }
 
-        if (200 !== $status) {
-            throw new SekretoError('sekreto: boru vault error: ' . $status . ': ' . $url);
-        }
-
-        if (!is_array($body) || true !== ($body['ok'] ?? null)) {
-            return null;
-        }
-
-        $value = $body['value'] ?? null;
-
-        return null === $value ? null : (string) $value;
+        throw new SekretoError(
+            'sekreto: boru vault error: ' . ('' === $why ? 'exit ' . $status : $why)
+        );
     }
 
     public function describe(): string
     {
-        return 'boru:' . $this->addr;
+        return 'boru' . ($this->namespace ? ':' . $this->namespace : '');
     }
+}
+
+/**
+ * Does this boru failure mean "no such secret" rather than "I could not
+ * answer"? Matched on boru's own wording for a missing alias.
+ */
+function borumiss(string $why): bool
+{
+    return str_contains($why, 'no alias named');
 }
 
 /**
@@ -249,12 +330,16 @@ function makeprovider(array $spec): Provider
         'env' => new EnvProvider($spec['prefix'] ?? null),
         'dotenv' => new DotenvProvider($spec['file'] ?? '.env', $spec['prefix'] ?? null),
         'memory' => new MemoryProvider($spec['values'] ?? [], $spec['prefix'] ?? null),
-        'vault' => new VaultProvider(
+        'hashicorp' => new HashicorpProvider(
             $spec['addr'] ?? '',
             $spec['token'] ?? '',
             $spec['mount'] ?? null
         ),
-        'boru' => new BoruProvider($spec['addr'] ?? '', $spec['token'] ?? ''),
+        'boru' => new BoruProvider(
+            $spec['command'] ?? null,
+            $spec['namespace'] ?? null,
+            $spec['home'] ?? null
+        ),
         default => throw new SekretoError(
             'sekreto: unknown provider kind: ' . (null === $kind ? '' : (string) $kind)
         ),

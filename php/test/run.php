@@ -115,6 +115,15 @@ testcase(
     fn() => $runset($spec['trysecret'], fn($vin) => chainof($vin)->try($vin['name']))
 );
 testcase('sources', fn() => $runset($spec['sources'], fn($vin) => chainof($vin)->sources()));
+testcase('stores', fn() => $runset($spec['stores'], fn($vin) => chainof($vin)->stores()));
+testcase(
+    'getfrom',
+    fn() => $runset($spec['getfrom'], fn($vin) => chainof($vin)->getfrom($vin['store'], $vin['name']))
+);
+testcase(
+    'tryfrom',
+    fn() => $runset($spec['tryfrom'], fn($vin) => chainof($vin)->tryfrom($vin['store'], $vin['name']))
+);
 testcase(
     'redact',
     fn() => $runset($spec['redact'], fn($vin) => redact($vin['text'], $vin['values']))
