@@ -18,8 +18,11 @@ build: go.work
 	go build ./...
 	go build -o build/sekreto-cli ./cli
 
+# -count=1 disables the test cache. The spec is read at run time, so Go
+# cannot see that it changed and would otherwise report a stale pass after
+# spec/sekreto.json is edited.
 test: go.work
-	go test ./...
+	go test -count=1 ./...
 
 clean:
 	go clean
