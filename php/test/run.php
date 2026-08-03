@@ -22,6 +22,7 @@ use Voxgig\Sekreto\Sekreto;
 
 use function Voxgig\Sekreto\parsedotenv;
 use function Voxgig\Sekreto\redact;
+use function Voxgig\Sekreto\sigv4;
 
 require_once __DIR__ . '/../src/Sekreto.php';
 
@@ -108,6 +109,14 @@ testcase(
     fn() => $runset($spec['envkey'], fn($vin) => Name::envkey($vin['name'], $vin['prefix'] ?? null))
 );
 testcase('vaultref', fn() => $runset($spec['vaultref'], fn($name) => Name::vaultref($name)));
+testcase(
+    'flatname',
+    fn() => $runset($spec['flatname'], fn($vin) => Name::flatname($vin['name'], $vin['sep']))
+);
+testcase(
+    'awsparam',
+    fn() => $runset($spec['awsparam'], fn($vin) => Name::awsparam($vin['name'], $vin['prefix'] ?? null))
+);
 testcase('parsedotenv', fn() => $runset($spec['parsedotenv'], fn($text) => parsedotenv($text)));
 testcase('resolve', fn() => $runset($spec['resolve'], fn($vin) => chainof($vin)->get($vin['name'])));
 testcase(
@@ -124,6 +133,7 @@ testcase(
     'tryfrom',
     fn() => $runset($spec['tryfrom'], fn($vin) => chainof($vin)->tryfrom($vin['store'], $vin['name']))
 );
+testcase('sigv4', fn() => $runset($spec['sigv4'], fn($vin) => sigv4($vin)));
 testcase(
     'redact',
     fn() => $runset($spec['redact'], fn($vin) => redact($vin['text'], $vin['values']))

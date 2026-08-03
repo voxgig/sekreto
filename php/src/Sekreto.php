@@ -86,6 +86,45 @@ final class Name
 
         return ['path' => implode('/', $parts), 'field' => $field];
     }
+
+    /**
+     * A name flattened to one segment: `api.token` -> `api_token` (GCP
+     * Secret Manager, `_`) or `api-token` (Azure Key Vault, `-`).
+     *
+     * Those stores have no path hierarchy and reject dots in ids, so the
+     * dots become the store's conventional separator. With `-` as the
+     * separator, underscores flatten too: Azure Key Vault's alphabet is
+     * letters, digits and hyphens only, and a valid sekreto name like
+     * `with_underscore` must still be representable there. (The resulting
+     * `.`/`_` collision mirrors the documented envkey behaviour, where
+     * both already map to `_`.)
+     */
+    public static function flatname(string $name, string $sep): string
+    {
+        self::check($name);
+
+        $flat = implode($sep, explode('.', $name));
+
+        return '-' === $sep ? str_replace('_', '-', $flat) : $flat;
+    }
+
+    /**
+     * The AWS SSM Parameter Store name for a name: dots become the path
+     * hierarchy, rooted at `/` (or at a prefix): `db.pass.main` ->
+     * `/db/pass/main`, or `/app/db/pass/main` under prefix `/app`.
+     */
+    public static function awsparam(string $name, ?string $prefix = null): string
+    {
+        self::check($name);
+
+        $base = $prefix ?? '';
+        if ('' !== $base && !str_starts_with($base, '/')) {
+            $base = '/' . $base;
+        }
+        $base = preg_replace('#/$#', '', $base);
+
+        return $base . '/' . implode('/', explode('.', $name));
+    }
 }
 
 /**

@@ -10,9 +10,9 @@ use warnings;
 use File::Basename qw(dirname);
 use File::Spec;
 use JSON::PP ();
-use Test::More tests => 11;
+use Test::More tests => 14;
 
-use Voxgig::Sekreto qw(envkey parsedotenv redact validname vaultref);
+use Voxgig::Sekreto qw(awsparam envkey flatname parsedotenv redact sigv4 validname vaultref);
 
 # Find the shared spec directory by walking up from this file.
 sub specfile {
@@ -88,6 +88,10 @@ group(
 group( 'envkey',
     sub { $runset->( $spec->{envkey}, sub { envkey( $_[0]->{name}, $_[0]->{prefix} ) } ) } );
 group( 'vaultref', sub { $runset->( $spec->{vaultref}, sub { vaultref( $_[0] ) } ) } );
+group( 'flatname',
+    sub { $runset->( $spec->{flatname}, sub { flatname( $_[0]->{name}, $_[0]->{sep} ) } ) } );
+group( 'awsparam',
+    sub { $runset->( $spec->{awsparam}, sub { awsparam( $_[0]->{name}, $_[0]->{prefix} ) } ) } );
 group( 'parsedotenv', sub { $runset->( $spec->{parsedotenv}, sub { parsedotenv( $_[0] ) } ) } );
 group( 'resolve',
     sub { $runset->( $spec->{resolve}, sub { chainof( $_[0] )->get( $_[0]->{name} ) } ) } );
@@ -109,5 +113,6 @@ group(
             sub { chainof( $_[0] )->tryfrom( $_[0]->{store}, $_[0]->{name} ) } );
     }
 );
+group( 'sigv4', sub { $runset->( $spec->{sigv4}, sub { sigv4( $_[0] ) } ) } );
 group( 'redact',
     sub { $runset->( $spec->{redact}, sub { redact( $_[0]->{text}, $_[0]->{values} ) } ) } );

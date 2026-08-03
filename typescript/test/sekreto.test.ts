@@ -5,7 +5,7 @@
 
 import { before, describe, test } from 'node:test'
 
-import { Sekreto, envkey, parsedotenv, redact, validname, vaultref } from '../src'
+import { Sekreto, awsparam, envkey, flatname, parsedotenv, redact, sigv4, validname, vaultref } from '../src'
 import { omnihome, specfile } from '../src/omnihome'
 
 // omni is a sibling checkout, not a published package (yet), so it is
@@ -38,6 +38,14 @@ describe('sekreto', () => {
     await R.runset(R.spec.vaultref, (name: any) => vaultref(name))
   })
 
+  test('flatname', async () => {
+    await R.runset(R.spec.flatname, (vin: any) => flatname(vin.name, vin.sep))
+  })
+
+  test('awsparam', async () => {
+    await R.runset(R.spec.awsparam, (vin: any) => awsparam(vin.name, vin.prefix))
+  })
+
   test('parsedotenv', async () => {
     await R.runset(R.spec.parsedotenv, (text: any) => parsedotenv(text))
   })
@@ -64,6 +72,10 @@ describe('sekreto', () => {
 
   test('tryfrom', async () => {
     await R.runset(R.spec.tryfrom, (vin: any) => chainof(vin).tryfrom(vin.store, vin.name))
+  })
+
+  test('sigv4', async () => {
+    await R.runset(R.spec.sigv4, (vin: any) => sigv4(vin))
   })
 
   test('redact', async () => {

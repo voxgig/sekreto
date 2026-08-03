@@ -114,6 +114,47 @@ pub fn vaultref(name: &str) -> Answer<VaultRef> {
     })
 }
 
+/// A name flattened to one segment: `api.token` -> `api_token` (GCP
+/// Secret Manager, `_`) or `api-token` (Azure Key Vault, `-`).
+///
+/// Those stores have no path hierarchy and reject dots in ids, so the
+/// dots become the store's conventional separator. With `-` as the
+/// separator, underscores flatten too: Azure Key Vault's alphabet is
+/// letters, digits and hyphens only, and a valid sekreto name like
+/// `with_underscore` must still be representable there. (The resulting
+/// `.`/`_` collision mirrors the documented envkey behaviour, where
+/// both already map to `_`.)
+pub fn flatname(name: &str, sep: &str) -> Answer<String> {
+    checkname(name)?;
+    let flat = name.split('.').collect::<Vec<&str>>().join(sep);
+    Ok(if "-" == sep {
+        flat.replace('_', "-")
+    } else {
+        flat
+    })
+}
+
+/// The AWS SSM Parameter Store name for a name: dots become the path
+/// hierarchy, rooted at `/` (or at a prefix): `db.pass.main` ->
+/// `/db/pass/main`, or `/app/db/pass/main` under prefix `/app`.
+pub fn awsparam(name: &str, prefix: &str) -> Answer<String> {
+    checkname(name)?;
+
+    let mut base = prefix.to_string();
+    if !base.is_empty() && !base.starts_with('/') {
+        base = format!("/{}", base);
+    }
+    if base.ends_with('/') {
+        base.truncate(base.len() - 1);
+    }
+
+    Ok(format!(
+        "{}/{}",
+        base,
+        name.split('.').collect::<Vec<&str>>().join("/")
+    ))
+}
+
 /// Parse `.env` text into a map of raw keys to values.
 ///
 /// Deliberately small: `KEY=value`, optional `export`, `#` comments on their

@@ -146,10 +146,13 @@ jobs:
         with:
           dotnet-version: '8.0'
 
-      # boru has no read-a-secret wire protocol, so its provider is proved
-      # against the real binary or not at all. A build failure here must not
-      # be mistaken for a sekreto failure: the step is allowed to fail, and
-      # integration.sh skips the boru checks when the binary is absent.
+      # The boru provider is proved against the real binary or not at all -
+      # both the CLI path and, when this boru build has `vault serve` and
+      # wildcard grants, the wire-protocol path (integration.sh degrades to
+      # skipping the wire checks on an older boru). A build failure here
+      # must not be mistaken for a sekreto failure: the step is allowed to
+      # fail, and integration.sh skips the boru checks when the binary is
+      # absent.
       - name: Build boru
         id: boru
         continue-on-error: true

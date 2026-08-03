@@ -12,7 +12,8 @@ use voxgig_omni::{
     make_runner, Flags, Json as OmniJson, Provider as OmniProvider, RunPack, Subject,
 };
 use voxgig_sekreto::{
-    envkey, makechain, parsedotenv, redact, validname, vaultref, ProviderSpec, Sekreto,
+    awsparam, envkey, flatname, makechain, parsedotenv, redact, sigv4, validname, vaultref,
+    ProviderSpec, Sekreto, Sigv4Input,
 };
 
 // Find the shared spec directory by walking up from this file.
@@ -58,18 +59,31 @@ fn specof(value: &OmniJson) -> ProviderSpec {
         }
     }
 
+    let kv = match field(value, "kv") {
+        OmniJson::Num(entry) => entry as u32,
+        _ => 0,
+    };
+
     ProviderSpec {
         kind: text(&field(value, "kind")),
         name: text(&field(value, "name")),
         prefix: text(&field(value, "prefix")),
         file: text(&field(value, "file")),
         values,
+        dir: text(&field(value, "dir")),
         addr: text(&field(value, "addr")),
         token: text(&field(value, "token")),
         mount: text(&field(value, "mount")),
+        kv,
         command: text(&field(value, "command")),
         namespace: text(&field(value, "namespace")),
         home: text(&field(value, "home")),
+        region: text(&field(value, "region")),
+        project: text(&field(value, "project")),
+        vault: text(&field(value, "vault")),
+        config: text(&field(value, "config")),
+        environment: text(&field(value, "environment")),
+        ..Default::default()
     }
 }
 
@@ -135,6 +149,40 @@ fn vaultref_group() {
 
     R.runset(&R.set("vaultref"), Some(&subject))
         .expect("vaultref");
+}
+
+#[test]
+fn flatname_group() {
+    let R = runner();
+
+    let subject: Subject = Rc::new(|args: &[OmniJson]| {
+        flatname(
+            &text(&field(&args[0], "name")),
+            &text(&field(&args[0], "sep")),
+        )
+        .map(OmniJson::Str)
+        .map_err(|err| err.message)
+    });
+
+    R.runset(&R.set("flatname"), Some(&subject))
+        .expect("flatname");
+}
+
+#[test]
+fn awsparam_group() {
+    let R = runner();
+
+    let subject: Subject = Rc::new(|args: &[OmniJson]| {
+        awsparam(
+            &text(&field(&args[0], "name")),
+            &text(&field(&args[0], "prefix")),
+        )
+        .map(OmniJson::Str)
+        .map_err(|err| err.message)
+    });
+
+    R.runset(&R.set("awsparam"), Some(&subject))
+        .expect("awsparam");
 }
 
 #[test]
@@ -264,6 +312,46 @@ fn tryfrom_group() {
 
     R.runset(&R.set("tryfrom"), Some(&subject))
         .expect("tryfrom");
+}
+
+#[test]
+fn sigv4_group() {
+    let R = runner();
+
+    let subject: Subject = Rc::new(|args: &[OmniJson]| {
+        let vin = &args[0];
+
+        let mut headers: Vec<(String, String)> = Vec::new();
+        if let OmniJson::Map(entries) = field(vin, "headers") {
+            for (key, entry) in entries {
+                headers.push((key, text(&entry)));
+            }
+        }
+
+        let signed = sigv4(&Sigv4Input {
+            method: text(&field(vin, "method")),
+            url: text(&field(vin, "url")),
+            headers,
+            body: text(&field(vin, "body")),
+            service: text(&field(vin, "service")),
+            region: text(&field(vin, "region")),
+            keyid: text(&field(vin, "keyid")),
+            secret: text(&field(vin, "secret")),
+            session: text(&field(vin, "session")),
+            datetime: text(&field(vin, "datetime")),
+        })
+        .map_err(|err| err.message)?;
+
+        // omni compares against the spec's JSON, so answer in that shape.
+        Ok(OmniJson::Map(
+            signed
+                .into_iter()
+                .map(|(key, value)| (key, OmniJson::Str(value)))
+                .collect(),
+        ))
+    });
+
+    R.runset(&R.set("sigv4"), Some(&subject)).expect("sigv4");
 }
 
 #[test]

@@ -1,8 +1,9 @@
 //! Just enough HTTP to ask a vault for a secret.
 //!
 //! The Rust standard library has no HTTP client, so this speaks HTTP/1.1
-//! over a TcpStream directly: a GET with headers, a status line, and a body
-//! delimited by Content-Length, by chunks, or by the connection closing.
+//! over a TcpStream directly: a GET or POST with headers and an optional
+//! body, a status line, and a response body delimited by Content-Length,
+//! by chunks, or by the connection closing.
 //!
 //! https goes over rustls - the one dependency this repo takes, and a
 //! deliberate one. A secrets library reaching a remote vault needs TLS, and
@@ -12,7 +13,7 @@
 //! private CA is the common case, not the exotic one.
 //!
 //! It is still not a general-purpose client: no redirect following, no
-//! request bodies, no client certificates.
+//! keep-alive, no client certificates.
 
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -98,8 +99,9 @@ fn split(url: &str) -> Result<Target, String> {
     })
 }
 
-/// Decode standard base64, which is all a PEM body is.
-fn unbase64(text: &str) -> Option<Vec<u8>> {
+/// Decode standard base64: a PEM body, a GCP secret payload, an AWS
+/// SecretBinary.
+pub fn unbase64(text: &str) -> Option<Vec<u8>> {
     const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
     let mut out = Vec::new();
@@ -178,10 +180,20 @@ pub fn get(url: &str, header: &str, value: &str) -> Result<Response, String> {
     getwith(url, &[(header, value)])
 }
 
-/// GET a url with a set of headers. A non-2xx status is returned, not
-/// raised: a 404 from a vault means "no such secret", which is a miss
-/// rather than a failure.
+/// GET a url with a set of headers.
 pub fn getwith(url: &str, headers: &[(&str, &str)]) -> Result<Response, String> {
+    request("GET", url, headers, None)
+}
+
+/// One HTTP exchange: any method, a set of headers, an optional body. A
+/// non-2xx status is returned, not raised: a 404 from a vault means "no
+/// such secret", which is a miss rather than a failure.
+pub fn request(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: Option<&str>,
+) -> Result<Response, String> {
     let target = split(url)?;
 
     let mut stream = TcpStream::connect((target.host.as_str(), target.port))
@@ -206,32 +218,53 @@ pub fn getwith(url: &str, headers: &[(&str, &str)]) -> Result<Response, String> 
         // surface as an error rather than as a missing secret.
         return exchange(
             &mut StreamOwned::new(connection, stream),
+            method,
             &target,
             headers,
+            body,
             url,
         );
     }
 
-    exchange(&mut stream, &target, headers, url)
+    exchange(&mut stream, method, &target, headers, body, url)
 }
 
 /// Write the request and read the response, over whatever the transport is.
 fn exchange(
     stream: &mut impl ReadWrite,
+    method: &str,
     target: &Target,
     headers: &[(&str, &str)],
+    body: Option<&str>,
     url: &str,
 ) -> Result<Response, String> {
+    // A default port stays implicit in the Host header, the way a URL
+    // normalises it: a SigV4 signature covers `host`, and `Host: x:443` is
+    // not what was signed.
+    let hostheader = if (target.tls && 443 == target.port) || (!target.tls && 80 == target.port) {
+        target.authority.clone()
+    } else {
+        format!("{}:{}", target.authority, target.port)
+    };
+
     let mut request = format!(
-        "GET {} HTTP/1.1\r\nHost: {}:{}\r\nAccept: application/json\r\nConnection: close\r\n",
-        target.path, target.authority, target.port
+        "{} {} HTTP/1.1\r\nHost: {}\r\nAccept: application/json\r\nConnection: close\r\n",
+        method, target.path, hostheader
     );
 
     for (name, value) in headers {
         request.push_str(&format!("{}: {}\r\n", name, value));
     }
 
+    if let Some(text) = body {
+        request.push_str(&format!("Content-Length: {}\r\n", text.len()));
+    }
+
     request.push_str("\r\n");
+
+    if let Some(text) = body {
+        request.push_str(text);
+    }
 
     stream
         .write_all(request.as_bytes())

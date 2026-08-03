@@ -8,7 +8,17 @@ import os
 import sys
 import unittest
 
-from voxgig_sekreto import Sekreto, envkey, parsedotenv, redact, validname, vaultref
+from voxgig_sekreto import (
+    Sekreto,
+    awsparam,
+    envkey,
+    flatname,
+    parsedotenv,
+    redact,
+    sigv4,
+    validname,
+    vaultref,
+)
 
 
 def specfile(name):
@@ -68,6 +78,12 @@ class TestSekreto(unittest.TestCase):
     def test_vaultref(self):
         runset(spec['vaultref'], vaultref)
 
+    def test_flatname(self):
+        runset(spec['flatname'], lambda vin: flatname(vin['name'], vin['sep']))
+
+    def test_awsparam(self):
+        runset(spec['awsparam'], lambda vin: awsparam(vin['name'], vin.get('prefix')))
+
     def test_parsedotenv(self):
         runset(spec['parsedotenv'], parsedotenv)
 
@@ -88,6 +104,9 @@ class TestSekreto(unittest.TestCase):
 
     def test_tryfrom(self):
         runset(spec['tryfrom'], lambda vin: chainof(vin).tryfrom(vin['store'], vin['name']))
+
+    def test_sigv4(self):
+        runset(spec['sigv4'], sigv4)
 
     def test_redact(self):
         runset(spec['redact'], lambda vin: redact(vin['text'], vin['values']))

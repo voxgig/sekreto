@@ -42,8 +42,34 @@ vaultref('token')              // { path: 'token',   field: 'value' }
 A single-segment name has no path of its own, so it becomes a secret of
 that name with the conventional field `value`.
 
-Both `envkey` and `vaultref` raise `sekreto: invalid name: <name>` for a
-name that is not well-formed.
+### `flatname(name, sep): string`
+
+A name flattened to one segment, for stores whose ids have no hierarchy
+and reject dots: GCP Secret Manager (`_`) and Azure Key Vault (`-`).
+
+```
+flatname('api.token', '_')       // 'api_token'       (GCP)
+flatname('api.token', '-')       // 'api-token'       (Azure)
+flatname('with_underscore', '-') // 'with-underscore' (Azure has no '_')
+```
+
+With `-` as the separator, underscores flatten too — Azure Key Vault's
+alphabet is letters, digits and hyphens only, so a valid name like
+`with_underscore` must still be representable. The resulting `.`/`_`
+collision mirrors `envkey`, where both already map to `_`.
+
+### `awsparam(name, prefix?): string`
+
+The SSM Parameter Store path for a name: dots become the parameter
+hierarchy, rooted at `/`, under an optional prefix.
+
+```
+awsparam('db.pass.main')          // '/db/pass/main'
+awsparam('api.token', '/app')     // '/app/api/token'
+```
+
+All of `envkey`, `vaultref`, `flatname` and `awsparam` raise
+`sekreto: invalid name: <name>` for a name that is not well-formed.
 
 ---
 
@@ -70,6 +96,21 @@ Replace each of `values` in `text` with `[redacted]`.
 Only values of **four characters or more** are replaced. Shorter ones are
 too likely to appear in ordinary text, and redacting them would make logs
 unreadable without making them safer.
+
+---
+
+## `sigv4(input): headers`
+
+AWS Signature V4, in-tree, pure: the caller passes the timestamp
+(`datetime: 'YYYYMMDDTHHMMSSZ'`), so the same input signs identically in
+every port. Input: `method`, `url`, `headers?`, `body?`, `service`,
+`region`, `keyid`, `secret`, `session?`, `datetime`. Output: the headers
+to attach — `authorization`, `x-amz-date`, and `x-amz-security-token`
+when a session token was given.
+
+The spec pins known-answer cases, including a vector from AWS's own
+published SigV4 test suite, so a port that signs wrongly in any byte goes
+red. The AWS providers call this; apps normally never need it directly.
 
 ---
 
@@ -198,18 +239,62 @@ defaults in an app.
 
 `describe()` → `memory` or `memory:<prefix>`
 
-### `hashicorp` — HashiCorp Vault, KV v2
+### `file` — a mounted-secret directory
+
+One secret per file, keyed like the environment: `api.token` reads
+`<dir>/API_TOKEN`. That is the shape of a mounted Kubernetes Secret, a
+Docker/Swarm secret and a systemd credentials directory, so those work
+with no further configuration. One trailing newline is stripped — the
+tools that write these files disagree about it.
 
 ```ts
-{ kind: 'hashicorp', addr: string, token: string, mount?: string }  // mount: 'secret'
+{ kind: 'file', dir: string, prefix?: string }
 ```
 
-`api.token` reads `{addr}/v1/{mount}/data/api` with an `X-Vault-Token`
-header and takes the `token` field of `data.data`. This is Vault's published
-HTTP API, so the provider talks to a real Vault unmodified.
+- an absent file **or absent directory** is a miss, like a missing `.env`
+- any other read failure (permissions, an unreadable mount) raises
+
+`describe()` → `file:<dir>`
+
+### `hashicorp` — HashiCorp Vault
+
+```ts
+{
+  kind: 'hashicorp',
+  addr: string,
+  token: string,            // or log in via `auth`
+  mount?: string,           // default 'secret'
+  kv?: 1 | 2,               // default 2
+  vaultnamespace?: string,  // Vault Enterprise X-Vault-Namespace
+  auth?: {                  // used when token is empty
+    method: 'kubernetes' | 'approle'
+    mount?: string          // auth mount, default = method
+    role?: string           // kubernetes: the Vault role
+    jwt?: string            // kubernetes: the JWT itself (tests)
+    jwtfile?: string        // kubernetes: default = the conventional pod path
+    roleid?: string         // approle
+    secretid?: string
+  }
+}
+```
+
+KV v2 (the default): `api.token` reads `{addr}/v1/{mount}/data/api` with
+an `X-Vault-Token` header and takes the `token` field of `data.data`.
+KV v1 (`kv: 1`) reads `{addr}/v1/{mount}/api` and takes the field of
+`data`. Any other `kv` value raises — a version typo must not quietly
+behave as v2 and turn its 404s into misses. This is Vault's published
+HTTP API, so the provider talks to a real Vault — or an
+[OpenBao](https://openbao.org) — unmodified.
+
+A `vaultnamespace` rides the `X-Vault-Namespace` header on every request,
+logins included. With an empty `token` and an `auth` block, the provider
+logs in once (Kubernetes auth with the pod's service-account JWT, or
+AppRole) and reuses the returned client token.
 
 - **404 → a miss**, so a vault can sit in a chain with fallbacks behind it
 - any other non-200 raises `sekreto: hashicorp error: <status>: <url>`
+- a failed login raises `sekreto: hashicorp login failed: <status>: <url>`
+  — an error, never a miss: this store could not answer at all
 - a plaintext `addr` pointing anywhere but loopback raises before any socket
   is opened — see below
 
@@ -237,7 +322,15 @@ nothing, it just adds no roots.
 ### `boru` — a boru vault
 
 ```ts
-{ kind: 'boru', command?: string, namespace?: string, home?: string }
+{
+  kind: 'boru',
+  command?: string,     // CLI mode: the executable, default 'boru'
+  namespace?: string,   // the boru namespace qualifying the alias
+  home?: string,        // CLI mode: passed as BORU_HOME
+  addr?: string,        // wire mode: the `boru vault serve` address
+  token?: string,       // wire mode: a capability token from `vault grant`
+  mount?: string,       // wire mode: default 'secret'
+}
 ```
 
 - `command` — the executable to run, default `boru`
@@ -255,24 +348,140 @@ so names cross over unchanged.
   through to a weaker store without saying so
 - the binary not being runnable raises `sekreto: cannot run <command>: <why>`
 
-`describe()` → `boru`, or `boru:<namespace>`
+`describe()` → `boru`, or `boru:<namespace>` (CLI mode); `boru:<addr>`
+(wire mode)
 
 The passphrase is read by boru itself from `BORU_VAULT_PASSPHRASE`. sekreto
 never takes it as config and never puts it on a command line, where the
 process table would show it.
 
-> **Why there is no HTTP read.** boru's `vault proxy` and `vault mcp` are a
-> *credential broker*: they inject the real secret into an outbound request
-> and forward it, so a caller can use a credential without ever holding it.
-> Handing the value back is the one thing that design refuses. sekreto's
-> interface is the opposite — `get` means "give me the secret" — so it reads
-> the vault the way boru itself does, through the CLI.
+**Wire mode.** With an `addr`, the provider speaks boru's provision
+protocol instead of running the CLI: `boru vault serve` publishes a
+read-only, HashiCorp-shaped API (boru's `design/VAULT-WIRE-PROTOCOL.0.md`),
+authenticated by capability tokens from `boru vault grant` — one alias, or
+a whole namespace with `vault grant 'ns:*'`. boru aliases keep their dots,
+so `api.token` is the single path segment `api.token` (under
+`<namespace>/` when one is set), field `value`. A 404 is a miss; anything
+else the server refuses — a revoked capability, a sealed vault — raises
+`sekreto: boru serve error: <status>: <url>`. The plaintext-address guard
+applies; `vault serve` binds loopback by default, which is exactly the
+allowed case.
+
+> **The broker stays out of bounds.** boru's `vault proxy` and `vault mcp`
+> are a *credential broker*: they inject the real secret into an outbound
+> request and forward it, so a caller can use a credential without ever
+> holding it. Handing the value back is the one thing that design refuses,
+> and sekreto still does not ask it to — `vault serve` is boru's provision
+> endpoint, built for exactly this, under capability tokens.
 >
 > If your caller is untrusted (an agent, a plugin), boru's broker is the
 > better tool and sekreto is the wrong layer. Use both in the other
 > direction instead: `boru vault exec api.token=API_TOKEN -- yourapp` puts
 > the secret in the child's environment, where sekreto's `env` provider
 > finds it with no sekreto configuration at all.
+
+### `awssecrets` / `awsparams` — AWS
+
+```ts
+{ kind: 'awssecrets', region?: string, keyid?: string, secret?: string,
+  session?: string, addr?: string }
+{ kind: 'awsparams',  ...same..., prefix?: string }
+```
+
+Region and credentials come from config first, then AWS's own environment
+convention (`AWS_REGION`/`AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`); missing either raises.
+Requests are SigV4-signed in-tree (see `sigv4` above). Default endpoints
+follow the region's partition: a `cn-*` region resolves under
+`.amazonaws.com.cn`.
+
+`awssecrets`: `api.token` reads the secret named `api` (the `vaultref`
+path) and takes the `token` field of its JSON `SecretString` — the AWS
+idiom of one JSON map per secret. A plain-string secret is the value
+itself, under the conventional field `value`. A
+`ResourceNotFoundException` is a miss; any other failure raises.
+
+`awsparams`: `db.pass.main` reads parameter `/db/pass/main` (under
+`prefix`), decrypted. `ParameterNotFound` is a miss.
+
+`describe()` → `awssecrets:<region>` / `awsparams:<region><prefix>`
+(config values only, so the description is environment-independent)
+
+### `gcpsecrets` — GCP Secret Manager
+
+```ts
+{ kind: 'gcpsecrets', project: string, token?: string, addr?: string,
+  metadataaddr?: string }
+```
+
+`api.token` reads secret `api_token` (dots flattened, Secret Manager ids
+reject them), latest version, base64-decoded. The token comes from
+config, then `GOOGLE_OAUTH_ACCESS_TOKEN`, then the GCE/GKE metadata
+server — on Google's platform no credential configuration is needed. A
+metadata token is renewed shortly before its `expires_in` runs out, so a
+long-running process keeps working past the first hour. A 404 is a miss.
+
+`describe()` → `gcpsecrets:<project>`
+
+### `azuresecrets` — Azure Key Vault
+
+```ts
+{ kind: 'azuresecrets', vault: string, token?: string, tenant?: string,
+  clientid?: string, clientsecret?: string, loginaddr?: string,
+  imdsaddr?: string, apiversion?: string }
+```
+
+`vault` is the Key Vault name (`corp` → `https://corp.vault.azure.net`)
+or a full URL. `api.token` reads secret `api-token` (dots flattened, Key
+Vault names allow nothing else). The token comes from config, then a
+client-credentials login when tenant/clientid/clientsecret are given,
+then the IMDS managed identity — on Azure's platform no credential
+configuration is needed. Logged-in and IMDS tokens are renewed shortly
+before their `expires_in` runs out. A 404 is a miss.
+
+`describe()` → `azuresecrets:<vault>`
+
+### `onepassword` — 1Password, through a Connect server
+
+```ts
+{ kind: 'onepassword', addr: string, token: string, vault: string }
+```
+
+The item titled `api.token` (titles keep their dots) in the named vault;
+the value is the field with purpose `PASSWORD`, or the field labelled
+`value`. An item that is not there is a miss; a *vault* that is not
+there raises — config names it, so its absence is a broken store.
+
+`describe()` → `onepassword:<vault>`
+
+### `doppler` — Doppler
+
+```ts
+{ kind: 'doppler', token: string, project?: string, config?: string,
+  addr?: string }
+```
+
+The whole config is downloaded once — Doppler's own bulk endpoint — and
+answered from memory, like a remote `.env`: `api.token` is the
+`API_TOKEN` entry. A service token is config-scoped, so `project` and
+`config` are only needed with broader tokens. A missing entry is a miss.
+
+`describe()` → `doppler`, or `doppler:<project>/<config>`
+
+### `infisical` — Infisical
+
+```ts
+{ kind: 'infisical', addr?: string, token?: string, clientid?: string,
+  clientsecret?: string, project: string, environment: string,
+  path?: string }
+```
+
+`api.token` reads the secret keyed `API_TOKEN` (Infisical's own
+convention) at `path` (default `/`) in one environment of a project.
+Auth is a token, or a universal-auth (machine identity) login with
+clientid/clientsecret. A 404 is a miss.
+
+`describe()` → `infisical:<project>/<environment>`
 
 ---
 
@@ -294,7 +503,19 @@ every port:
 | `sekreto: not an http(s) address: <addr>` | a Vault address of some other scheme |
 | `sekreto: boru vault error: <why>` | boru failed for a reason other than a missing alias |
 | `sekreto: cannot run <command>: <why>` | the boru binary could not be started |
-| `sekreto: cannot reach <url>: <why>` | the vault could not be contacted |
+| `sekreto: boru serve error: <status>: <url>` | boru's wire protocol answered neither 200 nor 404 |
+| `sekreto: hashicorp login failed: <status>: <url>` | a kubernetes/approle login was refused |
+| `sekreto: aws: no region …` / `sekreto: aws: no credentials …` | an AWS store with nothing to sign with |
+| `sekreto: aws secretsmanager error: <status>` / `sekreto: aws ssm error: <status>` | AWS answered with anything but success or not-found |
+| `sekreto: gcp: no project` / `sekreto: gcp error: <status>: <url>` | a GCP store misconfigured, or answering badly |
+| `sekreto: azure: no vault` / `sekreto: azure login failed: <status>` / `sekreto: azure error: <status>: <url>` | an Azure store misconfigured, refusing login, or answering badly |
+| `sekreto: onepassword: no vault named <vault>` | config names a Connect vault that is not there |
+| `sekreto: doppler error: <status>` | Doppler refused the download |
+| `sekreto: infisical login failed: <status>` / `sekreto: infisical error: <status>` | Infisical refused login or answered badly |
+| `sekreto: file provider cannot read <file>: <why>` | a secret file that exists but cannot be read |
+| `sekreto: cannot reach <url>: <why>` | the store could not be contacted |
+| `sekreto: malformed response from <url>` | a store answered 200 with a body that is not JSON |
+| `sekreto: hashicorp: unsupported kv version: <kv>` | a `kv` other than 1 or 2 |
 
 Those messages are pinned by `spec/sekreto.json`, so they cannot drift
 between ports without a test going red.
@@ -312,6 +533,8 @@ JSON, run by every port through its own
 | `validname` | `validname` |
 | `envkey` | `envkey` |
 | `vaultref` | `vaultref` |
+| `flatname` | `flatname` |
+| `awsparam` | `awsparam` |
 | `parsedotenv` | `parsedotenv` |
 | `resolve` | `Sekreto.get` over a chain of `memory` providers |
 | `trysecret` | `Sekreto.try` |
@@ -320,14 +543,18 @@ JSON, run by every port through its own
 | `getfrom` | `Sekreto.getfrom` |
 | `tryfrom` | `Sekreto.tryfrom` |
 | `redact` | `redact` |
+| `sigv4` | `sigv4` — known-answer signatures, incl. AWS's own published vector |
 
-The chain groups use `memory` providers so the spec stays hermetic — it runs
-the same on a machine with no network. The `hashicorp` and `boru` providers
-appear in it only where nothing has to be contacted: their `describe()`
-strings, and the plaintext-address guard, which raises before a socket is
-opened.
+The chain groups use `memory` (and pathless `file`) providers so the spec
+stays hermetic — it runs the same on a machine with no network. The
+networked providers appear in it only where nothing has to be contacted:
+their `describe()` strings, the name mappings, the SigV4 signatures, and
+the plaintext-address guard, which raises before a socket is opened.
 
 Actually *fetching* from them is proved instead by `test/integration.sh`,
-which talks to a stand-in Vault over a real socket and to a real boru vault
-through the real binary. That split is deliberate: the spec pins behaviour,
-the integration run pins reality.
+which talks to stand-ins for every published wire protocol over real
+sockets — HashiCorp (plain and enterprise-style), AWS with server-side
+signature verification, GCP, Azure, 1Password Connect, Doppler, Infisical
+— and to a real boru vault through the real binary, both CLI and
+`vault serve`. That split is deliberate: the spec pins behaviour, the
+integration run pins reality.

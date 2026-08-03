@@ -25,10 +25,37 @@ ROOT=$(cd "$HERE/.." && pwd)
 
 API_PORT=${API_PORT:-8099}
 VAULT_PORT=${VAULT_PORT:-8200}
+VAULT2_PORT=${VAULT2_PORT:-8201}
+AWS_PORT=${AWS_PORT:-8202}
+GCP_PORT=${GCP_PORT:-8203}
+AZURE_PORT=${AZURE_PORT:-8204}
+OP_PORT=${OP_PORT:-8205}
+DOPPLER_PORT=${DOPPLER_PORT:-8206}
+INFISICAL_PORT=${INFISICAL_PORT:-8207}
+BORU_SERVE_PORT=${BORU_SERVE_PORT:-8208}
 
 # The one secret that matters. Long enough that redaction applies to it.
 TOKEN=${API_TOKEN:-s3cr3t-integration-token}
 VAULT_TOKEN=vault-root-token
+
+# Fixed test credentials for the cloud mocks. The AWS pair is the same
+# example pair AWS's own SigV4 test suite publishes.
+AWS_KEYID=AKIDEXAMPLE
+AWS_SECRETKEY=wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY
+SA_JWT=eyJhbGciOiJub25lIn0.integration-service-account.jwt
+APPROLE_ID=approle-role-id
+APPROLE_SECRET=approle-secret-id
+GCP_PROJECT=proj-integration
+AZ_TENANT=tenant-integration
+AZ_CLIENT=client-integration
+AZ_SECRET=azure-client-secret
+OP_TOKEN=op-connect-token
+OP_VAULT_NAME=devvault
+DOPPLER_TOK=dp.st.integration
+INF_CLIENT=machine-integration
+INF_SECRET=infisical-client-secret
+INF_WORKSPACE=w-integration
+INF_ENV=prod
 
 # boru is read through its own CLI, not a wire protocol, so the boru checks
 # need the real binary. Point BORU at it, or drop it on PATH; without it the
@@ -82,15 +109,64 @@ node "$HERE/mockhashicorp.js" "$VAULT_PORT" "$VAULT_TOKEN" \
   "api.token=$TOKEN" >"$WORK/vault.log" 2>&1 &
 PIDS+=($!)
 
+# A second vault that behaves like Vault Enterprise: it demands a
+# namespace on every request, serves KV v1 as well as v2, and hands out
+# its token only through kubernetes/approle logins - so the auth paths
+# are proven, not just the happy GET.
+node "$HERE/mockhashicorp.js" "$VAULT2_PORT" "$VAULT_TOKEN" \
+  --namespace=teamA --jwt="$SA_JWT" --role=app \
+  --roleid="$APPROLE_ID" --secretid="$APPROLE_SECRET" \
+  "api.token=$TOKEN" >"$WORK/vault2.log" 2>&1 &
+PIDS+=($!)
+
+node "$HERE/mockaws.js" "$AWS_PORT" "$AWS_KEYID" "$AWS_SECRETKEY" \
+  "api.token=$TOKEN" >"$WORK/aws.log" 2>&1 &
+PIDS+=($!)
+
+node "$HERE/mockgcp.js" "$GCP_PORT" "$GCP_PROJECT" gcp-access-token \
+  "api.token=$TOKEN" >"$WORK/gcp.log" 2>&1 &
+PIDS+=($!)
+
+node "$HERE/mockazure.js" "$AZURE_PORT" "$AZ_TENANT" "$AZ_CLIENT" "$AZ_SECRET" \
+  azure-access-token "api.token=$TOKEN" >"$WORK/azure.log" 2>&1 &
+PIDS+=($!)
+
+node "$HERE/mockonepassword.js" "$OP_PORT" "$OP_TOKEN" "$OP_VAULT_NAME" \
+  "api.token=$TOKEN" >"$WORK/op.log" 2>&1 &
+PIDS+=($!)
+
+node "$HERE/mockdoppler.js" "$DOPPLER_PORT" "$DOPPLER_TOK" \
+  "api.token=$TOKEN" >"$WORK/doppler.log" 2>&1 &
+PIDS+=($!)
+
+node "$HERE/mockinfisical.js" "$INFISICAL_PORT" "$INF_CLIENT" "$INF_SECRET" \
+  "$INF_WORKSPACE" "$INF_ENV" "api.token=$TOKEN" >"$WORK/infisical.log" 2>&1 &
+PIDS+=($!)
+
 waitport "$API_PORT" api || { cat "$WORK/api.log"; exit 1; }
 waitport "$VAULT_PORT" hashicorp || { cat "$WORK/vault.log"; exit 1; }
+waitport "$VAULT2_PORT" hashicorp2 || { cat "$WORK/vault2.log"; exit 1; }
+waitport "$AWS_PORT" aws || { cat "$WORK/aws.log"; exit 1; }
+waitport "$GCP_PORT" gcp || { cat "$WORK/gcp.log"; exit 1; }
+waitport "$AZURE_PORT" azure || { cat "$WORK/azure.log"; exit 1; }
+waitport "$OP_PORT" onepassword || { cat "$WORK/op.log"; exit 1; }
+waitport "$DOPPLER_PORT" doppler || { cat "$WORK/doppler.log"; exit 1; }
+waitport "$INFISICAL_PORT" infisical || { cat "$WORK/infisical.log"; exit 1; }
 
 echo "   api        http://127.0.0.1:$API_PORT"
-echo "   hashicorp  http://127.0.0.1:$VAULT_PORT"
+echo "   hashicorp  http://127.0.0.1:$VAULT_PORT (and enterprise-style on $VAULT2_PORT)"
+echo "   aws        http://127.0.0.1:$AWS_PORT"
+echo "   gcp        http://127.0.0.1:$GCP_PORT"
+echo "   azure      http://127.0.0.1:$AZURE_PORT"
+echo "   1password  http://127.0.0.1:$OP_PORT"
+echo "   doppler    http://127.0.0.1:$DOPPLER_PORT"
+echo "   infisical  http://127.0.0.1:$INFISICAL_PORT"
 
 # A real boru vault, holding the same secret under the same name. boru
 # stores it in an encrypted keyring on disk; nothing goes over a socket.
 BORU_HOME_DIR="$WORK/boruhome"
+
+BORU_WIRE_TOKEN=""
 
 if [ -n "$BORU" ]; then
   mkdir -p "$BORU_HOME_DIR"
@@ -104,7 +180,32 @@ if [ -n "$BORU" ]; then
     echo "   boru       FAILED to set up; see $WORK/boru.log" >&2
     BORU=""
   fi
-else
+fi
+
+# The same boru vault over its wire protocol: grant a root-namespace
+# capability and start `boru vault serve`. A boru without the serve mode
+# (an older build) skips these checks rather than faking them - like the
+# CLI checks, the wire checks run against the real binary or not at all.
+if [ -n "$BORU" ]; then
+  BORU_WIRE_TOKEN=$(BORU_HOME="$BORU_HOME_DIR" BORU_VAULT_PASSPHRASE="$BORU_PASSPHRASE" \
+    "$BORU" vault grant '*' 2>>"$WORK/boru.log" | awk '/^token:/{print $2}')
+  if [ -n "$BORU_WIRE_TOKEN" ]; then
+    BORU_HOME="$BORU_HOME_DIR" BORU_VAULT_PASSPHRASE="$BORU_PASSPHRASE" \
+      "$BORU" vault serve --listen=127.0.0.1:"$BORU_SERVE_PORT" \
+      >"$WORK/boruserve.log" 2>&1 &
+    PIDS+=($!)
+    if waitport "$BORU_SERVE_PORT" boru-serve 2>/dev/null; then
+      echo "   boru wire  http://127.0.0.1:$BORU_SERVE_PORT (vault serve)"
+    else
+      echo "   boru wire  serve did not start, wire checks skipped" >&2
+      BORU_WIRE_TOKEN=""
+    fi
+  else
+    echo "   boru wire  this boru has no wildcard grant/serve, wire checks skipped"
+  fi
+fi
+
+if [ -z "$BORU" ]; then
   echo "   boru       not installed, boru checks skipped"
 fi
 echo
@@ -122,6 +223,16 @@ EOF
 cat >"$WORK/wrong/.env" <<EOF
 API_TOKEN=not-the-real-token
 EOF
+
+# A mounted-secret directory, as Kubernetes or Docker would write it: one
+# file per secret, environment-style name, trailing newline and all - the
+# provider must strip that newline or the bearer token goes over the wire
+# broken.
+mkdir -p "$WORK/filedir"
+printf '%s\n' "$TOKEN" >"$WORK/filedir/API_TOKEN"
+
+# The service-account JWT the kubernetes-auth login presents.
+printf '%s' "$SA_JWT" >"$WORK/jwt"
 
 # --------------------------------------------------------------- the runs
 
@@ -284,13 +395,101 @@ for lang in $LANGS; do
       BORU_VAULT_PASSPHRASE="$BORU_PASSPHRASE"
   fi
 
-  # 7. A store that is not in the chain is a mistake, not a miss.
+  # 7. The secret in a mounted-secret directory (a Kubernetes/Docker
+  #    secret volume), trailing newline stripped.
+  STORE= check "$lang" file ok SEKRETO_FILEDIR="$WORK/filedir"
+
+  # 8. Vault Enterprise manners, all in one pass: a kubernetes login
+  #    (JWT from a file), the namespace header on every request, and a
+  #    KV v1 read.
+  STORE= check "$lang" hashicorp ok \
+    VAULT_ADDR="http://127.0.0.1:$VAULT2_PORT" \
+    VAULT_KV=1 \
+    VAULT_NAMESPACE=teamA \
+    VAULT_AUTH=kubernetes \
+    VAULT_ROLE=app \
+    VAULT_JWT_FILE="$WORK/jwt"
+
+  # 9. The same vault via an approle login, back on KV v2.
+  STORE= check "$lang" hashicorp ok \
+    VAULT_ADDR="http://127.0.0.1:$VAULT2_PORT" \
+    VAULT_NAMESPACE=teamA \
+    VAULT_AUTH=approle \
+    VAULT_ROLE_ID="$APPROLE_ID" \
+    VAULT_SECRET_ID="$APPROLE_SECRET"
+
+  # 10. AWS, both stores. The mock re-derives the SigV4 signature of
+  #     every request, so a port whose signing is off by a byte fails
+  #     here the way it would against real AWS.
+  STORE= check "$lang" awssecrets ok \
+    AWS_ENDPOINT="http://127.0.0.1:$AWS_PORT" \
+    AWS_REGION=us-east-1 \
+    AWS_ACCESS_KEY_ID="$AWS_KEYID" \
+    AWS_SECRET_ACCESS_KEY="$AWS_SECRETKEY"
+
+  STORE= check "$lang" awsparams ok \
+    AWS_ENDPOINT="http://127.0.0.1:$AWS_PORT" \
+    AWS_REGION=us-east-1 \
+    AWS_ACCESS_KEY_ID="$AWS_KEYID" \
+    AWS_SECRET_ACCESS_KEY="$AWS_SECRETKEY"
+
+  # 11. The wrong AWS secret key signs a wrong signature: refused, and
+  #     the real token must not appear in the failure output.
+  STORE= check "$lang" awssecrets deny \
+    AWS_ENDPOINT="http://127.0.0.1:$AWS_PORT" \
+    AWS_REGION=us-east-1 \
+    AWS_ACCESS_KEY_ID="$AWS_KEYID" \
+    AWS_SECRET_ACCESS_KEY=not-the-signing-key
+
+  # 12. GCP Secret Manager, with the token fetched from the (mock)
+  #     metadata server - the on-platform auth path.
+  STORE= check "$lang" gcpsecrets ok \
+    GCP_ADDR="http://127.0.0.1:$GCP_PORT" \
+    GCP_METADATA_ADDR="http://127.0.0.1:$GCP_PORT" \
+    GCP_PROJECT="$GCP_PROJECT"
+
+  # 13. Azure Key Vault, via a client-credentials login.
+  STORE= check "$lang" azuresecrets ok \
+    AZURE_VAULT="http://127.0.0.1:$AZURE_PORT" \
+    AZURE_TENANT="$AZ_TENANT" \
+    AZURE_CLIENT_ID="$AZ_CLIENT" \
+    AZURE_CLIENT_SECRET="$AZ_SECRET" \
+    AZURE_LOGIN_ADDR="http://127.0.0.1:$AZURE_PORT"
+
+  # 14. 1Password, through a Connect server.
+  STORE= check "$lang" onepassword ok \
+    OP_CONNECT_HOST="http://127.0.0.1:$OP_PORT" \
+    OP_CONNECT_TOKEN="$OP_TOKEN" \
+    OP_VAULT="$OP_VAULT_NAME"
+
+  # 15. Doppler, via its bulk download.
+  STORE= check "$lang" doppler ok \
+    DOPPLER_ADDR="http://127.0.0.1:$DOPPLER_PORT" \
+    DOPPLER_TOKEN="$DOPPLER_TOK"
+
+  # 16. Infisical, via a universal-auth (machine identity) login.
+  STORE= check "$lang" infisical ok \
+    INFISICAL_ADDR="http://127.0.0.1:$INFISICAL_PORT" \
+    INFISICAL_CLIENT_ID="$INF_CLIENT" \
+    INFISICAL_CLIENT_SECRET="$INF_SECRET" \
+    INFISICAL_PROJECT="$INF_WORKSPACE" \
+    INFISICAL_ENV="$INF_ENV"
+
+  # 17. The boru vault again, over its wire protocol (`vault serve`)
+  #     with a granted capability token.
+  if [ -n "$BORU_WIRE_TOKEN" ]; then
+    STORE= check "$lang" boruwire ok \
+      BORU_ADDR="http://127.0.0.1:$BORU_SERVE_PORT" \
+      BORU_TOKEN="$BORU_WIRE_TOKEN"
+  fi
+
+  # 18. A store that is not in the chain is a mistake, not a miss.
   STORE=nosuchstore check "$lang" env deny API_TOKEN="$TOKEN"
 
-  # 8. No secret anywhere: the CLI must fail, not call the API unauthenticated.
+  # 19. No secret anywhere: the CLI must fail, not call the API unauthenticated.
   STORE= check "$lang" env deny SEKRETO_PREFIX=NOSUCH_
 
-  # 9. The wrong secret: the API must refuse it, and the CLI must not print
+  # 20. The wrong secret: the API must refuse it, and the CLI must not print
   #    the real token while complaining.
   STORE= check "$lang" dotenv deny SEKRETO_DOTENV="$WORK/wrong/.env"
 done

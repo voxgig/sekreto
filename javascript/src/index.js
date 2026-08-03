@@ -2,5 +2,6 @@
 
 const providers = require('./Providers')
 const sekreto = require('./Sekreto')
+const sigv4 = require('./Sigv4')
 
-module.exports = { ...sekreto, ...providers }
+module.exports = { ...sekreto, ...providers, ...sigv4 }

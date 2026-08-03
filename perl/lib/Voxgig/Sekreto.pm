@@ -15,9 +15,10 @@ use warnings;
 use Exporter 'import';
 
 use Voxgig::Sekreto::Providers qw(makechain makeprovider);
+use Voxgig::Sekreto::Sigv4 qw(sigv4);
 
 our @EXPORT_OK = qw(
-  envkey parsedotenv redact sekreto validname vaultref
+  awsparam envkey flatname parsedotenv redact sekreto sigv4 validname vaultref
 );
 
 our $VERSION = '0.1.0';
@@ -91,6 +92,40 @@ sub vaultref {
     my $field = pop @parts;
 
     return { path => join( '/', @parts ), field => $field };
+}
+
+# A name flattened to one segment: `api.token` -> `api_token` (GCP Secret
+# Manager, `_`) or `api-token` (Azure Key Vault, `-`).
+#
+# Those stores have no path hierarchy and reject dots in ids, so the dots
+# become the store's conventional separator. With `-` as the separator,
+# underscores flatten too: Azure Key Vault's alphabet is letters, digits
+# and hyphens only, and a valid sekreto name like `with_underscore` must
+# still be representable there. (The resulting `.`/`_` collision mirrors
+# the documented envkey behaviour, where both already map to `_`.)
+sub flatname {
+    my ( $name, $sep ) = @_;
+
+    checkname($name);
+
+    my $flat = join( $sep, split( /\./, $name, -1 ) );
+
+    return '-' eq $sep ? join( '-', split( /_/, $flat, -1 ) ) : $flat;
+}
+
+# The AWS SSM Parameter Store name for a name: dots become the path
+# hierarchy, rooted at `/` (or at a prefix): `db.pass.main` ->
+# `/db/pass/main`, or `/app/db/pass/main` under prefix `/app`.
+sub awsparam {
+    my ( $name, $prefix ) = @_;
+
+    checkname($name);
+
+    my $base = defined $prefix ? $prefix : '';
+    $base = '/' . $base if '' ne $base && 0 != index( $base, '/' );
+    $base =~ s{/$}{};
+
+    return $base . '/' . join( '/', split( /\./, $name, -1 ) );
 }
 
 # Parse `.env` text into a map of raw keys to values.

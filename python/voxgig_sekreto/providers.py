@@ -6,16 +6,33 @@
 # `api.token` and never learns whether it came from the environment, a
 # .env file, HashiCorp Vault or a boru vault.
 #
+# Two failure shapes, and they are never interchangeable. A store that
+# does not hold the secret is a MISS (None) - the chain carries on. A
+# store that could not answer - bad credentials, unreachable host,
+# missing configuration - is an ERROR: falling through there would
+# quietly reach for a weaker store.
+#
 # A port of typescript/src/Providers.ts, which is canonical.
 
+import base64
 import json
 import os
 import subprocess
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 
-from .sekreto import SekretoError, checkname, envkey, parsedotenv, vaultref
+from .sekreto import (
+    SekretoError,
+    awsparam,
+    checkname,
+    envkey,
+    flatname,
+    parsedotenv,
+    vaultref,
+)
+from .sigv4 import sigv4
 
 
 class Provider:
@@ -84,25 +101,96 @@ class MemoryProvider(Provider):
         return 'memory' + (':' + self.prefix if self.prefix else '')
 
 
-def _fetch(url, headers):
-    """GET url, returning (status, parsed-json-or-None).
+class FileProvider(Provider):
+    """A directory of one-secret-per-file entries, keyed like the
+    environment: `api.token` reads `<dir>/API_TOKEN`.
 
-    A 404 is a normal answer here, not an exception: it means the vault
-    does not hold this secret.
+    This is the shape of a mounted Kubernetes Secret, a Docker or Swarm
+    secret, and a systemd credentials directory, so those all work with no
+    further configuration. One trailing newline is stripped - tools that
+    write these files disagree about it, and a newline is never part of a
+    secret on purpose.
     """
-    request = urllib.request.Request(url, headers=headers, method='GET')
+
+    def __init__(self, dir, prefix=None):
+        self.dir = dir
+        self.prefix = prefix
+
+    def lookup(self, name):
+        file = os.path.join(self.dir, envkey(name, self.prefix))
+
+        try:
+            with open(file, 'r', encoding='utf8') as handle:
+                text = handle.read()
+        except (FileNotFoundError, NotADirectoryError):
+            # An absent file - or an absent directory - means "no secrets
+            # here", exactly like a missing .env. Anything else (permission
+            # denied, an unreadable mount) is a store that could not answer.
+            return None
+        except OSError as err:
+            raise SekretoError(
+                'sekreto: file provider cannot read ' + file + ': ' + str(err)
+            )
+
+        if text.endswith('\r\n'):
+            return text[:-2]
+        if text.endswith('\n'):
+            return text[:-1]
+        return text
+
+    def describe(self):
+        return 'file:' + self.dir
+
+
+def _fetchjson(method, url, headers, body=None):
+    """One JSON round-trip, returning (status, parsed-json-or-None).
+
+    A 404 is a normal answer here, not an exception: callers decide on
+    status. Network failure is always an error - an unreachable store is a
+    store that could not answer.
+    """
+    data = None if body is None else body.encode('utf8')
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
 
     try:
         with urllib.request.urlopen(request) as response:
-            return response.status, json.loads(response.read().decode('utf8'))
+            status = response.status
+            text = response.read().decode('utf8')
     except urllib.error.HTTPError as err:
-        body = err.read().decode('utf8')
-        try:
-            return err.code, json.loads(body)
-        except ValueError:
-            return err.code, None
+        status = err.code
+        text = err.read().decode('utf8')
     except urllib.error.URLError as err:
-        raise SekretoError('sekreto: cannot reach ' + url + ': ' + str(err.reason))
+        raise SekretoError(
+            'sekreto: cannot reach ' + url.split('?')[0] + ': ' + str(err.reason)
+        )
+
+    try:
+        return status, json.loads(text)
+    except ValueError:
+        # A success status promised JSON; a body that does not parse means
+        # the store could not answer coherently, and treating it as a miss
+        # would fall through to a weaker store. Error statuses may carry
+        # any body - they are decided on status alone.
+        if 200 == status:
+            raise SekretoError('sekreto: malformed response from ' + url.split('?')[0])
+        return status, None
+
+
+def urlpart(text):
+    """One URL component, escaped the way encodeURIComponent does it -
+    the addresses built here must match the canonical port's byte for
+    byte."""
+    return urllib.parse.quote(str(text), safe="-_.!~*'()")
+
+
+def _tonumber(value):
+    """The canonical port's Number() as expiry fields need it: a number
+    or numeric string converts (expires_in may arrive as a string);
+    anything else becomes 0, which means "never renew"."""
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def checkaddr(addr):
@@ -131,25 +219,109 @@ def checkaddr(addr):
 
 
 class HashicorpProvider(Provider):
-    """HashiCorp Vault, KV v2.
+    """HashiCorp Vault.
 
-    `api.token` reads `{addr}/v1/{mount}/data/api` and takes the `token`
-    field of `data.data`. A 404 means "not here", which is a miss rather
-    than an error, so a vault can sit in a chain with fallbacks.
+    KV v2 (the default): `api.token` reads `{addr}/v1/{mount}/data/api`
+    and takes the `token` field of `data.data`. KV v1 (`kv: 1`) reads
+    `{addr}/v1/{mount}/api` and takes the field of `data`. A 404 means
+    "not here" - a miss - so a vault can sit in a chain with fallbacks.
+
+    A Vault Enterprise namespace rides the X-Vault-Namespace header, on
+    logins as well as reads.
+
+    Instead of being handed a token, the provider can log in: Kubernetes
+    auth (the pod's service-account JWT, from its conventional path) or
+    AppRole. A failed login is an error, never a miss - it means this
+    store could not answer at all.
     """
 
-    def __init__(self, addr, token, mount=None):
+    def __init__(self, addr, token, mount=None, kv=None, vaultnamespace=None, auth=None):
         self.addr = addr
-        self.token = token
         self.mount = mount or 'secret'
+        self.kv = kv or 2
+        self.vaultnamespace = vaultnamespace
+        self.auth = auth
+
+        # A version typo like kv: 3 must not quietly behave as v2 and turn
+        # its 404s into misses; there is nothing safe to assume it meant.
+        if 1 != self.kv and 2 != self.kv:
+            raise SekretoError(
+                'sekreto: hashicorp: unsupported kv version: ' + str(self.kv)
+            )
+
+        # The working token: a configured token is kept forever, a logged-in
+        # token is renewed shortly before its lease runs out - a long-running
+        # process must not keep presenting a token the vault already expired.
+        self.livetoken = None if '' == token else token
+        self.renewat = float('inf')
+
+    def baseheaders(self):
+        headers = {}
+        if self.vaultnamespace:
+            headers['X-Vault-Namespace'] = self.vaultnamespace
+        return headers
+
+    def login(self):
+        auth = self.auth
+        if not auth:
+            raise SekretoError('sekreto: hashicorp: no token and no auth method')
+
+        method = auth.get('method')
+        mount = auth.get('mount') or method
+        url = self.addr.rstrip('/') + '/v1/auth/' + str(mount) + '/login'
+
+        if 'kubernetes' == method:
+            jwt = auth.get('jwt')
+            if jwt is None:
+                file = (
+                    auth.get('jwtfile')
+                    or '/var/run/secrets/kubernetes.io/serviceaccount/token'
+                )
+                try:
+                    with open(file, 'r', encoding='utf8') as handle:
+                        jwt = handle.read().strip()
+                except OSError:
+                    raise SekretoError('sekreto: hashicorp: cannot read jwt file ' + file)
+            body = {'role': auth.get('role') or '', 'jwt': jwt}
+        elif 'approle' == method:
+            body = {
+                'role_id': auth.get('roleid') or '',
+                'secret_id': auth.get('secretid') or '',
+            }
+        else:
+            raise SekretoError(
+                'sekreto: hashicorp: unknown auth method: ' + str(method)
+            )
+
+        status, resbody = _fetchjson(
+            'POST', url, self.baseheaders(), json.dumps(body, separators=(',', ':'))
+        )
+
+        got = ((resbody or {}).get('auth') or {}).get('client_token')
+        if 200 != status or not got:
+            raise SekretoError(
+                'sekreto: hashicorp login failed: ' + str(status) + ': ' + url
+            )
+
+        lease = _tonumber(((resbody or {}).get('auth') or {}).get('lease_duration'))
+        self.renewat = time.time() + max(lease - 60, 1) if 0 < lease else float('inf')
+
+        return str(got)
 
     def lookup(self, name):
         checkaddr(self.addr)
 
-        ref = vaultref(name)
-        url = self.addr.rstrip('/') + '/v1/' + self.mount + '/data/' + ref['path']
+        if self.livetoken is None or time.time() >= self.renewat:
+            self.livetoken = self.login()
 
-        status, body = _fetch(url, {'X-Vault-Token': self.token})
+        ref = vaultref(name)
+        base = self.addr.rstrip('/') + '/v1/' + self.mount
+        url = base + '/' + ref['path'] if 1 == self.kv else base + '/data/' + ref['path']
+
+        headers = self.baseheaders()
+        headers['X-Vault-Token'] = self.livetoken
+
+        status, body = _fetchjson('GET', url, headers)
 
         if 404 == status:
             return None
@@ -157,7 +329,11 @@ class HashicorpProvider(Provider):
         if 200 != status:
             raise SekretoError('sekreto: hashicorp error: ' + str(status) + ': ' + url)
 
-        data = (body or {}).get('data', {}).get('data')
+        if 1 == self.kv:
+            data = (body or {}).get('data')
+        else:
+            data = ((body or {}).get('data') or {}).get('data')
+
         value = data.get(ref['field']) if isinstance(data, dict) else None
 
         return None if value is None else str(value)
@@ -169,33 +345,44 @@ class HashicorpProvider(Provider):
 class BoruProvider(Provider):
     """A boru vault (https://github.com/boru-lang/boru).
 
-    boru keeps secrets in a local encrypted keyring and hands a value out
-    through its own CLI: `boru vault get --reveal <alias>` prints the secret
-    on stdout, and nothing else.
+    Two ways in, both boru's own.
 
-    There is deliberately no HTTP read here. boru's `vault proxy` and
-    `vault mcp` are a *credential broker*: they inject the real secret into
-    an outbound request and forward it, so an agent can call an API without
-    ever holding the credential. Handing a value back is the one thing that
-    broker is built not to do, so sekreto reads the vault the way boru
-    itself does - through the CLI.
+    With no `addr`, the CLI: `boru vault get --reveal <alias>` prints the
+    secret on stdout and nothing else. The passphrase is read by boru
+    itself from `BORU_VAULT_PASSPHRASE`; sekreto never accepts it as
+    config and never puts it on a command line, where it would show up in
+    the process table.
 
-    A sekreto name is already a valid boru alias, so `api.token` crosses
-    over unchanged. A `namespace` qualifies it the way boru writes it,
-    `<namespace>:<name>`.
+    With an `addr`, boru's wire protocol: `boru vault serve` publishes a
+    read-only, HashiCorp-shaped provision API (boru's
+    design/VAULT-WIRE-PROTOCOL.0.md), authenticated by a capability token
+    from `boru vault grant`. A sekreto name is already a valid boru
+    alias, and boru aliases keep their dots, so `api.token` is the single
+    path segment `api.token` - not the `api`/`token` split a HashiCorp KV
+    gets. The value is the `value` field. A 404 is a miss; anything else
+    the server refuses (a revoked capability, a sealed vault) is an
+    error.
 
-    The passphrase is read by boru itself from `BORU_VAULT_PASSPHRASE`.
-    sekreto never accepts it as config and never puts it on a command line,
-    where it would show up in the process table.
+    boru's `vault proxy` and `vault mcp` remain out of bounds: they are a
+    credential *broker*, built precisely so the caller never receives the
+    credential. `vault serve` is the provision endpoint, built to hand
+    the value back - that is the one sekreto uses.
     """
 
-    def __init__(self, command=None, namespace=None, home=None):
+    def __init__(self, command=None, namespace=None, home=None,
+                 addr=None, token=None, mount=None):
         self.command = command or 'boru'
         self.namespace = namespace
         self.home = home
+        self.addr = addr.rstrip('/') if addr else None
+        self.token = token
+        self.mount = mount or 'secret'
 
     def lookup(self, name):
         checkname(name)
+
+        if self.addr:
+            return self.wirelookup(name)
 
         alias = self.namespace + ':' + name if self.namespace else name
 
@@ -230,7 +417,28 @@ class BoruProvider(Provider):
             'sekreto: boru vault error: ' + (why or 'exit ' + str(run.returncode))
         )
 
+    def wirelookup(self, name):
+        checkaddr(self.addr)
+
+        alias = self.namespace + '/' + name if self.namespace else name
+        url = self.addr + '/v1/' + self.mount + '/data/' + alias
+
+        status, body = _fetchjson('GET', url, {'X-Vault-Token': self.token or ''})
+
+        if 404 == status:
+            return None
+
+        if 200 != status:
+            raise SekretoError('sekreto: boru serve error: ' + str(status) + ': ' + url)
+
+        data = ((body or {}).get('data') or {}).get('data')
+        value = data.get('value') if isinstance(data, dict) else None
+
+        return None if value is None else str(value)
+
     def describe(self):
+        if self.addr:
+            return 'boru:' + self.addr
         return 'boru' + (':' + self.namespace if self.namespace else '')
 
 
@@ -238,6 +446,561 @@ def borumiss(why):
     """Does this boru failure mean "no such secret" rather than "I could not
     answer"? Matched on boru's own wording for a missing alias."""
     return 'no alias named' in why
+
+
+def awsnow():
+    """The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now."""
+    return time.strftime('%Y%m%dT%H%M%SZ', time.gmtime())
+
+
+def awsauth(opts):
+    """Region and credentials, from config first and the standard AWS_*
+    environment variables second - those are AWS's own convention, and a
+    pod or CI job that has them set should just work. Missing either is
+    an error: an AWS store with no credentials could not answer."""
+    env = os.environ
+
+    region = opts.get('region') or env.get('AWS_REGION') or env.get('AWS_DEFAULT_REGION') or ''
+    keyid = opts.get('keyid') or env.get('AWS_ACCESS_KEY_ID') or ''
+    secret = opts.get('secret') or env.get('AWS_SECRET_ACCESS_KEY') or ''
+    session = opts.get('session') or env.get('AWS_SESSION_TOKEN') or None
+
+    if '' == region:
+        raise SekretoError('sekreto: aws: no region (set region or AWS_REGION)')
+    if '' == keyid or '' == secret:
+        raise SekretoError(
+            'sekreto: aws: no credentials (set keyid/secret or'
+            + ' AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)'
+        )
+
+    return {'region': region, 'keyid': keyid, 'secret': secret, 'session': session}
+
+
+def awscall(opts, service, target, payload):
+    """One signed call to an AWS JSON-1.1 API."""
+    auth = awsauth(opts)
+    # The China partition lives under its own suffix; every other
+    # commercial region is plain amazonaws.com.
+    suffix = '.amazonaws.com.cn' if auth['region'].startswith('cn-') else '.amazonaws.com'
+    addr = opts.get('addr') or 'https://' + service + '.' + auth['region'] + suffix
+    checkaddr(addr)
+
+    url = addr.rstrip('/') + '/'
+    body = json.dumps(payload, separators=(',', ':'))
+    headers = {
+        'content-type': 'application/x-amz-json-1.1',
+        'x-amz-target': target,
+    }
+
+    signed = sigv4({
+        'method': 'POST',
+        'url': url,
+        'headers': headers,
+        'body': body,
+        'service': service,
+        'region': auth['region'],
+        'keyid': auth['keyid'],
+        'secret': auth['secret'],
+        'session': auth['session'],
+        'datetime': awsnow(),
+    })
+
+    allheaders = dict(headers)
+    allheaders.update(signed)
+
+    return _fetchjson('POST', url, allheaders, body)
+
+
+def awsmiss(body, types):
+    """Does this AWS error body name one of the not-found types? Those are
+    a miss; every other failure is a store that could not answer."""
+    errtype = body.get('__type') if isinstance(body, dict) else None
+    if not isinstance(errtype, str):
+        errtype = ''
+    return any(name in errtype for name in types)
+
+
+class AwssecretsProvider(Provider):
+    """AWS Secrets Manager.
+
+    `api.token` reads the secret named `api` (the vaultref path, so
+    `db.pass.main` reads `db/pass`) and takes the `token` field of its
+    JSON SecretString - the AWS idiom of one JSON map per secret. A
+    SecretString that is not JSON is the value itself, under the
+    conventional field `value`. Requests are SigV4-signed in-tree; see
+    sigv4.py.
+    """
+
+    def __init__(self, options=None):
+        self.opts = options or {}
+
+    def lookup(self, name):
+        ref = vaultref(name)
+
+        status, body = awscall(
+            self.opts, 'secretsmanager', 'secretsmanager.GetSecretValue',
+            {'SecretId': ref['path']},
+        )
+
+        if 400 == status and awsmiss(body, ['ResourceNotFoundException']):
+            return None
+
+        if 200 != status:
+            raise SekretoError('sekreto: aws secretsmanager error: ' + str(status))
+
+        text = (body or {}).get('SecretString')
+
+        if not isinstance(text, str):
+            # A binary secret has no fields to address; only the conventional
+            # `value` field can mean "the bytes themselves".
+            binary = (body or {}).get('SecretBinary')
+            if isinstance(binary, str) and 'value' == ref['field']:
+                return base64.b64decode(binary).decode('utf8')
+            return None
+
+        try:
+            parsed = json.loads(text)
+        except ValueError:
+            parsed = None
+
+        if isinstance(parsed, dict):
+            value = parsed.get(ref['field'])
+            return None if value is None else str(value)
+
+        # A plain-string secret is the whole value; it has no named fields.
+        return text if 'value' == ref['field'] else None
+
+    def describe(self):
+        # Config only, never the environment: describe() feeds the spec's
+        # sources group, which must answer the same everywhere.
+        return 'awssecrets:' + (self.opts.get('region') or '')
+
+
+class AwsparamsProvider(Provider):
+    """AWS SSM Parameter Store.
+
+    `db.pass.main` reads the parameter `/db/pass/main` (under an optional
+    prefix path), decrypted. Parameter Store carries flat strings, so
+    there is no field indirection.
+    """
+
+    def __init__(self, options=None):
+        self.opts = options or {}
+
+    def lookup(self, name):
+        status, body = awscall(self.opts, 'ssm', 'AmazonSSM.GetParameter', {
+            'Name': awsparam(name, self.opts.get('prefix')),
+            'WithDecryption': True,
+        })
+
+        if 400 == status and awsmiss(body, ['ParameterNotFound']):
+            return None
+
+        if 200 != status:
+            raise SekretoError('sekreto: aws ssm error: ' + str(status))
+
+        value = ((body or {}).get('Parameter') or {}).get('Value')
+        return None if value is None else str(value)
+
+    def describe(self):
+        return 'awsparams:' + (self.opts.get('region') or '') + (self.opts.get('prefix') or '')
+
+
+class GcpsecretsProvider(Provider):
+    """GCP Secret Manager.
+
+    `api.token` reads secret `api_token` (dots flattened to `_`; Secret
+    Manager ids have no hierarchy and reject dots), latest version. The
+    token comes from config, then `GOOGLE_OAUTH_ACCESS_TOKEN`, then the
+    GCE/GKE metadata server - so on Google's own platform no credential
+    configuration is needed at all.
+
+    The metadata call itself is plain http to a link-local host by
+    platform design; no credential rides on it, so `checkaddr` guards the
+    Secret Manager address instead.
+    """
+
+    def __init__(self, options=None):
+        self.opts = options or {}
+
+        # A configured token is kept forever; a metadata-server token carries
+        # expires_in and is renewed shortly before it runs out.
+        self.livetoken = None
+        self.renewat = float('inf')
+
+    def metadataaddr(self):
+        if self.opts.get('metadataaddr'):
+            return self.opts['metadataaddr']
+        host = os.environ.get('GCE_METADATA_HOST')
+        return 'http://' + host if host else 'http://metadata.google.internal'
+
+    def login(self):
+        configured = self.opts.get('token') or os.environ.get('GOOGLE_OAUTH_ACCESS_TOKEN')
+        if configured:
+            return configured
+
+        url = (self.metadataaddr().rstrip('/')
+               + '/computeMetadata/v1/instance/service-accounts/default/token')
+
+        status, body = _fetchjson('GET', url, {'Metadata-Flavor': 'Google'})
+
+        got = (body or {}).get('access_token')
+        if 200 != status or not got:
+            raise SekretoError('sekreto: gcp: no token and metadata server did not answer')
+
+        expires = _tonumber((body or {}).get('expires_in'))
+        self.renewat = time.time() + max(expires - 60, 1) if 0 < expires else float('inf')
+
+        return str(got)
+
+    def lookup(self, name):
+        project = self.opts.get('project') or ''
+        if '' == project:
+            raise SekretoError('sekreto: gcp: no project')
+
+        addr = self.opts.get('addr') or 'https://secretmanager.googleapis.com'
+        checkaddr(addr)
+
+        if self.livetoken is None or time.time() >= self.renewat:
+            self.livetoken = self.login()
+
+        url = (addr.rstrip('/') + '/v1/projects/' + project + '/secrets/'
+               + flatname(name, '_') + '/versions/latest:access')
+
+        status, body = _fetchjson('GET', url, {'authorization': 'Bearer ' + self.livetoken})
+
+        if 404 == status:
+            return None
+
+        if 200 != status:
+            raise SekretoError('sekreto: gcp error: ' + str(status) + ': ' + url)
+
+        data = ((body or {}).get('payload') or {}).get('data')
+        if not isinstance(data, str):
+            return None
+
+        return base64.b64decode(data).decode('utf8')
+
+    def describe(self):
+        return 'gcpsecrets:' + (self.opts.get('project') or '')
+
+
+class AzuresecretsProvider(Provider):
+    """Azure Key Vault.
+
+    `api.token` reads secret `api-token` (dots flattened to `-`; Key
+    Vault names allow nothing else), current version. The token comes
+    from config, then a client-credentials login when tenant/clientid/
+    clientsecret are given, then the IMDS managed-identity endpoint - so
+    on Azure's own platform no credential configuration is needed.
+
+    As with GCP, the IMDS call is plain http to a link-local host by
+    platform design and carries no credential; the login and vault
+    addresses are `checkaddr`-guarded.
+    """
+
+    RESOURCE = 'https://vault.azure.net'
+
+    def __init__(self, options=None):
+        self.opts = options or {}
+
+        # A configured token is kept forever; logged-in and IMDS tokens carry
+        # expires_in and are renewed shortly before they run out.
+        self.livetoken = None
+        self.renewat = float('inf')
+
+    def expiry(self, expires):
+        seconds = _tonumber(expires)
+        return time.time() + max(seconds - 60, 1) if 0 < seconds else float('inf')
+
+    def login(self):
+        opts = self.opts
+
+        if opts.get('token'):
+            return opts['token']
+
+        if opts.get('tenant') and opts.get('clientid') and opts.get('clientsecret'):
+            loginaddr = opts.get('loginaddr') or 'https://login.microsoftonline.com'
+            checkaddr(loginaddr)
+
+            url = loginaddr.rstrip('/') + '/' + opts['tenant'] + '/oauth2/v2.0/token'
+            form = ('grant_type=client_credentials&client_id=' + urlpart(opts['clientid'])
+                    + '&client_secret=' + urlpart(opts['clientsecret'])
+                    + '&scope=' + urlpart(self.RESOURCE + '/.default'))
+
+            status, body = _fetchjson(
+                'POST', url, {'content-type': 'application/x-www-form-urlencoded'}, form
+            )
+
+            got = (body or {}).get('access_token')
+            if 200 != status or not got:
+                raise SekretoError('sekreto: azure login failed: ' + str(status))
+
+            self.renewat = self.expiry((body or {}).get('expires_in'))
+            return str(got)
+
+        imds = ((opts.get('imdsaddr') or 'http://169.254.169.254').rstrip('/')
+                + '/metadata/identity/oauth2/token?api-version=2018-02-01&resource='
+                + urlpart(self.RESOURCE))
+
+        status, body = _fetchjson('GET', imds, {'Metadata': 'true'})
+
+        got = (body or {}).get('access_token')
+        if 200 != status or not got:
+            raise SekretoError(
+                'sekreto: azure: no token, no client credentials, and IMDS did not answer'
+            )
+
+        self.renewat = self.expiry((body or {}).get('expires_in'))
+        return str(got)
+
+    def lookup(self, name):
+        vault = self.opts.get('vault') or ''
+        if '' == vault:
+            raise SekretoError('sekreto: azure: no vault')
+
+        # Only an explicit scheme is a URL; a vault NAMED httpvault must
+        # still become https://httpvault.vault.azure.net.
+        if vault.startswith('http://') or vault.startswith('https://'):
+            vaulturl = vault
+        else:
+            vaulturl = 'https://' + vault + '.vault.azure.net'
+        checkaddr(vaulturl)
+
+        if self.livetoken is None or time.time() >= self.renewat:
+            self.livetoken = self.login()
+
+        url = (vaulturl.rstrip('/') + '/secrets/' + flatname(name, '-')
+               + '?api-version=' + (self.opts.get('apiversion') or '7.4'))
+
+        status, body = _fetchjson('GET', url, {'authorization': 'Bearer ' + self.livetoken})
+
+        if 404 == status:
+            return None
+
+        if 200 != status:
+            raise SekretoError(
+                'sekreto: azure error: ' + str(status) + ': ' + url.split('?')[0]
+            )
+
+        value = (body or {}).get('value')
+        return None if value is None else str(value)
+
+    def describe(self):
+        return 'azuresecrets:' + (self.opts.get('vault') or '')
+
+
+class OnepasswordProvider(Provider):
+    """1Password, through a Connect server.
+
+    The item titled `api.token` (titles keep their dots), in the named
+    vault. The value is the field with purpose PASSWORD, or the field
+    labelled `value`. A vault that cannot be found is an error - config
+    names it, so its absence is a broken store, not a missing secret.
+    """
+
+    def __init__(self, options=None):
+        self.opts = options or {}
+        self.vaultid = None
+
+    def authheaders(self):
+        return {'authorization': 'Bearer ' + (self.opts.get('token') or '')}
+
+    def resolvevault(self, addr):
+        want = self.opts.get('vault') or ''
+        if '' == want:
+            raise SekretoError('sekreto: onepassword: no vault')
+
+        status, body = _fetchjson('GET', addr + '/v1/vaults', self.authheaders())
+
+        if 200 != status or not isinstance(body, list):
+            raise SekretoError(
+                'sekreto: onepassword error: ' + str(status) + ': listing vaults'
+            )
+
+        for entry in body:
+            if isinstance(entry, dict) and (want == entry.get('id') or want == entry.get('name')):
+                return str(entry.get('id'))
+
+        raise SekretoError('sekreto: onepassword: no vault named ' + want)
+
+    def lookup(self, name):
+        checkname(name)
+
+        addr = (self.opts.get('addr') or '').rstrip('/')
+        if '' == addr:
+            raise SekretoError('sekreto: onepassword: no addr')
+        checkaddr(addr)
+
+        if self.vaultid is None:
+            self.vaultid = self.resolvevault(addr)
+
+        filterpart = urlpart('title eq "' + name + '"')
+        status, found = _fetchjson(
+            'GET',
+            addr + '/v1/vaults/' + self.vaultid + '/items?filter=' + filterpart,
+            self.authheaders(),
+        )
+
+        if 200 != status or not isinstance(found, list):
+            raise SekretoError(
+                'sekreto: onepassword error: ' + str(status) + ': finding ' + name
+            )
+
+        if 0 == len(found):
+            return None
+
+        status, item = _fetchjson(
+            'GET',
+            addr + '/v1/vaults/' + self.vaultid + '/items/' + str(found[0].get('id')),
+            self.authheaders(),
+        )
+
+        if 200 != status:
+            raise SekretoError(
+                'sekreto: onepassword error: ' + str(status) + ': reading ' + name
+            )
+
+        fields = (item or {}).get('fields') or []
+
+        for field in fields:
+            if isinstance(field, dict) and 'PASSWORD' == field.get('purpose'):
+                value = field.get('value')
+                return None if value is None else str(value)
+        for field in fields:
+            if isinstance(field, dict) and 'value' == field.get('label'):
+                value = field.get('value')
+                return None if value is None else str(value)
+
+        return None
+
+    def describe(self):
+        return 'onepassword:' + (self.opts.get('vault') or '')
+
+
+class DopplerProvider(Provider):
+    """Doppler.
+
+    The whole config is downloaded once - Doppler's own bulk endpoint -
+    and answered from memory, like a remote .env: `api.token` is the
+    `API_TOKEN` entry. A service token is config-scoped, so project and
+    config are only needed with broader tokens.
+    """
+
+    def __init__(self, options=None):
+        self.opts = options or {}
+        self.values = None
+
+    def load(self):
+        if self.values is not None:
+            return self.values
+
+        addr = (self.opts.get('addr') or 'https://api.doppler.com').rstrip('/')
+        checkaddr(addr)
+
+        url = addr + '/v3/configs/config/secrets/download?format=json'
+        if self.opts.get('project'):
+            url += '&project=' + urlpart(self.opts['project'])
+        if self.opts.get('config'):
+            url += '&config=' + urlpart(self.opts['config'])
+
+        status, body = _fetchjson(
+            'GET', url, {'authorization': 'Bearer ' + (self.opts.get('token') or '')}
+        )
+
+        if 200 != status or not isinstance(body, dict):
+            raise SekretoError('sekreto: doppler error: ' + str(status))
+
+        self.values = {}
+        for key, value in body.items():
+            if value is not None:
+                self.values[key] = str(value)
+
+        return self.values
+
+    def lookup(self, name):
+        return self.load().get(envkey(name))
+
+    def describe(self):
+        if self.opts.get('project'):
+            return 'doppler:' + self.opts['project'] + '/' + (self.opts.get('config') or '')
+        return 'doppler'
+
+
+class InfisicalProvider(Provider):
+    """Infisical.
+
+    `api.token` reads the secret keyed `API_TOKEN` (Infisical's own
+    convention is environment-style keys) at a secret path in one
+    environment of a project. Auth is a token, or a universal-auth
+    (machine identity) login with clientid/clientsecret.
+    """
+
+    def __init__(self, options=None):
+        self.opts = options or {}
+
+        # A configured token is kept forever; a universal-auth token carries
+        # expiresIn and is renewed shortly before it runs out.
+        self.livetoken = None
+        self.renewat = float('inf')
+
+    def login(self, addr):
+        if self.opts.get('token'):
+            return self.opts['token']
+
+        if not self.opts.get('clientid') or not self.opts.get('clientsecret'):
+            raise SekretoError('sekreto: infisical: no token and no client credentials')
+
+        status, body = _fetchjson(
+            'POST',
+            addr + '/api/v1/auth/universal-auth/login',
+            {'content-type': 'application/json'},
+            json.dumps(
+                {'clientId': self.opts['clientid'], 'clientSecret': self.opts['clientsecret']},
+                separators=(',', ':'),
+            ),
+        )
+
+        got = (body or {}).get('accessToken')
+        if 200 != status or not got:
+            raise SekretoError('sekreto: infisical login failed: ' + str(status))
+
+        expires = _tonumber((body or {}).get('expiresIn'))
+        self.renewat = time.time() + max(expires - 60, 1) if 0 < expires else float('inf')
+
+        return str(got)
+
+    def lookup(self, name):
+        addr = (self.opts.get('addr') or 'https://app.infisical.com').rstrip('/')
+        checkaddr(addr)
+
+        project = self.opts.get('project') or ''
+        environment = self.opts.get('environment') or ''
+        if '' == project or '' == environment:
+            raise SekretoError('sekreto: infisical: no project/environment')
+
+        if self.livetoken is None or time.time() >= self.renewat:
+            self.livetoken = self.login(addr)
+
+        url = (addr + '/api/v3/secrets/raw/' + envkey(name)
+               + '?workspaceId=' + urlpart(project)
+               + '&environment=' + urlpart(environment)
+               + '&secretPath=' + urlpart(self.opts.get('path') or '/'))
+
+        status, body = _fetchjson('GET', url, {'authorization': 'Bearer ' + self.livetoken})
+
+        if 404 == status:
+            return None
+
+        if 200 != status:
+            raise SekretoError('sekreto: infisical error: ' + str(status))
+
+        value = ((body or {}).get('secret') or {}).get('secretValue')
+        return None if value is None else str(value)
+
+    def describe(self):
+        return ('infisical:' + (self.opts.get('project') or '')
+                + '/' + (self.opts.get('environment') or ''))
 
 
 def makeprovider(spec):
@@ -250,11 +1013,39 @@ def makeprovider(spec):
         return DotenvProvider(spec.get('file') or '.env', spec.get('prefix'))
     if 'memory' == kind:
         return MemoryProvider(spec.get('values') or {}, spec.get('prefix'))
+    if 'file' == kind:
+        return FileProvider(spec.get('dir') or '', spec.get('prefix'))
     if 'hashicorp' == kind:
         return HashicorpProvider(
-            spec.get('addr') or '', spec.get('token') or '', spec.get('mount')
+            spec.get('addr') or '',
+            spec.get('token') or '',
+            spec.get('mount'),
+            spec.get('kv'),
+            spec.get('vaultnamespace'),
+            spec.get('auth'),
         )
     if 'boru' == kind:
-        return BoruProvider(spec.get('command'), spec.get('namespace'), spec.get('home'))
+        return BoruProvider(
+            spec.get('command'),
+            spec.get('namespace'),
+            spec.get('home'),
+            spec.get('addr'),
+            spec.get('token'),
+            spec.get('mount'),
+        )
+    if 'awssecrets' == kind:
+        return AwssecretsProvider(spec)
+    if 'awsparams' == kind:
+        return AwsparamsProvider(spec)
+    if 'gcpsecrets' == kind:
+        return GcpsecretsProvider(spec)
+    if 'azuresecrets' == kind:
+        return AzuresecretsProvider(spec)
+    if 'onepassword' == kind:
+        return OnepasswordProvider(spec)
+    if 'doppler' == kind:
+        return DopplerProvider(spec)
+    if 'infisical' == kind:
+        return InfisicalProvider(spec)
 
     raise SekretoError('sekreto: unknown provider kind: ' + str(kind))

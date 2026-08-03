@@ -23,7 +23,8 @@ project file names no machine-specific location.
 | | |
 |---|---|
 | `src/Sekreto.cs` | the facade, `Names`, `Dotenv`, `Redact` |
-| `src/Providers.cs` | the five providers |
+| `src/Providers.cs` | the thirteen providers |
+| `src/Sigv4.cs` | AWS Signature V4, hand-rolled |
 | `src/Json.cs` | the JSON adapter |
 | `test/Program.cs` | the conformance suite |
 | `cli/Program.cs` | the app that needs a secret |
@@ -44,12 +45,13 @@ make integration              # every port
 ./test/integration.sh csharp  # just this one
 ```
 
-It starts a token-protected API and stand-in HashiCorp and boru vaults,
-then runs this port's CLI against them from each secret source in turn:
+It starts a token-protected API, mock HashiCorp/AWS/GCP/Azure/1Password/
+Doppler/Infisical servers and a real boru vault, then runs this port's
+CLI against them from each secret source in turn:
 
 ```sh
 make build
-dotnet cli/bin/Release/net8.0/SekretoCli.dll http://127.0.0.1:8099/whoami --source vault
+dotnet cli/bin/Release/net8.0/SekretoCli.dll http://127.0.0.1:8099/whoami --source hashicorp
 ```
 
 ## API

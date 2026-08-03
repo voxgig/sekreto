@@ -14,6 +14,7 @@ import com.voxgig.omni.Runner.Subject;
 import com.voxgig.sekreto.Provider;
 import com.voxgig.sekreto.Providers;
 import com.voxgig.sekreto.Sekreto;
+import com.voxgig.sekreto.Sigv4;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
@@ -66,6 +67,12 @@ public final class SekretoTest {
 
   static final Subject VAULTREF = args -> Sekreto.vaultref(args[0]);
 
+  static final Subject FLATNAME =
+      args -> Sekreto.flatname(entry(args[0]).get("name"), text(entry(args[0]).get("sep")));
+
+  static final Subject AWSPARAM =
+      args -> Sekreto.awsparam(entry(args[0]).get("name"), text(entry(args[0]).get("prefix")));
+
   static final Subject PARSEDOTENV = args -> Sekreto.parsedotenv(args[0]);
 
   static final Subject RESOLVE = args -> chainof(args[0]).get(text(entry(args[0]).get("name")));
@@ -84,6 +91,10 @@ public final class SekretoTest {
   static final Subject TRYFROM =
       args -> chainof(args[0]).tryfrom(text(entry(args[0]).get("store")),
           text(entry(args[0]).get("name")));
+
+  // Answers the ordered output map itself, which omni compares as a JSON
+  // object against the spec's known-answer signatures.
+  static final Subject SIGV4 = args -> Sigv4.sigv4(entry(args[0]));
 
   @SuppressWarnings("unchecked")
   static final Subject REDACT =
@@ -122,6 +133,8 @@ public final class SekretoTest {
         () -> R.runsetflags(R.set("validname"), Runner.flags("null", false), VALIDNAME));
     testcase("envkey", () -> R.runset(R.set("envkey"), ENVKEY));
     testcase("vaultref", () -> R.runset(R.set("vaultref"), VAULTREF));
+    testcase("flatname", () -> R.runset(R.set("flatname"), FLATNAME));
+    testcase("awsparam", () -> R.runset(R.set("awsparam"), AWSPARAM));
     testcase("parsedotenv", () -> R.runset(R.set("parsedotenv"), PARSEDOTENV));
     testcase("resolve", () -> R.runset(R.set("resolve"), RESOLVE));
     testcase("trysecret", () -> R.runset(R.set("trysecret"), TRYSECRET));
@@ -129,6 +142,7 @@ public final class SekretoTest {
     testcase("stores", () -> R.runset(R.set("stores"), STORES));
     testcase("getfrom", () -> R.runset(R.set("getfrom"), GETFROM));
     testcase("tryfrom", () -> R.runset(R.set("tryfrom"), TRYFROM));
+    testcase("sigv4", () -> R.runset(R.set("sigv4"), SIGV4));
     testcase("redact", () -> R.runset(R.set("redact"), REDACT));
 
     System.out.println("\n" + passcount + " passed, " + failcount + " failed");
