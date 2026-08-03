@@ -2,18 +2,24 @@
 //!
 //! It asks sekreto for `api.token` and calls the token-protected API with
 //! it. Every port ships this same CLI, and test/integration.sh runs all of
-//! them against the same server from all four secret sources - which is
+//! them against the same server from every secret source - which is
 //! what proves the library, rather than the spec alone.
 //!
-//! Usage: sekreto-cli <api-url> [--source env|dotenv|hashicorp|boru|chain]
-//!                              [--store <name>]   directed read
+//! Usage: sekreto-cli <api-url> [--source <source>] [--store <name>]
+//!
+//! Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
+//!          gcpsecrets azuresecrets onepassword doppler infisical chain
+//!
+//! Each source's configuration arrives in the environment variables its
+//! own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
+//! in chainfor below.
 
 use std::env;
 use std::process;
 
 use voxgig_sekreto::http;
 use voxgig_sekreto::json;
-use voxgig_sekreto::{makechain, ProviderSpec, Sekreto};
+use voxgig_sekreto::{makechain, AuthSpec, ProviderSpec, Sekreto};
 
 const LANG: &str = "rust";
 
@@ -35,10 +41,32 @@ fn chainfor(source: &str) -> Vec<ProviderSpec> {
         ..ProviderSpec::of("dotenv")
     };
 
+    let filespec = ProviderSpec {
+        dir: envor("SEKRETO_FILEDIR", "/run/secrets"),
+        ..ProviderSpec::of("file")
+    };
+
+    // VAULT_AUTH names a login method; without it the provider expects to
+    // be handed VAULT_TOKEN.
+    let vaultauth = match envor("VAULT_AUTH", "") {
+        method if method.is_empty() => None,
+        method => Some(AuthSpec {
+            method,
+            role: envor("VAULT_ROLE", ""),
+            jwtfile: envor("VAULT_JWT_FILE", ""),
+            roleid: envor("VAULT_ROLE_ID", ""),
+            secretid: envor("VAULT_SECRET_ID", ""),
+            ..Default::default()
+        }),
+    };
+
     let hashicorpspec = ProviderSpec {
         addr: envor("VAULT_ADDR", ""),
         token: envor("VAULT_TOKEN", ""),
         mount: envor("VAULT_MOUNT", ""),
+        kv: envor("VAULT_KV", "").parse().unwrap_or(0),
+        vaultnamespace: envor("VAULT_NAMESPACE", ""),
+        auth: vaultauth,
         ..ProviderSpec::of("hashicorp")
     };
 
@@ -49,11 +77,86 @@ fn chainfor(source: &str) -> Vec<ProviderSpec> {
         ..ProviderSpec::of("boru")
     };
 
+    // The same vault over its wire protocol (`boru vault serve`) instead
+    // of the CLI: an address plus a capability token from `vault grant`.
+    let boruwirespec = ProviderSpec {
+        addr: envor("BORU_ADDR", ""),
+        token: envor("BORU_TOKEN", ""),
+        namespace: envor("BORU_NAMESPACE", ""),
+        ..ProviderSpec::of("boru")
+    };
+
+    let awssecretsspec = ProviderSpec {
+        region: envor("AWS_REGION", ""),
+        addr: envor("AWS_ENDPOINT", ""),
+        ..ProviderSpec::of("awssecrets")
+    };
+
+    let awsparamsspec = ProviderSpec {
+        region: envor("AWS_REGION", ""),
+        addr: envor("AWS_ENDPOINT", ""),
+        prefix: envor("AWS_PARAM_PREFIX", ""),
+        ..ProviderSpec::of("awsparams")
+    };
+
+    let gcpspec = ProviderSpec {
+        project: envor("GCP_PROJECT", ""),
+        addr: envor("GCP_ADDR", ""),
+        metadataaddr: envor("GCP_METADATA_ADDR", ""),
+        ..ProviderSpec::of("gcpsecrets")
+    };
+
+    let azurespec = ProviderSpec {
+        vault: envor("AZURE_VAULT", ""),
+        token: envor("AZURE_TOKEN", ""),
+        tenant: envor("AZURE_TENANT", ""),
+        clientid: envor("AZURE_CLIENT_ID", ""),
+        clientsecret: envor("AZURE_CLIENT_SECRET", ""),
+        loginaddr: envor("AZURE_LOGIN_ADDR", ""),
+        imdsaddr: envor("AZURE_IMDS_ADDR", ""),
+        ..ProviderSpec::of("azuresecrets")
+    };
+
+    let onepasswordspec = ProviderSpec {
+        addr: envor("OP_CONNECT_HOST", ""),
+        token: envor("OP_CONNECT_TOKEN", ""),
+        vault: envor("OP_VAULT", ""),
+        ..ProviderSpec::of("onepassword")
+    };
+
+    let dopplerspec = ProviderSpec {
+        token: envor("DOPPLER_TOKEN", ""),
+        project: envor("DOPPLER_PROJECT", ""),
+        config: envor("DOPPLER_CONFIG", ""),
+        addr: envor("DOPPLER_ADDR", ""),
+        ..ProviderSpec::of("doppler")
+    };
+
+    let infisicalspec = ProviderSpec {
+        addr: envor("INFISICAL_ADDR", ""),
+        token: envor("INFISICAL_TOKEN", ""),
+        clientid: envor("INFISICAL_CLIENT_ID", ""),
+        clientsecret: envor("INFISICAL_CLIENT_SECRET", ""),
+        project: envor("INFISICAL_PROJECT", ""),
+        environment: envor("INFISICAL_ENV", ""),
+        path: envor("INFISICAL_PATH", ""),
+        ..ProviderSpec::of("infisical")
+    };
+
     match source {
         "env" => vec![envspec],
         "dotenv" => vec![dotenvspec],
+        "file" => vec![filespec],
         "hashicorp" => vec![hashicorpspec],
         "boru" => vec![boruspec],
+        "boruwire" => vec![boruwirespec],
+        "awssecrets" => vec![awssecretsspec],
+        "awsparams" => vec![awsparamsspec],
+        "gcpsecrets" => vec![gcpspec],
+        "azuresecrets" => vec![azurespec],
+        "onepassword" => vec![onepasswordspec],
+        "doppler" => vec![dopplerspec],
+        "infisical" => vec![infisicalspec],
         // The default: the chain an app would actually ship with - local
         // overrides first, shared vaults last.
         _ => vec![envspec, dotenvspec, hashicorpspec, boruspec],
