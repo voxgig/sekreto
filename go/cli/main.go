@@ -5,7 +5,9 @@
 // them against the same server from all four secret sources - which is what
 // proves the library, rather than the spec alone.
 //
-// Usage: sekreto-cli <api-url> [--source env|dotenv|vault|boru|chain]
+// Usage: sekreto-cli <api-url> [--source env|dotenv|hashicorp|boru|chain]
+//
+//	[--store <name>]   directed read
 package main
 
 import (
@@ -33,16 +35,17 @@ func chainfor(source string) []*sekreto.ProviderSpec {
 		Kind: "dotenv",
 		File: envor("SEKRETO_DOTENV", ".env"),
 	}
-	vaultspec := &sekreto.ProviderSpec{
-		Kind:  "vault",
+	hashicorpspec := &sekreto.ProviderSpec{
+		Kind:  "hashicorp",
 		Addr:  os.Getenv("VAULT_ADDR"),
 		Token: os.Getenv("VAULT_TOKEN"),
 		Mount: os.Getenv("VAULT_MOUNT"),
 	}
 	boruspec := &sekreto.ProviderSpec{
-		Kind:  "boru",
-		Addr:  os.Getenv("BORU_VAULT_ADDR"),
-		Token: os.Getenv("BORU_VAULT_TOKEN"),
+		Kind:      "boru",
+		Command:   envor("BORU_COMMAND", "boru"),
+		Namespace: os.Getenv("BORU_NAMESPACE"),
+		Home:      os.Getenv("BORU_HOME"),
 	}
 
 	switch source {
@@ -50,14 +53,14 @@ func chainfor(source string) []*sekreto.ProviderSpec {
 		return []*sekreto.ProviderSpec{envspec}
 	case "dotenv":
 		return []*sekreto.ProviderSpec{dotenvspec}
-	case "vault":
-		return []*sekreto.ProviderSpec{vaultspec}
+	case "hashicorp":
+		return []*sekreto.ProviderSpec{hashicorpspec}
 	case "boru":
 		return []*sekreto.ProviderSpec{boruspec}
 	default:
 		// The default: the chain an app would actually ship with - local
 		// overrides first, shared vaults last.
-		return []*sekreto.ProviderSpec{envspec, dotenvspec, vaultspec, boruspec}
+		return []*sekreto.ProviderSpec{envspec, dotenvspec, hashicorpspec, boruspec}
 	}
 }
 
@@ -76,15 +79,29 @@ func run() int {
 		}
 	}
 
-	providers, err := sekreto.MakeChain(chainfor(source))
+	// --store names a store outright: the secret must come from that one,
+	// not from whichever provider happens to answer first.
+	store := ""
+	for index, arg := range args {
+		if "--store" == arg && index+1 < len(args) {
+			store = args[index+1]
+		}
+	}
+
+	providers, names, err := sekreto.MakeNamedChain(chainfor(source))
 	if nil != err {
 		fmt.Fprintln(os.Stderr, "sekreto-cli: "+err.Error())
 		return 2
 	}
 
-	secrets := sekreto.New(&sekreto.Options{Providers: providers})
+	secrets := sekreto.NewNamed(providers, names, false)
 
-	token, err := secrets.Get("api.token")
+	var token string
+	if "" == store {
+		token, err = secrets.Get("api.token")
+	} else {
+		token, err = secrets.GetFrom(store, "api.token")
+	}
 	if nil != err {
 		fmt.Fprintln(os.Stderr, "sekreto-cli: "+err.Error())
 		return 2
@@ -125,8 +142,9 @@ func run() int {
 		Ok     bool   `json:"ok"`
 		Lang   string `json:"lang"`
 		Source string `json:"source"`
+		Store  string `json:"store"`
 		Caller string `json:"caller"`
-	}{Ok: true, Lang: lang, Source: source, Caller: caller})
+	}{Ok: true, Lang: lang, Source: source, Store: store, Caller: caller})
 
 	fmt.Println(string(out))
 

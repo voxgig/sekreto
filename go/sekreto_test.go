@@ -55,12 +55,12 @@ func chainof(value any) (*sekreto.Sekreto, error) {
 		return nil, err
 	}
 
-	providers, err := sekreto.MakeChain(specs)
+	providers, names, err := sekreto.MakeNamedChain(specs)
 	if nil != err {
 		return nil, err
 	}
 
-	return sekreto.New(&sekreto.Options{Providers: providers, NoCache: true}), nil
+	return sekreto.NewNamed(providers, names, true), nil
 }
 
 func text(value any) string {
@@ -122,6 +122,45 @@ var (
 		return found, nil
 	})
 
+	STORES = omni.Subject(func(args ...any) (any, error) {
+		secrets, err := chainof(args[0])
+		if nil != err {
+			return nil, err
+		}
+
+		out := []any{}
+		for _, store := range secrets.Stores() {
+			out = append(out, store)
+		}
+		return out, nil
+	})
+
+	GETFROM = omni.Subject(func(args ...any) (any, error) {
+		secrets, err := chainof(args[0])
+		if nil != err {
+			return nil, err
+		}
+		entry, _ := args[0].(map[string]any)
+		return secrets.GetFrom(text(entry["store"]), text(entry["name"]))
+	})
+
+	TRYFROM = omni.Subject(func(args ...any) (any, error) {
+		secrets, err := chainof(args[0])
+		if nil != err {
+			return nil, err
+		}
+		entry, _ := args[0].(map[string]any)
+
+		found, has, err := secrets.TryFrom(text(entry["store"]), text(entry["name"]))
+		if nil != err {
+			return nil, err
+		}
+		if !has {
+			return nil, nil
+		}
+		return found, nil
+	})
+
 	SOURCES = omni.Subject(func(args ...any) (any, error) {
 		secrets, err := chainof(args[0])
 		if nil != err {
@@ -172,6 +211,9 @@ func TestSekreto(t *testing.T) {
 		{"resolve", RESOLVE, nil},
 		{"trysecret", TRYSECRET, nil},
 		{"sources", SOURCES, nil},
+		{"stores", STORES, nil},
+		{"getfrom", GETFROM, nil},
+		{"tryfrom", TRYFROM, nil},
 		{"redact", REDACT, nil},
 	}
 

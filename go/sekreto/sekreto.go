@@ -187,26 +187,71 @@ type Options struct {
 	NoCache bool
 }
 
-// Sekreto is the secrets facade: a chain of providers plus a cache.
-type Sekreto struct {
-	providers []Provider
-	docache   bool
-	cache     map[string]string
-	order     []string
+// entry is one provider in the chain, under the store name it answers to.
+type entry struct {
+	store    string
+	provider Provider
 }
 
-// New makes a Sekreto from options.
+// cached is one resolved value. A slice, not a map: the store a value came
+// from stays attached, and redaction order does not vary between runs.
+type cached struct {
+	store string
+	name  string
+	value string
+}
+
+// StoreName is the store name a provider answers to when nothing says
+// otherwise.
+//
+// Describe opens with the provider's kind - hashicorp:..., dotenv:..., plain
+// env - so the kind is the natural default, and a custom provider gets a
+// sensible name without implementing anything extra.
+func StoreName(provider Provider) string {
+	return strings.SplitN(provider.Describe(), ":", 2)[0]
+}
+
+// Sekreto is the secrets facade: a chain of providers plus a cache.
+//
+// Two ways to read. Get is transparent - it walks the chain and takes the
+// first hit, and the caller never learns which store answered. GetFrom is
+// directed - it names the store, and only that store is asked.
+type Sekreto struct {
+	entries []entry
+	docache bool
+	cache   []cached
+}
+
+// New makes a Sekreto from options. Each provider answers to its own kind as
+// a store name; use NewNamed to name them explicitly.
 func New(options *Options) *Sekreto {
 	opts := options
 	if nil == opts {
 		opts = &Options{}
 	}
 
-	return &Sekreto{
-		providers: opts.Providers,
-		docache:   !opts.NoCache,
-		cache:     map[string]string{},
+	entries := []entry{}
+	for _, provider := range opts.Providers {
+		entries = append(entries, entry{store: StoreName(provider), provider: provider})
 	}
+
+	return &Sekreto{entries: entries, docache: !opts.NoCache}
+}
+
+// NewNamed makes a Sekreto whose providers answer to the given store names,
+// in the same order. A name left empty falls back to the provider's kind.
+func NewNamed(providers []Provider, names []string, nocache bool) *Sekreto {
+	entries := []entry{}
+
+	for index, provider := range providers {
+		store := StoreName(provider)
+		if index < len(names) && "" != names[index] {
+			store = names[index]
+		}
+		entries = append(entries, entry{store: store, provider: provider})
+	}
+
+	return &Sekreto{entries: entries, docache: !nocache}
 }
 
 // Get returns the secret, or an error if no provider has it.
@@ -225,26 +270,68 @@ func (sek *Sekreto) Get(name string) (string, error) {
 
 // Try returns the secret and whether any provider had it.
 func (sek *Sekreto) Try(name string) (string, bool, error) {
+	return sek.resolve("", name, sek.entries)
+}
+
+// GetFrom returns the secret from one named store, or an error if that store
+// does not have it.
+func (sek *Sekreto) GetFrom(store string, name string) (string, error) {
+	found, has, err := sek.TryFrom(store, name)
+	if nil != err {
+		return "", err
+	}
+
+	if !has {
+		return "", fail("sekreto: unknown secret: " + store + ":" + name)
+	}
+
+	return found, nil
+}
+
+// TryFrom returns the secret from one named store, and whether that store
+// had it.
+//
+// Naming a store that is not in the chain is an error, not a miss: Try
+// already means "this store may not have it", so it cannot also mean "this
+// store may not exist" without hiding a typo.
+func (sek *Sekreto) TryFrom(store string, name string) (string, bool, error) {
+	matching := []entry{}
+
+	for _, one := range sek.entries {
+		if one.store == store {
+			matching = append(matching, one)
+		}
+	}
+
+	if 0 == len(matching) {
+		return "", false, fail("sekreto: unknown store: " + store)
+	}
+
+	return sek.resolve(store, name, matching)
+}
+
+func (sek *Sekreto) resolve(store string, name string, entries []entry) (string, bool, error) {
 	if err := checkname(name); nil != err {
 		return "", false, err
 	}
 
 	if sek.docache {
-		if found, has := sek.cache[name]; has {
-			return found, true, nil
+		for _, hit := range sek.cache {
+			if hit.store == store && hit.name == name {
+				return hit.value, true, nil
+			}
 		}
 	}
 
-	for _, provider := range sek.providers {
-		found, has, err := provider.Lookup(name)
+	for _, one := range entries {
+		found, has, err := one.provider.Lookup(name)
 		if nil != err {
 			return "", false, err
 		}
 
 		if has {
 			if sek.docache {
-				sek.cache[name] = found
-				sek.order = append(sek.order, name)
+				sek.cache = append(sek.cache, cached{store: store, name: name, value: found})
 			}
 			return found, true, nil
 		}
@@ -256,6 +343,12 @@ func (sek *Sekreto) Try(name string) (string, bool, error) {
 // Has reports whether any provider has this secret.
 func (sek *Sekreto) Has(name string) (bool, error) {
 	_, has, err := sek.Try(name)
+	return has, err
+}
+
+// HasIn reports whether this named store has this secret.
+func (sek *Sekreto) HasIn(store string, name string) (bool, error) {
+	_, has, err := sek.TryFrom(store, name)
 	return has, err
 }
 
@@ -278,8 +371,29 @@ func (sek *Sekreto) All(names []string) (map[string]string, error) {
 func (sek *Sekreto) Sources() []string {
 	out := []string{}
 
-	for _, provider := range sek.providers {
-		out = append(out, provider.Describe())
+	for _, one := range sek.entries {
+		out = append(out, one.provider.Describe())
+	}
+
+	return out
+}
+
+// Stores names each store that can be named by GetFrom, in resolution order
+// and without repeats.
+func (sek *Sekreto) Stores() []string {
+	out := []string{}
+
+	for _, one := range sek.entries {
+		seen := false
+		for _, already := range out {
+			if already == one.store {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			out = append(out, one.store)
+		}
 	}
 
 	return out
@@ -287,11 +401,10 @@ func (sek *Sekreto) Sources() []string {
 
 // Redact replaces every value this Sekreto has resolved with `[redacted]`.
 func (sek *Sekreto) Redact(text string) string {
-	// Cache order is kept explicitly: Go map iteration is randomised, and
-	// redaction must not vary between runs.
 	values := []string{}
-	for _, name := range sek.order {
-		values = append(values, sek.cache[name])
+
+	for _, hit := range sek.cache {
+		values = append(values, hit.value)
 	}
 
 	return Redact(text, values)
@@ -299,6 +412,5 @@ func (sek *Sekreto) Redact(text string) string {
 
 // Refresh drops cached values, so the next Get asks the providers again.
 func (sek *Sekreto) Refresh() {
-	sek.cache = map[string]string{}
-	sek.order = nil
+	sek.cache = nil
 }

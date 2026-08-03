@@ -11,11 +11,13 @@
 package sekreto
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -32,13 +34,20 @@ type Provider interface {
 // ProviderSpec is the declarative form of a provider, as used in config and
 // in the shared spec.
 type ProviderSpec struct {
-	Kind   string            `json:"kind"`
+	Kind string `json:"kind"`
+	// Name is the store name GetFrom addresses. Defaults to Kind.
+	Name   string            `json:"name"`
 	Prefix string            `json:"prefix"`
 	File   string            `json:"file"`
 	Values map[string]string `json:"values"`
-	Addr   string            `json:"addr"`
-	Token  string            `json:"token"`
-	Mount  string            `json:"mount"`
+	// hashicorp
+	Addr  string `json:"addr"`
+	Token string `json:"token"`
+	Mount string `json:"mount"`
+	// boru
+	Command   string `json:"command"`
+	Namespace string `json:"namespace"`
+	Home      string `json:"home"`
 }
 
 // EnvProvider reads environment variables: api.token from API_TOKEN.
@@ -163,25 +172,55 @@ func httpget(target string, headers map[string]string) (int, map[string]any, err
 	return response.StatusCode, body, nil
 }
 
-// VaultProvider reads HashiCorp Vault, KV v2.
+// checkaddr refuses to send a Vault token in the clear.
+//
+// Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
+// convenience. Sending X-Vault-Token over http to anything but the local
+// machine puts both the token and the secret it fetches on the wire for
+// anyone on the path, so sekreto will not do it. Loopback stays allowed:
+// that is `vault server -dev` and this repo's own test harness.
+func checkaddr(addr string) error {
+	if strings.HasPrefix(addr, "https://") {
+		return nil
+	}
+
+	if !strings.HasPrefix(addr, "http://") {
+		return fail("sekreto: not an http(s) address: " + addr)
+	}
+
+	host := strings.Split(strings.Split(strings.TrimPrefix(addr, "http://"), "/")[0], ":")[0]
+
+	switch host {
+	case "localhost", "127.0.0.1", "::1", "[::1]":
+		return nil
+	}
+
+	return fail("sekreto: refusing to send a token in plaintext to " + addr + " (use https)")
+}
+
+// HashicorpProvider reads HashiCorp Vault, KV v2.
 //
 // api.token reads {addr}/v1/{mount}/data/api and takes the `token` field of
 // data.data. A 404 means "not here", which is a miss rather than an error,
 // so a vault can sit in a chain with fallbacks.
-type VaultProvider struct {
+type HashicorpProvider struct {
 	Addr  string
 	Token string
 	Mount string
 }
 
-func (provider *VaultProvider) mount() string {
+func (provider *HashicorpProvider) mount() string {
 	if "" == provider.Mount {
 		return "secret"
 	}
 	return provider.Mount
 }
 
-func (provider *VaultProvider) Lookup(name string) (string, bool, error) {
+func (provider *HashicorpProvider) Lookup(name string) (string, bool, error) {
+	if err := checkaddr(provider.Addr); nil != err {
+		return "", false, err
+	}
+
 	ref, err := NameVaultRef(name)
 	if nil != err {
 		return "", false, err
@@ -200,7 +239,7 @@ func (provider *VaultProvider) Lookup(name string) (string, bool, error) {
 	}
 
 	if http.StatusOK != status {
-		return "", false, fail("sekreto: vault error: " + strconv.Itoa(status) + ": " + target)
+		return "", false, fail("sekreto: hashicorp error: " + strconv.Itoa(status) + ": " + target)
 	}
 
 	outer, is := body["data"].(map[string]any)
@@ -221,57 +260,102 @@ func (provider *VaultProvider) Lookup(name string) (string, bool, error) {
 	return tostring(value), true, nil
 }
 
-func (provider *VaultProvider) Describe() string {
-	return "vault:" + provider.Addr + "/" + provider.mount()
+func (provider *HashicorpProvider) Describe() string {
+	return "hashicorp:" + provider.Addr + "/" + provider.mount()
 }
 
-// BoruProvider reads a boru vault.
+// BoruProvider reads a boru vault (https://github.com/boru-lang/boru).
 //
-// The boru vault protocol as sekreto uses it: a GET of
-// {addr}/vault/{path}?field={field} with an X-Boru-Token header, answering
-// {"ok":true,"value":"..."} when the secret exists and {"ok":false} (or a
-// 404) when it does not.
+// boru keeps secrets in a local encrypted keyring and hands a value out
+// through its own CLI: `boru vault get --reveal <alias>` prints the secret on
+// stdout, and nothing else.
+//
+// There is deliberately no HTTP read here. boru's `vault proxy` and
+// `vault mcp` are a *credential broker*: they inject the real secret into an
+// outbound request and forward it, so an agent can call an API without ever
+// holding the credential. Handing a value back is the one thing that broker
+// is built not to do, so sekreto reads the vault the way boru itself does -
+// through the CLI.
+//
+// A sekreto name is already a valid boru alias, so api.token crosses over
+// unchanged. A Namespace qualifies it the way boru writes it, ns:name.
+//
+// The passphrase is read by boru itself from BORU_VAULT_PASSPHRASE. sekreto
+// never accepts it as config and never puts it on a command line, where it
+// would show up in the process table.
 type BoruProvider struct {
-	Addr  string
-	Token string
+	Command   string
+	Namespace string
+	Home      string
+}
+
+func (provider *BoruProvider) command() string {
+	if "" == provider.Command {
+		return "boru"
+	}
+	return provider.Command
 }
 
 func (provider *BoruProvider) Lookup(name string) (string, bool, error) {
-	ref, err := NameVaultRef(name)
-	if nil != err {
+	if err := checkname(name); nil != err {
 		return "", false, err
 	}
 
-	target := strings.TrimSuffix(provider.Addr, "/") + "/vault/" + ref.Path +
-		"?field=" + url.QueryEscape(ref.Field)
-
-	status, body, err := httpget(target, map[string]string{"X-Boru-Token": provider.Token})
-	if nil != err {
-		return "", false, err
+	alias := name
+	if "" != provider.Namespace {
+		alias = provider.Namespace + ":" + name
 	}
 
-	if http.StatusNotFound == status {
+	run := exec.Command(provider.command(), "vault", "get", "--reveal", alias)
+
+	if "" != provider.Home {
+		run.Env = append(os.Environ(), "BORU_HOME="+provider.Home)
+	}
+
+	var out, errout bytes.Buffer
+	run.Stdout = &out
+	run.Stderr = &errout
+
+	err := run.Run()
+
+	if nil == err {
+		// boru prints the value and one newline, and nothing else.
+		return strings.TrimSuffix(out.String(), "\n"), true, nil
+	}
+
+	var exiterr *exec.ExitError
+	if !errors.As(err, &exiterr) {
+		return "", false, fail("sekreto: cannot run " + provider.command() + ": " + err.Error())
+	}
+
+	why := strings.TrimSpace(errout.String())
+
+	// "no alias named" is boru saying it does not hold this secret, which is a
+	// miss: the chain carries on to the next provider. A locked vault or a
+	// wrong passphrase is not a miss - treating it as one would fall through
+	// to a weaker store without saying so.
+	if borumiss(why) {
 		return "", false, nil
 	}
 
-	if http.StatusOK != status {
-		return "", false, fail("sekreto: boru vault error: " + strconv.Itoa(status) + ": " + target)
+	if "" == why {
+		why = "exit " + strconv.Itoa(exiterr.ExitCode())
 	}
 
-	if ok, is := body["ok"].(bool); !is || !ok {
-		return "", false, nil
-	}
-
-	value, has := body["value"]
-	if !has || nil == value {
-		return "", false, nil
-	}
-
-	return tostring(value), true, nil
+	return "", false, fail("sekreto: boru vault error: " + why)
 }
 
 func (provider *BoruProvider) Describe() string {
-	return "boru:" + provider.Addr
+	if "" != provider.Namespace {
+		return "boru:" + provider.Namespace
+	}
+	return "boru"
+}
+
+// borumiss reports whether a boru failure means "no such secret" rather than
+// "I could not answer". Matched on boru's own wording for a missing alias.
+func borumiss(why string) bool {
+	return strings.Contains(why, "no alias named")
 }
 
 // tostring renders a decoded JSON scalar the way the canonical port's
@@ -310,10 +394,14 @@ func MakeProvider(spec *ProviderSpec) (Provider, error) {
 			values = map[string]string{}
 		}
 		return &MemoryProvider{Values: values, Prefix: spec.Prefix}, nil
-	case "vault":
-		return &VaultProvider{Addr: spec.Addr, Token: spec.Token, Mount: spec.Mount}, nil
+	case "hashicorp":
+		return &HashicorpProvider{Addr: spec.Addr, Token: spec.Token, Mount: spec.Mount}, nil
 	case "boru":
-		return &BoruProvider{Addr: spec.Addr, Token: spec.Token}, nil
+		return &BoruProvider{
+			Command:   spec.Command,
+			Namespace: spec.Namespace,
+			Home:      spec.Home,
+		}, nil
 	default:
 		return nil, fail("sekreto: unknown provider kind: " + spec.Kind)
 	}
@@ -321,15 +409,24 @@ func MakeProvider(spec *ProviderSpec) (Provider, error) {
 
 // MakeChain builds a whole provider chain from its declarative form.
 func MakeChain(specs []*ProviderSpec) ([]Provider, error) {
-	out := []Provider{}
+	providers, _, err := MakeNamedChain(specs)
+	return providers, err
+}
+
+// MakeNamedChain builds a chain and the store name each provider answers to,
+// so that Sekreto.GetFrom can address them.
+func MakeNamedChain(specs []*ProviderSpec) ([]Provider, []string, error) {
+	providers := []Provider{}
+	names := []string{}
 
 	for _, spec := range specs {
 		provider, err := MakeProvider(spec)
 		if nil != err {
-			return nil, err
+			return nil, nil, err
 		}
-		out = append(out, provider)
+		providers = append(providers, provider)
+		names = append(names, spec.Name)
 	}
 
-	return out, nil
+	return providers, names, nil
 }
