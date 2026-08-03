@@ -151,3 +151,8 @@ csharp/**/obj/
 **/__pycache__/
 go/go.work
 go/go.work.sum
+
+# CI checkouts of sibling repos
+.omni/
+.boru/
+boru-bin

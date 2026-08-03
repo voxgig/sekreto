@@ -14,10 +14,16 @@ ten stay one.
    spec. Changing the spec means changing ten ports, so change it
    deliberately.
 
-3. **No third-party dependencies, in any port.** Where a standard library
-   is missing something, the port carries a small one of its own: JSON in
-   Java and Rust (C# uses the BCL's), HTTP in Rust. That is the cost of the
-   rule and it is worth paying.
+3. **No third-party dependencies, with exactly one exception.** Where a
+   standard library is missing something, the port carries a small one of
+   its own: JSON in Java and Rust (C# uses the BCL's), HTTP in Rust. That is
+   the cost of the rule and it is worth paying.
+
+   The exception is `rustls` in the Rust port, for TLS. That line is drawn
+   deliberately: hand-rolling TLS in a secrets library would be far worse
+   than one well-audited crate. Do not treat it as precedent for a second
+   dependency — if you think you need one, the answer is almost certainly a
+   small in-tree implementation, as it was for JSON, HTTP and regex.
 
 4. **Two ways to read, and they are not interchangeable.** `get` is
    transparent — the chain answers and the caller never learns which store

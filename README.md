@@ -59,9 +59,12 @@ exist" without hiding a typo.
 | [java](java/) | ✅ | ✅ |
 | [csharp](csharp/) | ✅ | ✅ |
 
-Every port has **zero third-party dependencies**. Where a language's
-standard library lacks something — JSON in Java and Rust, HTTP in Rust —
-the port carries a small one of its own rather than taking on a package.
+Every port has **zero third-party dependencies, with one deliberate
+exception**: the Rust port takes `rustls` for TLS. Everywhere else, where a
+standard library lacks something — JSON in Java and Rust, HTTP in Rust — the
+port carries a small one of its own rather than taking on a package. TLS is
+the line: hand-rolling it for a secrets library would be far worse than
+depending on a well-audited crate.
 
 ## Secret names
 
@@ -104,6 +107,10 @@ before a socket is opened; use `https://`. Loopback stays allowed for
 `vault server -dev` and for this repo's test harness. Vault's own answer to
 the same problem is TLS plus short-lived, policy-scoped tokens, response
 wrapping and audit devices — this guard just stops the easy mistake.
+
+Every port verifies the server certificate and host name over https. For an
+internal CA, `SEKRETO_CA_BUNDLE` names a PEM bundle of extra trust roots in
+the Rust port; the others use their platform trust store.
 
 ### boru
 

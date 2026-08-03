@@ -136,10 +136,9 @@ impl Provider for MemoryProvider {
 /// anyone on the path, so sekreto will not do it. Loopback stays allowed:
 /// that is `vault server -dev` and this repo's own test harness.
 ///
-/// NOTE for this port specifically: `src/http.rs` speaks plaintext HTTP/1.1
-/// only, so https is refused there too. Between the two rules, the Rust port
-/// can reach a HashiCorp vault on loopback and nowhere else. That is a real
-/// limitation, and deliberately a loud one - see http.rs.
+/// https goes over rustls, with the server certificate and host name both
+/// verified; `SEKRETO_CA_BUNDLE` adds trust roots for an internal CA. See
+/// `src/http.rs`.
 pub fn checkaddr(addr: &str) -> Answer<()> {
     if addr.starts_with("https://") {
         return Ok(());

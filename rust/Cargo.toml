@@ -6,6 +6,13 @@ description = "sekreto: one interface for secrets, wherever they live (Rust)"
 license = "MIT"
 
 [dependencies]
+# The one exception to this repo's no-dependencies rule, and a deliberate
+# one: a secrets library that talks to a remote vault needs TLS, and
+# hand-rolling TLS would be far worse than taking a well-audited crate.
+# rustls is pure Rust and memory-safe; webpki-roots supplies the Mozilla
+# root set. Nothing else is pulled in.
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "0.26"
 
 [lib]
 name = "voxgig_sekreto"
