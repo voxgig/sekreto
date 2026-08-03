@@ -7,13 +7,19 @@ wherever they live.
 make test                     # the conformance suite
 ```
 
-std has no HTTP client and no JSON, and sekreto takes no crates, so
-this port carries small ones of both.
+std has no HTTP client and no JSON, so this port carries small ones of both.
 
-`src/http.rs` speaks HTTP/1.1 over a `TcpStream`: a plaintext GET, a status
-line, and a body delimited by `Content-Length` or by chunks. **There is no
-TLS** — a vault reachable only over https needs a real client, and that
-file is the one place to change.
+It is also the **one port that takes dependencies**: `rustls` and
+`webpki-roots` for TLS — two crates, one exception. rustls deliberately
+ships no trust roots, so something has to supply them. A secrets library reaching a remote vault needs
+TLS, and hand-rolling TLS would be far worse than taking a well-audited,
+pure-Rust crate. Nothing else is pulled in.
+
+`src/http.rs` speaks HTTP/1.1 over a `TcpStream`: a GET, a status line, and
+a body delimited by `Content-Length`, by chunks, or by the connection
+closing. https goes over **rustls**, verifying both the server certificate
+and the host name, with `SEKRETO_CA_BUNDLE` adding roots for an internal
+CA — which is how most private Vault deployments are set up.
 
 Errors come back as `SekretoError` in a `Result`; a provider miss is
 `Ok(None)`. The cache is a `Vec`, not a map, so redaction order is stable.

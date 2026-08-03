@@ -14,10 +14,21 @@ ten stay one.
    spec. Changing the spec means changing ten ports, so change it
    deliberately.
 
-3. **No third-party dependencies, in any port.** Where a standard library
-   is missing something, the port carries a small one of its own: JSON in
-   Java and Rust (C# uses the BCL's), HTTP in Rust. That is the cost of the
-   rule and it is worth paying.
+3. **No third-party dependencies, with exactly one exception.** Where a
+   standard library is missing something, the port carries a small one of
+   its own: JSON in Java and Rust (C# uses the BCL's), HTTP in Rust. That is
+   the cost of the rule and it is worth paying.
+
+   The exception is **TLS in the Rust port**: `rustls`, plus `webpki-roots`
+   for the trust anchors, because rustls deliberately ships no root set and
+   something has to supply one. Two crates, one exception. That line is
+   drawn deliberately: hand-rolling TLS in a secrets library would be far
+   worse than depending on well-audited crates.
+
+   Do not treat it as precedent for a third. If you think you need one, the
+   answer is almost certainly a small in-tree implementation, as it was for
+   JSON, HTTP, PEM and base64 — all of which this port carries rather than
+   pulling in a crate.
 
 4. **Two ways to read, and they are not interchangeable.** `get` is
    transparent — the chain answers and the caller never learns which store

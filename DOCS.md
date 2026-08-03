@@ -228,9 +228,11 @@ mistake is `VAULT_ADDR=http://vault.internal:8200`:
 | `http://` anything else | `sekreto: refusing to send a token in plaintext to <addr> (use https)` |
 | anything not http(s) | `sekreto: not an http(s) address: <addr>` |
 
-The Rust port is narrower still: its in-tree HTTP client has no TLS, so it
-can reach a Vault on loopback and nowhere else. That is stated loudly in
-`rust/src/http.rs` rather than silently downgraded.
+Over https every port verifies the server certificate **and** the host name;
+neither is optional and there is no "skip verify" switch. The Rust port
+trusts the Mozilla root set via `rustls`, and `SEKRETO_CA_BUNDLE` names a PEM
+bundle of extra roots for an internal CA — additive, so a wrong path weakens
+nothing, it just adds no roots.
 
 ### `boru` — a boru vault
 

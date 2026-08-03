@@ -12,6 +12,11 @@
 # which one it came from. That indirection is the whole library.
 #
 # Usage: test/integration.sh [lang...]      (default: every built port)
+#
+# A port that is not built is skipped, so a partial checkout still tests
+# what it has. Set REQUIRE_ALL=1 to turn that skip into a failure - CI does,
+# because there a missing CLI means a build broke, and a skipped port that
+# reads as green is how a broken port ships.
 
 set -u
 
@@ -220,6 +225,12 @@ for lang in $LANGS; do
   fi
 
   if ! cli_ready "$lang"; then
+    if [ -n "${REQUIRE_ALL:-}" ]; then
+      echo "== $lang == $(red "NOT BUILT") (REQUIRE_ALL is set)"
+      fail=$((fail + 1))
+      FAILED+=("$lang/not-built")
+      continue
+    fi
     echo "== $lang == not built, skipped"
     continue
   fi
