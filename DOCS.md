@@ -88,12 +88,41 @@ new Sekreto({
 A `providers` entry is either a live provider or its declarative form —
 the same shape used in `spec/sekreto.json` and in an app's config file.
 
+### Transparent — the chain answers
+
 | method | answers |
 |---|---|
 | `get(name)` | the secret, or raises `sekreto: unknown secret: <name>` |
 | `try(name)` | the secret, or nothing if no provider has it |
 | `has(name)` | whether any provider has it |
 | `all(names)` | every named secret at once; a missing one is an error |
+
+### Directed — one named store answers
+
+| method | answers |
+|---|---|
+| `getfrom(store, name)` | the secret from that store, or raises `sekreto: unknown secret: <store>:<name>` |
+| `tryfrom(store, name)` | the secret from that store, or nothing if it does not have it |
+| `hasin(store, name)` | whether that store has it |
+| `stores()` | every store name that can be named, in order, without repeats |
+
+A store name defaults to the provider's kind and can be set with `name` in
+the spec, so a chain can hold `personal` and `team` boru vaults and address
+each. Several providers may share a name; a directed read walks all of them,
+in chain order.
+
+Naming a store that is not in the chain raises
+`sekreto: unknown store: <store>` — from `tryfrom` as well as `getfrom`.
+`try` already means "this store may not have it"; letting it also mean "this
+store may not exist" would swallow a typo.
+
+The cache is keyed by store *and* name, so a directed read and a transparent
+one never alias.
+
+### Everything else
+
+| method | answers |
+|---|---|
 | `sources()` | a description of each provider, in resolution order |
 | `redact(text)` | `text` with every value *this* Sekreto resolved hidden |
 | `refresh()` | drop cached values, so the next `get` asks again |
@@ -103,17 +132,17 @@ provider, so a typo fails the same way whether or not a vault is reachable.
 
 ### Per-language names
 
-| | optional lookup | redact-resolved |
-|---|---|---|
-| typescript, javascript | `try` | `redact` |
-| python | `try_` | `redact` |
-| ruby | `try` | `redact` |
-| php | `try` | `redact` |
-| perl | `try` | `redactall` |
-| go | `Try` → `(value, found, err)` | `Redact` |
-| rust | `trysecret` → `Option` | `redact` |
-| java | `tryget` | `redact` |
-| csharp | `TryGet` | `Redact` |
+| | optional lookup | directed | redact-resolved |
+|---|---|---|---|
+| typescript, javascript | `try` | `getfrom` / `tryfrom` | `redact` |
+| python | `try_` | `getfrom` / `tryfrom` | `redact` |
+| ruby | `try` | `getfrom` / `tryfrom` | `redact` |
+| php | `try` | `getfrom` / `tryfrom` | `redact` |
+| perl | `try` | `getfrom` / `tryfrom` | `redactall` |
+| go | `Try` → `(value, found, err)` | `GetFrom` / `TryFrom` | `Redact` |
+| rust | `trysecret` → `Option` | `getfrom` / `tryfrom` | `redact` |
+| java | `tryget` | `getfrom` / `tryfrom` | `redact` |
+| csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` |
 
 `try` is a keyword in Java and Python needs to avoid shadowing the
 statement, hence `tryget` and `try_`. Go and Rust have no exceptions, so
@@ -169,37 +198,79 @@ defaults in an app.
 
 `describe()` → `memory` or `memory:<prefix>`
 
-### `vault` — HashiCorp Vault, KV v2
+### `hashicorp` — HashiCorp Vault, KV v2
 
 ```ts
-{ kind: 'vault', addr: string, token: string, mount?: string }  // mount: 'secret'
+{ kind: 'hashicorp', addr: string, token: string, mount?: string }  // mount: 'secret'
 ```
 
 `api.token` reads `{addr}/v1/{mount}/data/api` with an `X-Vault-Token`
-header and takes the `token` field of `data.data`.
+header and takes the `token` field of `data.data`. This is Vault's published
+HTTP API, so the provider talks to a real Vault unmodified.
 
 - **404 → a miss**, so a vault can sit in a chain with fallbacks behind it
-- any other non-200 raises `sekreto: vault error: <status>: <url>`
+- any other non-200 raises `sekreto: hashicorp error: <status>: <url>`
+- a plaintext `addr` pointing anywhere but loopback raises before any socket
+  is opened — see below
 
-`describe()` → `vault:<addr>/<mount>`
+`describe()` → `hashicorp:<addr>/<mount>`
+
+**On sending secrets over a network.** Vault's own defences are TLS,
+short-lived policy-scoped tokens, response wrapping (a single-use token you
+unwrap once, so interception is detectable), dynamic secrets minted per use,
+and audit devices. sekreto adds one guard of its own, because the easy
+mistake is `VAULT_ADDR=http://vault.internal:8200`:
+
+| addr | result |
+|---|---|
+| `https://…` | allowed |
+| `http://127.0.0.1`, `localhost`, `::1` | allowed — `vault server -dev`, test harnesses |
+| `http://` anything else | `sekreto: refusing to send a token in plaintext to <addr> (use https)` |
+| anything not http(s) | `sekreto: not an http(s) address: <addr>` |
+
+The Rust port is narrower still: its in-tree HTTP client has no TLS, so it
+can reach a Vault on loopback and nowhere else. That is stated loudly in
+`rust/src/http.rs` rather than silently downgraded.
 
 ### `boru` — a boru vault
 
 ```ts
-{ kind: 'boru', addr: string, token: string }
+{ kind: 'boru', command?: string, namespace?: string, home?: string }
 ```
 
-`api.token` reads `{addr}/vault/api?field=token` with an `X-Boru-Token`
-header, expecting `{"ok":true,"value":"..."}`.
+- `command` — the executable to run, default `boru`
+- `namespace` — qualifies the alias as boru writes it, `<namespace>:<name>`
+- `home` — passed as `BORU_HOME`, for a vault outside `~`
 
-- **404, or `ok` not `true` → a miss**
-- any other non-200 raises `sekreto: boru vault error: <status>: <url>`
+`api.token` runs `boru vault get --reveal api.token`, which prints the
+secret on stdout and nothing else. A sekreto name is already a valid boru
+alias — boru allows letters, digits, dot, dash and underscore in a segment —
+so names cross over unchanged.
 
-`describe()` → `boru:<addr>`
+- **`no alias named …` → a miss**, and the chain carries on
+- anything else (locked vault, wrong passphrase) raises
+  `sekreto: boru vault error: <why>`; treating it as a miss would fall
+  through to a weaker store without saying so
+- the binary not being runnable raises `sekreto: cannot run <command>: <why>`
 
-> This is the protocol sekreto *assumes*, and what `test/mockvault.js`
-> implements. If the real boru vault differs, `boruprovider` is the one
-> function to change — nothing above it sees the wire format.
+`describe()` → `boru`, or `boru:<namespace>`
+
+The passphrase is read by boru itself from `BORU_VAULT_PASSPHRASE`. sekreto
+never takes it as config and never puts it on a command line, where the
+process table would show it.
+
+> **Why there is no HTTP read.** boru's `vault proxy` and `vault mcp` are a
+> *credential broker*: they inject the real secret into an outbound request
+> and forward it, so a caller can use a credential without ever holding it.
+> Handing the value back is the one thing that design refuses. sekreto's
+> interface is the opposite — `get` means "give me the secret" — so it reads
+> the vault the way boru itself does, through the CLI.
+>
+> If your caller is untrusted (an agent, a plugin), boru's broker is the
+> better tool and sekreto is the wrong layer. Use both in the other
+> direction instead: `boru vault exec api.token=API_TOKEN -- yourapp` puts
+> the secret in the child's environment, where sekreto's `env` provider
+> finds it with no sekreto configuration at all.
 
 ---
 
@@ -213,9 +284,14 @@ every port:
 |---|---|
 | `sekreto: invalid name: <name>` | a name that is not well-formed |
 | `sekreto: unknown secret: <name>` | no provider had it |
+| `sekreto: unknown secret: <store>:<name>` | a directed read, and that store did not have it |
+| `sekreto: unknown store: <store>` | a directed read naming a store not in the chain |
 | `sekreto: unknown provider kind: <kind>` | a spec naming no known provider |
-| `sekreto: vault error: <status>: <url>` | a vault answered neither 200 nor 404 |
-| `sekreto: boru vault error: <status>: <url>` | likewise, for a boru vault |
+| `sekreto: hashicorp error: <status>: <url>` | Vault answered neither 200 nor 404 |
+| `sekreto: refusing to send a token in plaintext to <addr> (use https)` | a remote plaintext Vault address |
+| `sekreto: not an http(s) address: <addr>` | a Vault address of some other scheme |
+| `sekreto: boru vault error: <why>` | boru failed for a reason other than a missing alias |
+| `sekreto: cannot run <command>: <why>` | the boru binary could not be started |
 | `sekreto: cannot reach <url>: <why>` | the vault could not be contacted |
 
 Those messages are pinned by `spec/sekreto.json`, so they cannot drift
@@ -238,10 +314,18 @@ JSON, run by every port through its own
 | `resolve` | `Sekreto.get` over a chain of `memory` providers |
 | `trysecret` | `Sekreto.try` |
 | `sources` | `Sekreto.sources` |
+| `stores` | `Sekreto.stores` |
+| `getfrom` | `Sekreto.getfrom` |
+| `tryfrom` | `Sekreto.tryfrom` |
 | `redact` | `redact` |
 
-The chain groups use `memory` providers so the spec stays hermetic — it
-runs the same on a machine with no network. The `vault` and `boru`
-providers are proved instead by `test/integration.sh`, which talks to a
-real server over a real socket. That split is deliberate: the spec pins
-behaviour, the integration run pins reality.
+The chain groups use `memory` providers so the spec stays hermetic — it runs
+the same on a machine with no network. The `hashicorp` and `boru` providers
+appear in it only where nothing has to be contacted: their `describe()`
+strings, and the plaintext-address guard, which raises before a socket is
+opened.
+
+Actually *fetching* from them is proved instead by `test/integration.sh`,
+which talks to a stand-in Vault over a real socket and to a real boru vault
+through the real binary. That split is deliberate: the spec pins behaviour,
+the integration run pins reality.

@@ -16,8 +16,13 @@ ten stay one.
 
 3. **No third-party dependencies, in any port.** Where a standard library
    is missing something, the port carries a small one of its own: JSON in
-   Java, Rust and C#(via the BCL), HTTP in Rust. That is the cost of the
+   Java and Rust (C# uses the BCL's), HTTP in Rust. That is the cost of the
    rule and it is worth paying.
+
+4. **Two ways to read, and they are not interchangeable.** `get` is
+   transparent — the chain answers and the caller never learns which store
+   did. `getfrom` is directed — one named store answers, or nothing. Adding
+   a method to one half means adding its twin to the other.
 
 ## Both suites, every time
 
@@ -63,8 +68,18 @@ statements in `test/integration.sh`.
   Go and Rust keep insertion order explicitly for this reason.
 - **A missing `.env` is not an error.** It means "no secrets here". A port
   that raises there breaks every chain on a machine without one.
-- **404 from a vault is a miss, not an error.** Otherwise a vault cannot
-  sit in a chain with anything behind it.
+- **A miss and a failure are different.** 404 from HashiCorp, and boru's
+  "no alias named", mean *this store does not hold it* — the chain carries
+  on. A locked vault, a wrong passphrase or an unreachable host means *this
+  store could not answer* — that must raise. Getting this backwards makes a
+  chain silently fall through to a weaker store, which is the worst failure
+  mode the library has.
+- **Naming a store that does not exist raises, even from `tryfrom`.** `try`
+  already means "may not have it"; letting it also mean "may not exist"
+  swallows typos.
+- **Store names come from `describe()`.** The default is everything before
+  the first `:`, so a new provider gets a sensible store name for free —
+  but it means `describe()` must keep leading with the kind.
 
 ## voxgig/omni
 
@@ -81,18 +96,25 @@ never do.
 
 ## The API server and the vaults
 
-`test/integration.sh` starts three servers of its own:
+`test/integration.sh` stands up:
 
 - `api/server.js` — Fastify, and the only thing it does is refuse any
   request without the right bearer token
-- `test/mockvault.js vault` — HashiCorp Vault KV v2, enough of it
-- `test/mockvault.js boru` — a boru vault
+- `test/mockhashicorp.js` — HashiCorp Vault KV v2, enough of it. Vault
+  publishes its wire protocol, so imitating it is legitimate: the provider
+  talks to this exactly as it would to a real Vault.
+- a **real boru vault**, built by running `boru vault init` and
+  `boru vault add` against the actual binary, found via `$BORU` or `PATH`.
 
-The boru wire format there is the one sekreto assumes
-(`GET {addr}/vault/{path}?field=...`, `X-Boru-Token`,
-`{"ok":true,"value":...}`). If the real protocol differs, change
-`boruprovider` in each port and `test/mockvault.js` to match — nothing
-above the provider sees the wire format.
+**There is no boru mock, and there should not be one.** boru has no
+read-a-secret wire protocol to imitate — its vault is read through the
+`boru` CLI — so a mock would be inventing a contract rather than standing in
+for one. When the binary is absent the boru checks are skipped, and the run
+says so. A skipped check is honest; a faked one is not.
+
+If you are tempted to add an HTTP boru provider, read
+`cmd/go/internal/vault/proxy.go` in boru-lang/boru first. The broker there
+exists precisely so that a caller never receives the credential.
 
 ## Style
 
