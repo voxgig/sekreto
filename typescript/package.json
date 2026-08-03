@@ -1,0 +1,18 @@
+{
+  "name": "@voxgig/sekreto",
+  "version": "0.1.0",
+  "description": "sekreto: one interface for secrets (TypeScript, canonical)",
+  "license": "MIT",
+  "main": "dist/src/index.js",
+  "types": "dist/src/index.d.ts",
+  "files": ["dist/src"],
+  "scripts": {
+    "build": "tsc",
+    "test": "npm run build && node --test \"dist/test/*.test.js\"",
+    "cli": "npm run build && node dist/cli/sekreto-cli.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.5.0"
+  }
+}

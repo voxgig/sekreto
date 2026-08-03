@@ -141,3 +141,11 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+
+# --- sekreto build artifacts ---
+go/build/
+rust/target/
+java/build/
+csharp/**/bin/
+csharp/**/obj/
+**/__pycache__/
