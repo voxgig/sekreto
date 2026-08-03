@@ -58,6 +58,33 @@ def vaultref(name):
     return {'path': '/'.join(parts[:-1]), 'field': parts[-1]}
 
 
+def flatname(name, sep):
+    """A name flattened to one segment: `api.token` -> `api_token` (GCP
+    Secret Manager, `_`) or `api-token` (Azure Key Vault, `-`).
+
+    Those stores have no path hierarchy and reject dots in ids, so the
+    dots become the store's conventional separator.
+    """
+    checkname(name)
+    return sep.join(name.split('.'))
+
+
+def awsparam(name, prefix=None):
+    """The AWS SSM Parameter Store name for a name: dots become the path
+    hierarchy, rooted at `/` (or at a prefix): `db.pass.main` ->
+    `/db/pass/main`, or `/app/db/pass/main` under prefix `/app`.
+    """
+    checkname(name)
+
+    base = prefix or ''
+    if '' != base and not base.startswith('/'):
+        base = '/' + base
+    if base.endswith('/'):
+        base = base[:-1]
+
+    return base + '/' + '/'.join(name.split('.'))
+
+
 def parsedotenv(text):
     """Parse `.env` text into a map of raw keys to values.
 
