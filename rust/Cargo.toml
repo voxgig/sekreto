@@ -1,0 +1,22 @@
+[package]
+name = "voxgig_sekreto"
+version = "0.1.0"
+edition = "2021"
+description = "sekreto: one interface for secrets, wherever they live (Rust)"
+license = "MIT"
+
+[dependencies]
+
+[lib]
+name = "voxgig_sekreto"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sekreto-cli"
+path = "src/bin/sekreto-cli.rs"
+
+# voxgig/omni drives the conformance suite only - the library and CLI depend
+# on nothing but std. `make test` links vendor/omni to wherever the omni
+# checkout actually is, so this path works on any machine.
+[dev-dependencies]
+voxgig_omni = { path = "vendor/omni" }

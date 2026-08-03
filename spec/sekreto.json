@@ -1,0 +1,408 @@
+{
+  "primary": {
+    "sekreto": {
+      "validname": {
+        "set": [
+          { "id": "validname#ok", "doc": true, "in": "api.token", "out": true },
+          { "in": "token", "out": true },
+          { "in": "db.pass.main", "out": true },
+          { "in": "a", "out": true },
+          { "in": "a1.b2", "out": true },
+          { "in": "with_underscore", "out": true },
+          { "in": "", "out": false },
+          { "in": ".", "out": false },
+          { "in": "a.", "out": false },
+          { "in": ".a", "out": false },
+          { "in": "a..b", "out": false },
+          { "in": "a b", "out": false },
+          { "in": "a-b", "out": false },
+          { "in": "A.B", "out": false },
+          { "in": "a/b", "out": false },
+          { "in": "a$b", "out": false }
+        ]
+      },
+
+      "envkey": {
+        "set": [
+          {
+            "id": "envkey#dotted",
+            "doc": true,
+            "in": { "name": "api.token" },
+            "out": "API_TOKEN"
+          },
+          { "in": { "name": "token" }, "out": "TOKEN" },
+          { "in": { "name": "db.pass.main" }, "out": "DB_PASS_MAIN" },
+          { "in": { "name": "with_underscore" }, "out": "WITH_UNDERSCORE" },
+          { "in": { "name": "api.token", "prefix": "SEKRETO_" }, "out": "SEKRETO_API_TOKEN" },
+          { "in": { "name": "token", "prefix": "APP_" }, "out": "APP_TOKEN" },
+          { "in": { "name": "a b" }, "err": "invalid name" },
+          { "in": { "name": "" }, "err": "sekreto: invalid name: " }
+        ]
+      },
+
+      "vaultref": {
+        "set": [
+          {
+            "id": "vaultref#dotted",
+            "doc": true,
+            "in": "api.token",
+            "out": { "path": "api", "field": "token" }
+          },
+          { "in": "db.pass.main", "out": { "path": "db/pass", "field": "main" } },
+          { "in": "token", "out": { "path": "token", "field": "value" } },
+          { "in": "a.b.c.d", "out": { "path": "a/b/c", "field": "d" } },
+          { "in": "a b", "err": "invalid name" }
+        ]
+      },
+
+      "parsedotenv": {
+        "set": [
+          {
+            "id": "parsedotenv#basic",
+            "doc": true,
+            "in": "API_TOKEN=abc123",
+            "out": { "API_TOKEN": "abc123" }
+          },
+          { "in": "", "out": {} },
+          { "in": "\n\n", "out": {} },
+          { "in": "# only a comment", "out": {} },
+          { "in": "A=1\nB=2", "out": { "A": "1", "B": "2" } },
+          { "in": "A=1\n# comment\nB=2", "out": { "A": "1", "B": "2" } },
+          { "in": "  A  =  1  ", "out": { "A": "1" } },
+          { "in": "export A=1", "out": { "A": "1" } },
+          { "in": "A=\"quoted value\"", "out": { "A": "quoted value" } },
+          { "in": "A='single quoted'", "out": { "A": "single quoted" } },
+          { "in": "A=has=equals", "out": { "A": "has=equals" } },
+          { "in": "A=", "out": { "A": "" } },
+          { "in": "A=\"\"", "out": { "A": "" } },
+          { "in": "A=trailing # not a comment", "out": { "A": "trailing # not a comment" } },
+          { "in": "A=\"line\\nbreak\"", "out": { "A": "line\nbreak" } },
+          { "in": "A=1\nNOEQUALS\nB=2", "out": { "A": "1", "B": "2" } },
+          { "in": "A=1\r\nB=2", "out": { "A": "1", "B": "2" } },
+          { "in": "a=1", "out": { "a": "1" } }
+        ]
+      },
+
+      "resolve": {
+        "set": [
+          {
+            "id": "resolve#first",
+            "doc": true,
+            "in": {
+              "chain": [{ "kind": "memory", "values": { "API_TOKEN": "T1" } }],
+              "name": "api.token"
+            },
+            "out": "T1"
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "values": {} },
+                { "kind": "memory", "values": { "API_TOKEN": "T2" } }
+              ],
+              "name": "api.token"
+            },
+            "out": "T2"
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "values": { "API_TOKEN": "FIRST" } },
+                { "kind": "memory", "values": { "API_TOKEN": "SECOND" } }
+              ],
+              "name": "api.token"
+            },
+            "out": "FIRST"
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "prefix": "SEKRETO_", "values": { "SEKRETO_API_TOKEN": "P" } }
+              ],
+              "name": "api.token"
+            },
+            "out": "P"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "values": { "OTHER": "X" } }],
+              "name": "api.token"
+            },
+            "err": "sekreto: unknown secret: api.token"
+          },
+          {
+            "in": { "chain": [], "name": "api.token" },
+            "err": "unknown secret"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "values": { "API_TOKEN": "T" } }],
+              "name": "a b"
+            },
+            "err": "invalid name"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "values": { "API_TOKEN": "" } }],
+              "name": "api.token"
+            },
+            "out": ""
+          }
+        ]
+      },
+
+      "trysecret": {
+        "set": [
+          {
+            "id": "trysecret#hit",
+            "doc": true,
+            "in": {
+              "chain": [{ "kind": "memory", "values": { "API_TOKEN": "T" } }],
+              "name": "api.token"
+            },
+            "out": "T"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "values": {} }],
+              "name": "api.token"
+            },
+            "out": "__NULL__"
+          }
+        ]
+      },
+
+      "sources": {
+        "set": [
+          {
+            "id": "sources#kinds",
+            "doc": true,
+            "in": {
+              "chain": [
+                { "kind": "memory", "values": {} },
+                { "kind": "memory", "prefix": "APP_", "values": {} }
+              ]
+            },
+            "out": ["memory", "memory:APP_"]
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "boru" },
+                { "kind": "boru", "namespace": "prod" },
+                { "kind": "hashicorp", "addr": "http://127.0.0.1:8200" }
+              ]
+            },
+            "out": ["boru", "boru:prod", "hashicorp:http://127.0.0.1:8200/secret"]
+          },
+          { "in": { "chain": [] }, "out": [] }
+        ]
+      },
+
+      "stores": {
+        "set": [
+          {
+            "id": "stores#default",
+            "doc": true,
+            "in": {
+              "chain": [
+                { "kind": "env" },
+                { "kind": "dotenv", "file": ".env" },
+                { "kind": "memory", "values": {} }
+              ]
+            },
+            "out": ["env", "dotenv", "memory"]
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "name": "local", "values": {} },
+                { "kind": "memory", "name": "shared", "values": {} }
+              ]
+            },
+            "out": ["local", "shared"]
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "values": {} },
+                { "kind": "memory", "prefix": "APP_", "values": {} }
+              ]
+            },
+            "out": ["memory"]
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "boru" }, { "kind": "boru", "namespace": "prod" }]
+            },
+            "out": ["boru"]
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "boru", "name": "personal" },
+                { "kind": "boru", "name": "team", "namespace": "prod" }
+              ]
+            },
+            "out": ["personal", "team"]
+          },
+          { "in": { "chain": [] }, "out": [] }
+        ]
+      },
+
+      "getfrom": {
+        "set": [
+          {
+            "id": "getfrom#named",
+            "doc": true,
+            "in": {
+              "chain": [
+                { "kind": "memory", "name": "local", "values": { "API_TOKEN": "LOCAL" } },
+                { "kind": "memory", "name": "shared", "values": { "API_TOKEN": "SHARED" } }
+              ],
+              "store": "shared",
+              "name": "api.token"
+            },
+            "out": "SHARED"
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "name": "local", "values": { "API_TOKEN": "LOCAL" } },
+                { "kind": "memory", "name": "shared", "values": { "API_TOKEN": "SHARED" } }
+              ],
+              "store": "local",
+              "name": "api.token"
+            },
+            "out": "LOCAL"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "values": { "API_TOKEN": "T" } }],
+              "store": "memory",
+              "name": "api.token"
+            },
+            "out": "T"
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "name": "pair", "values": {} },
+                { "kind": "memory", "name": "pair", "values": { "API_TOKEN": "SECOND" } }
+              ],
+              "store": "pair",
+              "name": "api.token"
+            },
+            "out": "SECOND"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "name": "local", "values": {} }],
+              "store": "local",
+              "name": "api.token"
+            },
+            "err": "sekreto: unknown secret: local:api.token"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "name": "local", "values": { "API_TOKEN": "T" } }],
+              "store": "nosuch",
+              "name": "api.token"
+            },
+            "err": "sekreto: unknown store: nosuch"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "values": { "API_TOKEN": "T" } }],
+              "store": "memory",
+              "name": "a b"
+            },
+            "err": "invalid name"
+          },
+          {
+            "doc": true,
+            "in": {
+              "chain": [{ "kind": "hashicorp", "addr": "http://vault.example.com:8200" }],
+              "store": "hashicorp",
+              "name": "api.token"
+            },
+            "err": "sekreto: refusing to send a token in plaintext to http://vault.example.com:8200 (use https)"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "hashicorp", "addr": "ftp://vault.example.com" }],
+              "store": "hashicorp",
+              "name": "api.token"
+            },
+            "err": "sekreto: not an http(s) address: ftp://vault.example.com"
+          }
+        ]
+      },
+
+      "tryfrom": {
+        "set": [
+          {
+            "id": "tryfrom#hit",
+            "doc": true,
+            "in": {
+              "chain": [{ "kind": "memory", "name": "local", "values": { "API_TOKEN": "T" } }],
+              "store": "local",
+              "name": "api.token"
+            },
+            "out": "T"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "name": "local", "values": {} }],
+              "store": "local",
+              "name": "api.token"
+            },
+            "out": "__NULL__"
+          },
+          {
+            "in": {
+              "chain": [
+                { "kind": "memory", "name": "local", "values": {} },
+                { "kind": "memory", "name": "shared", "values": { "API_TOKEN": "S" } }
+              ],
+              "store": "local",
+              "name": "api.token"
+            },
+            "out": "__NULL__"
+          },
+          {
+            "in": {
+              "chain": [{ "kind": "memory", "name": "local", "values": {} }],
+              "store": "nosuch",
+              "name": "api.token"
+            },
+            "err": "sekreto: unknown store: nosuch"
+          }
+        ]
+      },
+
+      "redact": {
+        "set": [
+          {
+            "id": "redact#one",
+            "doc": true,
+            "in": { "text": "token is s3cr3t-value", "values": ["s3cr3t-value"] },
+            "out": "token is [redacted]"
+          },
+          { "in": { "text": "nothing here", "values": ["s3cr3t"] }, "out": "nothing here" },
+          {
+            "in": { "text": "a=AAAA b=BBBB", "values": ["AAAA", "BBBB"] },
+            "out": "a=[redacted] b=[redacted]"
+          },
+          {
+            "in": { "text": "twice AAAA and AAAA", "values": ["AAAA"] },
+            "out": "twice [redacted] and [redacted]"
+          },
+          { "in": { "text": "short abc", "values": ["abc"] }, "out": "short abc" },
+          { "in": { "text": "empty", "values": [""] }, "out": "empty" },
+          { "in": { "text": "", "values": ["AAAA"] }, "out": "" }
+        ]
+      }
+    }
+  }
+}

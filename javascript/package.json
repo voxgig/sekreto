@@ -1,0 +1,10 @@
+{
+  "name": "@voxgig/sekreto-js",
+  "version": "0.1.0",
+  "description": "sekreto: one interface for secrets, wherever they live",
+  "main": "src/index.js",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

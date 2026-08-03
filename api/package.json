@@ -1,0 +1,15 @@
+{
+  "name": "@voxgig/sekreto-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The token-protected API that validates sekreto end to end",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "fastify": "^5.0.0"
+  }
+}
