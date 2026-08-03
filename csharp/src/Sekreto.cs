@@ -95,6 +95,44 @@ namespace Voxgig.Sekreto
 
             return out_;
         }
+
+        /// <summary>
+        /// A name flattened to one segment: `api.token` -> `api_token` (GCP
+        /// Secret Manager, `_`) or `api-token` (Azure Key Vault, `-`).
+        ///
+        /// <para>Those stores have no path hierarchy and reject dots in ids,
+        /// so the dots become the store's conventional separator.</para>
+        /// </summary>
+        public static string FlatName(object name, string sep)
+        {
+            CheckName(name);
+
+            return string.Join(sep, ((string)name).Split('.'));
+        }
+
+        /// <summary>
+        /// The AWS SSM Parameter Store name for a name: dots become the path
+        /// hierarchy, rooted at `/` (or at a prefix): `db.pass.main` ->
+        /// `/db/pass/main`, or `/app/db/pass/main` under prefix `/app`.
+        /// </summary>
+        public static string AwsParam(object name, string prefix = null)
+        {
+            CheckName(name);
+
+            string base_ = prefix ?? "";
+
+            if ("" != base_ && !base_.StartsWith("/", StringComparison.Ordinal))
+            {
+                base_ = "/" + base_;
+            }
+
+            if (base_.EndsWith("/", StringComparison.Ordinal))
+            {
+                base_ = base_.Substring(0, base_.Length - 1);
+            }
+
+            return base_ + "/" + string.Join("/", ((string)name).Split('.'));
+        }
     }
 
     public static class Dotenv

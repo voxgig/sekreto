@@ -62,6 +62,12 @@ internal static class Program
 
     private static readonly Subject VAULTREF = args => Names.VaultRef(args[0]);
 
+    private static readonly Subject FLATNAME =
+        args => Names.FlatName(Entry(args[0])["name"], Text(Entry(args[0])["sep"]));
+
+    private static readonly Subject AWSPARAM =
+        args => Names.AwsParam(Entry(args[0])["name"], Text(Entry(args[0]).GetValueOrDefault("prefix")));
+
     private static readonly Subject PARSEDOTENV = args => Dotenv.Parse(args[0]);
 
     private static readonly Subject RESOLVE =
@@ -79,6 +85,9 @@ internal static class Program
 
     private static readonly Subject TRYFROM = args => ChainOf(args[0]).TryFrom(
         Text(Entry(args[0])["store"]), Text(Entry(args[0])["name"]));
+
+    // The answer is an insertion-ordered map, compared as a JSON object.
+    private static readonly Subject SIGV4 = args => Sigv4.Sign(Entry(args[0]));
 
     private static readonly Subject REDACT = args => Sekreto.Redact(
         Entry(args[0])["text"], Entry(args[0])["values"] as List<object>);
@@ -116,6 +125,8 @@ internal static class Program
         TestCase("validname", () => R.RunSetFlags(R.Set("validname"), Flags.NoNull(), VALIDNAME));
         TestCase("envkey", () => R.RunSet(R.Set("envkey"), ENVKEY));
         TestCase("vaultref", () => R.RunSet(R.Set("vaultref"), VAULTREF));
+        TestCase("flatname", () => R.RunSet(R.Set("flatname"), FLATNAME));
+        TestCase("awsparam", () => R.RunSet(R.Set("awsparam"), AWSPARAM));
         TestCase("parsedotenv", () => R.RunSet(R.Set("parsedotenv"), PARSEDOTENV));
         TestCase("resolve", () => R.RunSet(R.Set("resolve"), RESOLVE));
         TestCase("trysecret", () => R.RunSet(R.Set("trysecret"), TRYSECRET));
@@ -123,6 +134,7 @@ internal static class Program
         TestCase("stores", () => R.RunSet(R.Set("stores"), STORES));
         TestCase("getfrom", () => R.RunSet(R.Set("getfrom"), GETFROM));
         TestCase("tryfrom", () => R.RunSet(R.Set("tryfrom"), TRYFROM));
+        TestCase("sigv4", () => R.RunSet(R.Set("sigv4"), SIGV4));
         TestCase("redact", () => R.RunSet(R.Set("redact"), REDACT));
 
         Console.WriteLine("\n" + passcount + " passed, " + failcount + " failed");
