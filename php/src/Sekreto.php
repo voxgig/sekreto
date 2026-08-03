@@ -86,6 +86,38 @@ final class Name
 
         return ['path' => implode('/', $parts), 'field' => $field];
     }
+
+    /**
+     * A name flattened to one segment: `api.token` -> `api_token` (GCP
+     * Secret Manager, `_`) or `api-token` (Azure Key Vault, `-`).
+     *
+     * Those stores have no path hierarchy and reject dots in ids, so the
+     * dots become the store's conventional separator.
+     */
+    public static function flatname(string $name, string $sep): string
+    {
+        self::check($name);
+
+        return implode($sep, explode('.', $name));
+    }
+
+    /**
+     * The AWS SSM Parameter Store name for a name: dots become the path
+     * hierarchy, rooted at `/` (or at a prefix): `db.pass.main` ->
+     * `/db/pass/main`, or `/app/db/pass/main` under prefix `/app`.
+     */
+    public static function awsparam(string $name, ?string $prefix = null): string
+    {
+        self::check($name);
+
+        $base = $prefix ?? '';
+        if ('' !== $base && !str_starts_with($base, '/')) {
+            $base = '/' . $base;
+        }
+        $base = preg_replace('#/$#', '', $base);
+
+        return $base . '/' . implode('/', explode('.', $name));
+    }
 }
 
 /**
