@@ -60,12 +60,16 @@ fn specof(value: &OmniJson) -> ProviderSpec {
 
     ProviderSpec {
         kind: text(&field(value, "kind")),
+        name: text(&field(value, "name")),
         prefix: text(&field(value, "prefix")),
         file: text(&field(value, "file")),
         values,
         addr: text(&field(value, "addr")),
         token: text(&field(value, "token")),
         mount: text(&field(value, "mount")),
+        command: text(&field(value, "command")),
+        namespace: text(&field(value, "namespace")),
+        home: text(&field(value, "home")),
     }
 }
 
@@ -75,9 +79,10 @@ fn chainof(value: &OmniJson) -> Result<Sekreto, String> {
         _ => Vec::new(),
     };
 
+    let names: Vec<String> = specs.iter().map(|spec| spec.name.clone()).collect();
     let providers = makechain(&specs).map_err(|err| err.message)?;
 
-    Ok(Sekreto::uncached(providers))
+    Ok(Sekreto::named(providers, &names, false))
 }
 
 fn runner() -> RunPack {
@@ -201,6 +206,64 @@ fn sources_group() {
 
     R.runset(&R.set("sources"), Some(&subject))
         .expect("sources");
+}
+
+#[test]
+fn stores_group() {
+    let R = runner();
+
+    let subject: Subject = Rc::new(|args: &[OmniJson]| {
+        let secrets = chainof(&args[0])?;
+
+        Ok(OmniJson::List(
+            secrets.stores().into_iter().map(OmniJson::Str).collect(),
+        ))
+    });
+
+    R.runset(&R.set("stores"), Some(&subject)).expect("stores");
+}
+
+#[test]
+fn getfrom_group() {
+    let R = runner();
+
+    let subject: Subject = Rc::new(|args: &[OmniJson]| {
+        let mut secrets = chainof(&args[0])?;
+
+        secrets
+            .getfrom(
+                &text(&field(&args[0], "store")),
+                &text(&field(&args[0], "name")),
+            )
+            .map(OmniJson::Str)
+            .map_err(|err| err.message)
+    });
+
+    R.runset(&R.set("getfrom"), Some(&subject))
+        .expect("getfrom");
+}
+
+#[test]
+fn tryfrom_group() {
+    let R = runner();
+
+    let subject: Subject = Rc::new(|args: &[OmniJson]| {
+        let mut secrets = chainof(&args[0])?;
+
+        match secrets
+            .tryfrom(
+                &text(&field(&args[0], "store")),
+                &text(&field(&args[0], "name")),
+            )
+            .map_err(|err| err.message)?
+        {
+            Some(found) => Ok(OmniJson::Str(found)),
+            None => Ok(OmniJson::Null),
+        }
+    });
+
+    R.runset(&R.set("tryfrom"), Some(&subject))
+        .expect("tryfrom");
 }
 
 #[test]

@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
+use std::process::Command;
 
 use crate::http;
 use crate::json;
@@ -30,12 +31,19 @@ pub trait Provider {
 #[derive(Clone, Debug, Default)]
 pub struct ProviderSpec {
     pub kind: String,
+    /// The store name `Sekreto::getfrom` addresses. Defaults to `kind`.
+    pub name: String,
     pub prefix: String,
     pub file: String,
     pub values: BTreeMap<String, String>,
+    /// hashicorp
     pub addr: String,
     pub token: String,
     pub mount: String,
+    /// boru
+    pub command: String,
+    pub namespace: String,
+    pub home: String,
 }
 
 impl ProviderSpec {
@@ -120,19 +128,63 @@ impl Provider for MemoryProvider {
     }
 }
 
+/// Refuse to send a Vault token in the clear.
+///
+/// Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
+/// convenience. Sending `X-Vault-Token` over http to anything but the local
+/// machine puts both the token and the secret it fetches on the wire for
+/// anyone on the path, so sekreto will not do it. Loopback stays allowed:
+/// that is `vault server -dev` and this repo's own test harness.
+///
+/// NOTE for this port specifically: `src/http.rs` speaks plaintext HTTP/1.1
+/// only, so https is refused there too. Between the two rules, the Rust port
+/// can reach a HashiCorp vault on loopback and nowhere else. That is a real
+/// limitation, and deliberately a loud one - see http.rs.
+pub fn checkaddr(addr: &str) -> Answer<()> {
+    if addr.starts_with("https://") {
+        return Ok(());
+    }
+
+    if !addr.starts_with("http://") {
+        return Err(SekretoError::new(format!(
+            "sekreto: not an http(s) address: {}",
+            addr
+        )));
+    }
+
+    let host = addr["http://".len()..]
+        .split('/')
+        .next()
+        .unwrap_or("")
+        .split(':')
+        .next()
+        .unwrap_or("");
+
+    if matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]") {
+        return Ok(());
+    }
+
+    Err(SekretoError::new(format!(
+        "sekreto: refusing to send a token in plaintext to {} (use https)",
+        addr
+    )))
+}
+
 /// HashiCorp Vault, KV v2.
 ///
 /// `api.token` reads `{addr}/v1/{mount}/data/api` and takes the `token`
 /// field of `data.data`. A 404 means "not here", which is a miss rather
 /// than an error, so a vault can sit in a chain with fallbacks.
-pub struct VaultProvider {
+pub struct HashicorpProvider {
     pub addr: String,
     pub token: String,
     pub mount: String,
 }
 
-impl Provider for VaultProvider {
+impl Provider for HashicorpProvider {
     fn lookup(&self, name: &str) -> Answer<Option<String>> {
+        checkaddr(&self.addr)?;
+
         let reference = vaultref(name)?;
 
         let url = format!(
@@ -150,7 +202,7 @@ impl Provider for VaultProvider {
 
         if 200 != response.status {
             return Err(SekretoError::new(format!(
-                "sekreto: vault error: {}: {}",
+                "sekreto: hashicorp error: {}: {}",
                 response.status, url
             )));
         }
@@ -169,63 +221,99 @@ impl Provider for VaultProvider {
     }
 
     fn describe(&self) -> String {
-        format!("vault:{}/{}", self.addr, self.mount)
+        format!("hashicorp:{}/{}", self.addr, self.mount)
     }
 }
 
-/// A boru vault.
+/// A boru vault (https://github.com/boru-lang/boru).
 ///
-/// The boru vault protocol as sekreto uses it: a GET of
-/// `{addr}/vault/{path}?field={field}` with an `X-Boru-Token` header,
-/// answering `{"ok":true,"value":"..."}` when the secret exists and
-/// `{"ok":false}` (or 404) when it does not.
+/// boru keeps secrets in a local encrypted keyring and hands a value out
+/// through its own CLI: `boru vault get --reveal <alias>` prints the secret
+/// on stdout, and nothing else.
+///
+/// There is deliberately no HTTP read here. boru's `vault proxy` and
+/// `vault mcp` are a *credential broker*: they inject the real secret into an
+/// outbound request and forward it, so an agent can call an API without ever
+/// holding the credential. Handing a value back is the one thing that broker
+/// is built not to do, so sekreto reads the vault the way boru itself does -
+/// through the CLI.
+///
+/// A sekreto name is already a valid boru alias, so `api.token` crosses over
+/// unchanged. A namespace qualifies it the way boru writes it, `ns:name`.
+///
+/// The passphrase is read by boru itself from `BORU_VAULT_PASSPHRASE`.
+/// sekreto never accepts it as config and never puts it on a command line,
+/// where it would show up in the process table.
 pub struct BoruProvider {
-    pub addr: String,
-    pub token: String,
+    pub command: String,
+    pub namespace: String,
+    pub home: String,
 }
 
 impl Provider for BoruProvider {
     fn lookup(&self, name: &str) -> Answer<Option<String>> {
-        let reference = vaultref(name)?;
+        crate::sekreto::checkname(name)?;
 
-        let url = format!(
-            "{}/vault/{}?field={}",
-            self.addr.trim_end_matches('/'),
-            reference.path,
-            http::urlencode(&reference.field)
-        );
-
-        let response = http::get(&url, "X-Boru-Token", &self.token)?;
-
-        if 404 == response.status {
-            return Ok(None);
-        }
-
-        if 200 != response.status {
-            return Err(SekretoError::new(format!(
-                "sekreto: boru vault error: {}: {}",
-                response.status, url
-            )));
-        }
-
-        let body = match json::parse(&response.body) {
-            Some(body) => body,
-            None => return Ok(None),
+        let alias = if self.namespace.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}:{}", self.namespace, name)
         };
 
-        if !matches!(body.get("ok"), Some(json::Json::Bool(true))) {
+        let mut run = Command::new(&self.command);
+        run.args(["vault", "get", "--reveal", &alias]);
+
+        if !self.home.is_empty() {
+            run.env("BORU_HOME", &self.home);
+        }
+
+        let done = run.output().map_err(|err| {
+            SekretoError::new(format!("sekreto: cannot run {}: {}", self.command, err))
+        })?;
+
+        if done.status.success() {
+            // boru prints the value and one newline, and nothing else.
+            let out = String::from_utf8_lossy(&done.stdout).to_string();
+            return Ok(Some(
+                out.strip_suffix('\n').map(str::to_string).unwrap_or(out),
+            ));
+        }
+
+        let why = String::from_utf8_lossy(&done.stderr).trim().to_string();
+
+        // "no alias named" is boru saying it does not hold this secret, which
+        // is a miss: the chain carries on to the next provider. A locked vault
+        // or a wrong passphrase is not a miss - treating it as one would fall
+        // through to a weaker store without saying so.
+        if borumiss(&why) {
             return Ok(None);
         }
 
-        Ok(body
-            .get("value")
-            .filter(|value| !matches!(value, json::Json::Null))
-            .map(|value| value.text()))
+        let reason = if why.is_empty() {
+            format!("exit {}", done.status.code().unwrap_or(-1))
+        } else {
+            why
+        };
+
+        Err(SekretoError::new(format!(
+            "sekreto: boru vault error: {}",
+            reason
+        )))
     }
 
     fn describe(&self) -> String {
-        format!("boru:{}", self.addr)
+        if self.namespace.is_empty() {
+            "boru".to_string()
+        } else {
+            format!("boru:{}", self.namespace)
+        }
     }
+}
+
+/// Does this boru failure mean "no such secret" rather than "I could not
+/// answer"? Matched on boru's own wording for a missing alias.
+fn borumiss(why: &str) -> bool {
+    why.contains("no alias named")
 }
 
 /// Build a provider from its declarative form.
@@ -246,7 +334,7 @@ pub fn makeprovider(spec: &ProviderSpec) -> Answer<Box<dyn Provider>> {
             values: spec.values.clone(),
             prefix: spec.prefix.clone(),
         })),
-        "vault" => Ok(Box::new(VaultProvider {
+        "hashicorp" => Ok(Box::new(HashicorpProvider {
             addr: spec.addr.clone(),
             token: spec.token.clone(),
             mount: if spec.mount.is_empty() {
@@ -256,8 +344,13 @@ pub fn makeprovider(spec: &ProviderSpec) -> Answer<Box<dyn Provider>> {
             },
         })),
         "boru" => Ok(Box::new(BoruProvider {
-            addr: spec.addr.clone(),
-            token: spec.token.clone(),
+            command: if spec.command.is_empty() {
+                "boru".to_string()
+            } else {
+                spec.command.clone()
+            },
+            namespace: spec.namespace.clone(),
+            home: spec.home.clone(),
         })),
         _ => Err(SekretoError::new(format!(
             "sekreto: unknown provider kind: {}",

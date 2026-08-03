@@ -14,8 +14,8 @@ pub mod sekreto;
 
 pub use crate::json::Json;
 pub use crate::providers::{
-    makechain, makeprovider, BoruProvider, DotenvProvider, EnvProvider, MemoryProvider, Provider,
-    ProviderSpec, VaultProvider,
+    makechain, makeprovider, BoruProvider, DotenvProvider, EnvProvider, HashicorpProvider,
+    MemoryProvider, Provider, ProviderSpec,
 };
 pub use crate::sekreto::{
     envkey, parsedotenv, redact, validname, vaultref, Answer, Sekreto, SekretoError, VaultRef,

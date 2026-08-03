@@ -204,30 +204,69 @@ pub fn redact(text: &str, values: &[String]) -> String {
     out
 }
 
+/// The store name a provider answers to when nothing says otherwise.
+///
+/// `describe` opens with the provider's kind - `hashicorp:...`,
+/// `dotenv:...`, plain `env` - so the kind is the natural default, and a
+/// custom provider gets a sensible name without implementing anything extra.
+pub fn storename(provider: &dyn Provider) -> String {
+    provider
+        .describe()
+        .split(':')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// One provider in the chain, under the store name it answers to.
+struct Entry {
+    store: String,
+    provider: Box<dyn Provider>,
+}
+
 /// The secrets facade: a chain of providers plus a cache.
+///
+/// Two ways to read. `get` is transparent - it walks the chain and takes the
+/// first hit, and the caller never learns which store answered. `getfrom` is
+/// directed - it names the store, and only that store is asked.
 pub struct Sekreto {
-    providers: Vec<Box<dyn Provider>>,
+    entries: Vec<Entry>,
     docache: bool,
-    // A Vec, not a map: redaction walks the resolved values, and their order
-    // must not vary between runs.
-    cache: Vec<(String, String)>,
+    // A Vec, not a map: the store a value came from stays attached, and
+    // redaction order does not vary between runs.
+    cache: Vec<(String, String, String)>,
 }
 
 impl Sekreto {
-    /// A Sekreto over this chain, caching resolved values.
+    /// A Sekreto over this chain, caching resolved values. Each provider
+    /// answers to its own kind as a store name.
     pub fn new(providers: Vec<Box<dyn Provider>>) -> Self {
-        Sekreto {
-            providers,
-            docache: true,
-            cache: Vec::new(),
-        }
+        Sekreto::named(providers, &[], true)
     }
 
     /// A Sekreto that asks its providers afresh every time.
     pub fn uncached(providers: Vec<Box<dyn Provider>>) -> Self {
+        Sekreto::named(providers, &[], false)
+    }
+
+    /// A Sekreto whose providers answer to the given store names, in the same
+    /// order. A name left empty falls back to the provider's kind.
+    pub fn named(providers: Vec<Box<dyn Provider>>, names: &[String], docache: bool) -> Self {
+        let entries = providers
+            .into_iter()
+            .enumerate()
+            .map(|(index, provider)| {
+                let store = match names.get(index) {
+                    Some(name) if !name.is_empty() => name.clone(),
+                    _ => storename(provider.as_ref()),
+                };
+                Entry { store, provider }
+            })
+            .collect();
+
         Sekreto {
-            providers,
-            docache: false,
+            entries,
+            docache,
             cache: Vec::new(),
         }
     }
@@ -245,18 +284,68 @@ impl Sekreto {
 
     /// The secret, or None if no provider has it.
     pub fn trysecret(&mut self, name: &str) -> Answer<Option<String>> {
+        self.resolve("", name, None)
+    }
+
+    /// The secret from one named store, or a SekretoError if that store does
+    /// not have it.
+    pub fn getfrom(&mut self, store: &str, name: &str) -> Answer<String> {
+        match self.tryfrom(store, name)? {
+            Some(found) => Ok(found),
+            None => Err(SekretoError::new(format!(
+                "sekreto: unknown secret: {}:{}",
+                store, name
+            ))),
+        }
+    }
+
+    /// The secret from one named store, or None if that store does not have
+    /// it.
+    ///
+    /// Naming a store that is not in the chain is an error, not a miss:
+    /// `trysecret` already means "this store may not have it", so it cannot
+    /// also mean "this store may not exist" without hiding a typo.
+    pub fn tryfrom(&mut self, store: &str, name: &str) -> Answer<Option<String>> {
+        if !self.entries.iter().any(|entry| entry.store == store) {
+            return Err(SekretoError::new(format!(
+                "sekreto: unknown store: {}",
+                store
+            )));
+        }
+
+        self.resolve(store, name, Some(store))
+    }
+
+    /// Walk the chain, optionally restricted to one store.
+    fn resolve(
+        &mut self,
+        cachestore: &str,
+        name: &str,
+        only: Option<&str>,
+    ) -> Answer<Option<String>> {
         checkname(name)?;
 
         if self.docache {
-            if let Some((_, found)) = self.cache.iter().find(|(key, _)| key == name) {
+            if let Some((_, _, found)) = self
+                .cache
+                .iter()
+                .find(|(store, key, _)| store == cachestore && key == name)
+            {
                 return Ok(Some(found.clone()));
             }
         }
 
-        for provider in &self.providers {
-            if let Some(found) = provider.lookup(name)? {
+        for entry in &self.entries {
+            if let Some(store) = only {
+                if entry.store != store {
+                    continue;
+                }
+            }
+
+            if let Some(found) = entry.provider.lookup(name)? {
                 if self.docache {
-                    self.cache.push((name.to_string(), found.clone()));
+                    self.cache
+                        .push((cachestore.to_string(), name.to_string(), found.clone()));
                 }
                 return Ok(Some(found));
             }
@@ -268,6 +357,11 @@ impl Sekreto {
     /// Does any provider have this secret?
     pub fn has(&mut self, name: &str) -> Answer<bool> {
         Ok(self.trysecret(name)?.is_some())
+    }
+
+    /// Does this named store have this secret?
+    pub fn hasin(&mut self, store: &str, name: &str) -> Answer<bool> {
+        Ok(self.tryfrom(store, name)?.is_some())
     }
 
     /// Every named secret at once. Missing ones are an error.
@@ -283,15 +377,33 @@ impl Sekreto {
 
     /// A description of each provider, in resolution order.
     pub fn sources(&self) -> Vec<String> {
-        self.providers
+        self.entries
             .iter()
-            .map(|entry| entry.describe())
+            .map(|entry| entry.provider.describe())
             .collect()
+    }
+
+    /// The name of each store that can be named by `getfrom`, in resolution
+    /// order and without repeats.
+    pub fn stores(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+
+        for entry in &self.entries {
+            if !out.contains(&entry.store) {
+                out.push(entry.store.clone());
+            }
+        }
+
+        out
     }
 
     /// Replace every value this Sekreto has resolved with `[redacted]`.
     pub fn redact(&self, text: &str) -> String {
-        let values: Vec<String> = self.cache.iter().map(|(_, value)| value.clone()).collect();
+        let values: Vec<String> = self
+            .cache
+            .iter()
+            .map(|(_, _, value)| value.clone())
+            .collect();
         redact(text, &values)
     }
 

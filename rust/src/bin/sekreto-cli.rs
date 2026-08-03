@@ -5,7 +5,8 @@
 //! them against the same server from all four secret sources - which is
 //! what proves the library, rather than the spec alone.
 //!
-//! Usage: sekreto-cli <api-url> [--source env|dotenv|vault|boru|chain]
+//! Usage: sekreto-cli <api-url> [--source env|dotenv|hashicorp|boru|chain]
+//!                              [--store <name>]   directed read
 
 use std::env;
 use std::process;
@@ -34,27 +35,28 @@ fn chainfor(source: &str) -> Vec<ProviderSpec> {
         ..ProviderSpec::of("dotenv")
     };
 
-    let vaultspec = ProviderSpec {
+    let hashicorpspec = ProviderSpec {
         addr: envor("VAULT_ADDR", ""),
         token: envor("VAULT_TOKEN", ""),
         mount: envor("VAULT_MOUNT", ""),
-        ..ProviderSpec::of("vault")
+        ..ProviderSpec::of("hashicorp")
     };
 
     let boruspec = ProviderSpec {
-        addr: envor("BORU_VAULT_ADDR", ""),
-        token: envor("BORU_VAULT_TOKEN", ""),
+        command: envor("BORU_COMMAND", "boru"),
+        namespace: envor("BORU_NAMESPACE", ""),
+        home: envor("BORU_HOME", ""),
         ..ProviderSpec::of("boru")
     };
 
     match source {
         "env" => vec![envspec],
         "dotenv" => vec![dotenvspec],
-        "vault" => vec![vaultspec],
+        "hashicorp" => vec![hashicorpspec],
         "boru" => vec![boruspec],
         // The default: the chain an app would actually ship with - local
         // overrides first, shared vaults last.
-        _ => vec![envspec, dotenvspec, vaultspec, boruspec],
+        _ => vec![envspec, dotenvspec, hashicorpspec, boruspec],
     }
 }
 
@@ -71,7 +73,17 @@ fn run() -> i32 {
         _ => "chain".to_string(),
     };
 
-    let providers = match makechain(&chainfor(&source)) {
+    // --store names a store outright: the secret must come from that one, not
+    // from whichever provider happens to answer first.
+    let store = match args.iter().position(|arg| "--store" == arg) {
+        Some(at) if at + 1 < args.len() => args[at + 1].clone(),
+        _ => String::new(),
+    };
+
+    let specs = chainfor(&source);
+    let names: Vec<String> = specs.iter().map(|spec| spec.name.clone()).collect();
+
+    let providers = match makechain(&specs) {
         Ok(providers) => providers,
         Err(err) => {
             eprintln!("sekreto-cli: {}", err);
@@ -79,9 +91,15 @@ fn run() -> i32 {
         }
     };
 
-    let mut secrets = Sekreto::new(providers);
+    let mut secrets = Sekreto::named(providers, &names, true);
 
-    let token = match secrets.get("api.token") {
+    let found = if store.is_empty() {
+        secrets.get("api.token")
+    } else {
+        secrets.getfrom(&store, "api.token")
+    };
+
+    let token = match found {
         Ok(token) => token,
         Err(err) => {
             eprintln!("sekreto-cli: {}", err);
@@ -115,9 +133,10 @@ fn run() -> i32 {
     // Assembled field by field: the shared JSON model sorts map keys, and
     // every port must print the same bytes.
     println!(
-        "{{\"ok\":true,\"lang\":{},\"source\":{},\"caller\":{}}}",
+        "{{\"ok\":true,\"lang\":{},\"source\":{},\"store\":{},\"caller\":{}}}",
         json::quote(LANG),
         json::quote(&source),
+        json::quote(&store),
         json::quote(&caller)
     );
 
