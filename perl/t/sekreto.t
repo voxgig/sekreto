@@ -10,7 +10,7 @@ use warnings;
 use File::Basename qw(dirname);
 use File::Spec;
 use JSON::PP ();
-use Test::More tests => 8;
+use Test::More tests => 11;
 
 use Voxgig::Sekreto qw(envkey parsedotenv redact validname vaultref);
 
@@ -94,5 +94,20 @@ group( 'resolve',
 group( 'trysecret',
     sub { $runset->( $spec->{trysecret}, sub { chainof( $_[0] )->try( $_[0]->{name} ) } ) } );
 group( 'sources', sub { $runset->( $spec->{sources}, sub { chainof( $_[0] )->sources() } ) } );
+group( 'stores',  sub { $runset->( $spec->{stores},  sub { chainof( $_[0] )->stores() } ) } );
+group(
+    'getfrom',
+    sub {
+        $runset->( $spec->{getfrom},
+            sub { chainof( $_[0] )->getfrom( $_[0]->{store}, $_[0]->{name} ) } );
+    }
+);
+group(
+    'tryfrom',
+    sub {
+        $runset->( $spec->{tryfrom},
+            sub { chainof( $_[0] )->tryfrom( $_[0]->{store}, $_[0]->{name} ) } );
+    }
+);
 group( 'redact',
     sub { $runset->( $spec->{redact}, sub { redact( $_[0]->{text}, $_[0]->{values} ) } ) } );

@@ -7,7 +7,7 @@
 # against the same server from all four secret sources - which is what
 # proves the library, rather than the spec alone.
 #
-# Usage: perl -Ilib cli/sekreto-cli.pl <api-url> [--source <source>]
+# Usage: perl -Ilib cli/sekreto-cli.pl <api-url> [--source <source>] [--store <name>]
 
 use strict;
 use warnings;
@@ -30,26 +30,27 @@ sub chainfor {
 
     my $envspec    = { kind => 'env', prefix => $ENV{SEKRETO_PREFIX} };
     my $dotenvspec = { kind => 'dotenv', file => $ENV{SEKRETO_DOTENV} || '.env' };
-    my $vaultspec  = {
-        kind  => 'vault',
+    my $hashicorpspec = {
+        kind  => 'hashicorp',
         addr  => $ENV{VAULT_ADDR} || '',
         token => $ENV{VAULT_TOKEN} || '',
         mount => $ENV{VAULT_MOUNT},
     };
     my $boruspec = {
-        kind  => 'boru',
-        addr  => $ENV{BORU_VAULT_ADDR} || '',
-        token => $ENV{BORU_VAULT_TOKEN} || '',
+        kind      => 'boru',
+        command   => $ENV{BORU_COMMAND} || 'boru',
+        namespace => $ENV{BORU_NAMESPACE},
+        home      => $ENV{BORU_HOME},
     };
 
     return [$envspec]    if 'env' eq $source;
     return [$dotenvspec] if 'dotenv' eq $source;
-    return [$vaultspec]  if 'vault' eq $source;
+    return [$hashicorpspec] if 'hashicorp' eq $source;
     return [$boruspec]   if 'boru' eq $source;
 
     # The default: the chain an app would actually ship with - local
     # overrides first, shared vaults last.
-    return [ $envspec, $dotenvspec, $vaultspec, $boruspec ];
+    return [ $envspec, $dotenvspec, $hashicorpspec, $boruspec ];
 }
 
 sub main {
@@ -62,9 +63,19 @@ sub main {
           if '--source' eq $args[$index] && $index + 1 <= $#args;
     }
 
+    # --store names a store outright: the secret must come from that one, not
+    # from whichever provider happens to answer first.
+    my $store = '';
+    for my $index ( 0 .. $#args ) {
+        $store = $args[ $index + 1 ]
+          if '--store' eq $args[$index] && $index + 1 <= $#args;
+    }
+
     my $secrets = Voxgig::Sekreto->new( { providers => chainfor($source) } );
 
-    my $token = eval { $secrets->get('api.token') };
+    my $token = eval {
+        '' eq $store ? $secrets->get('api.token') : $secrets->getfrom( $store, 'api.token' );
+    };
     if ( !defined $token ) {
         my $err = $@;
         print STDERR 'sekreto-cli: ' . "$err" . "\n";
@@ -98,6 +109,7 @@ sub main {
     print '{"ok":true'
       . ',"lang":' . $json->encode($LANG)
       . ',"source":' . $json->encode($source)
+      . ',"store":' . $json->encode($store)
       . ',"caller":' . $json->encode( $body->{caller} ) . "}\n";
 
     return 0;

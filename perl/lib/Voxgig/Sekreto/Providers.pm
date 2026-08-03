@@ -19,7 +19,9 @@ use warnings;
 use Exporter 'import';
 
 use HTTP::Tiny ();
+use IPC::Open3 ();
 use JSON::PP   ();
+use Symbol     ();
 
 our @EXPORT_OK = qw(makechain makeprovider);
 
@@ -130,6 +132,28 @@ sub httpget {
     return ( $response->{status}, $body );
 }
 
+# Refuse to send a Vault token in the clear.
+#
+# Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
+# convenience. Sending `X-Vault-Token` over http to anything but the local
+# machine puts both the token and the secret it fetches on the wire for
+# anyone on the path, so sekreto will not do it. Loopback stays allowed:
+# that is `vault server -dev` and this repo's own test harness.
+sub checkaddr {
+    my ($addr) = @_;
+
+    return if 0 == index( $addr, 'https://' );
+
+    fail( 'sekreto: not an http(s) address: ' . $addr ) if 0 != index( $addr, 'http://' );
+
+    my $host = ( split( /:/, ( split( m{/}, substr( $addr, 7 ) ) )[0] ) )[0];
+    $host = '' if !defined $host;
+
+    return if grep { $_ eq $host } ( 'localhost', '127.0.0.1', '::1', '[::1]' );
+
+    fail( 'sekreto: refusing to send a token in plaintext to ' . $addr . ' (use https)' );
+}
+
 # HashiCorp Vault, KV v2.
 #
 # `api.token` reads `{addr}/v1/{mount}/data/api` and takes the `token` field
@@ -137,7 +161,7 @@ sub httpget {
 # error, so a vault can sit in a chain with fallbacks.
 {
 
-    package Voxgig::Sekreto::Providers::Vault;
+    package Voxgig::Sekreto::Providers::Hashicorp;
 
     sub new {
         my ( $class, $addr, $token, $mount ) = @_;
@@ -151,6 +175,8 @@ sub httpget {
     sub lookup {
         my ( $self, $name ) = @_;
 
+        Voxgig::Sekreto::Providers::checkaddr( $self->{addr} );
+
         my $ref  = Voxgig::Sekreto::Providers::vaultref($name);
         my $addr = $self->{addr};
         $addr =~ s{/$}{};
@@ -163,7 +189,7 @@ sub httpget {
         return undef if 404 == $status;
 
         Voxgig::Sekreto::Providers::fail(
-            'sekreto: vault error: ' . $status . ': ' . $url )
+            'sekreto: hashicorp error: ' . $status . ': ' . $url )
           if 200 != $status;
 
         my $data =
@@ -176,59 +202,118 @@ sub httpget {
 
     sub describe {
         my ($self) = @_;
-        return 'vault:' . $self->{addr} . '/' . $self->{mount};
+        return 'hashicorp:' . $self->{addr} . '/' . $self->{mount};
     }
 }
 
-# A boru vault.
+# A boru vault (https://github.com/boru-lang/boru).
 #
-# The boru vault protocol as sekreto uses it: a GET of
-# `{addr}/vault/{path}?field={field}` with an `X-Boru-Token` header,
-# answering `{"ok":true,"value":"..."}` when the secret exists and
-# `{"ok":false}` (or 404) when it does not.
+# boru keeps secrets in a local encrypted keyring and hands a value out
+# through its own CLI: `boru vault get --reveal <alias>` prints the secret on
+# stdout, and nothing else.
+#
+# There is deliberately no HTTP read here. boru's `vault proxy` and
+# `vault mcp` are a *credential broker*: they inject the real secret into an
+# outbound request and forward it, so an agent can call an API without ever
+# holding the credential. Handing a value back is the one thing that broker
+# is built not to do, so sekreto reads the vault the way boru itself does -
+# through the CLI.
+#
+# A sekreto name is already a valid boru alias, so `api.token` crosses over
+# unchanged. A `namespace` qualifies it the way boru writes it,
+# `<namespace>:<name>`.
+#
+# The passphrase is read by boru itself from `BORU_VAULT_PASSPHRASE`. sekreto
+# never accepts it as config and never puts it on a command line, where it
+# would show up in the process table.
 {
 
     package Voxgig::Sekreto::Providers::Boru;
 
     sub new {
-        my ( $class, $addr, $token ) = @_;
+        my ( $class, $command, $namespace, $home ) = @_;
         return bless {
-            addr  => defined $addr  ? $addr  : '',
-            token => defined $token ? $token : '',
+            command   => $command || 'boru',
+            namespace => $namespace,
+            home      => $home,
         }, $class;
     }
 
     sub lookup {
         my ( $self, $name ) = @_;
 
-        my $ref  = Voxgig::Sekreto::Providers::vaultref($name);
-        my $addr = $self->{addr};
-        $addr =~ s{/$}{};
+        Voxgig::Sekreto::checkname($name);
 
-        my $field = $ref->{field};
-        $field =~ s/([^A-Za-z0-9_.~-])/sprintf('%%%02X', ord($1))/ge;
+        my $alias = $self->{namespace} ? $self->{namespace} . ':' . $name : $name;
 
-        my $url = $addr . '/vault/' . $ref->{path} . '?field=' . $field;
+        # BORU_HOME is set for the child only, then restored.
+        local $ENV{BORU_HOME} = $self->{home} if $self->{home};
 
-        my ( $status, $body ) =
-          Voxgig::Sekreto::Providers::httpget( $url, { 'X-Boru-Token' => $self->{token} } );
+        my ( $out, $err, $status ) = Voxgig::Sekreto::Providers::runcmd(
+            $self->{command}, 'vault', 'get', '--reveal', $alias );
 
-        return undef if 404 == $status;
+        if ( 0 == $status ) {
+            # boru prints the value and one newline, and nothing else.
+            $out =~ s/\n\z//;
+            return $out;
+        }
+
+        $err =~ s/^\s+|\s+$//g;
+
+        # "no alias named" is boru saying it does not hold this secret, which
+        # is a miss: the chain carries on to the next provider. A locked vault
+        # or a wrong passphrase is not a miss - treating it as one would fall
+        # through to a weaker store without saying so.
+        return undef if Voxgig::Sekreto::Providers::borumiss($err);
 
         Voxgig::Sekreto::Providers::fail(
-            'sekreto: boru vault error: ' . $status . ': ' . $url )
-          if 200 != $status;
-
-        return undef if 'HASH' ne ref( $body || '' );
-        return undef if !$body->{ok};
-
-        return $body->{value};
+            'sekreto: boru vault error: ' . ( '' eq $err ? 'exit ' . $status : $err ) );
     }
 
     sub describe {
         my ($self) = @_;
-        return 'boru:' . $self->{addr};
+        return 'boru' . ( $self->{namespace} ? ':' . $self->{namespace} : '' );
     }
+}
+
+# Run a command, returning (stdout, stderr, exit status).
+#
+# open3 rather than backticks: the argument list is passed through without a
+# shell, so an alias never gets word-split or interpreted, and stderr is
+# captured separately from the secret on stdout.
+sub runcmd {
+    my (@argv) = @_;
+
+    my ( $in, $out );
+    my $err = Symbol::gensym();
+
+    my $pid = eval { IPC::Open3::open3( $in, $out, $err, @argv ) };
+
+    fail( 'sekreto: cannot run ' . $argv[0] . ': ' . $@ ) if !$pid;
+
+    close($in);
+
+    local $/ = undef;
+    my $outtext = <$out>;
+    my $errtext = <$err>;
+
+    close($out);
+    close($err);
+
+    waitpid( $pid, 0 );
+
+    return (
+        defined $outtext ? $outtext : '',
+        defined $errtext ? $errtext : '',
+        $? >> 8,
+    );
+}
+
+# Does this boru failure mean "no such secret" rather than "I could not
+# answer"? Matched on boru's own wording for a missing alias.
+sub borumiss {
+    my ($why) = @_;
+    return index( $why, 'no alias named' ) >= 0 ? 1 : 0;
 }
 
 # Build a provider from its declarative form.
@@ -245,13 +330,14 @@ sub makeprovider {
     return Voxgig::Sekreto::Providers::Memory->new( $spec->{values} || {}, $spec->{prefix} )
       if 'memory' eq ( $kind || '' );
 
-    return Voxgig::Sekreto::Providers::Vault->new(
+    return Voxgig::Sekreto::Providers::Hashicorp->new(
         $spec->{addr} || '',
         $spec->{token} || '',
         $spec->{mount}
-    ) if 'vault' eq ( $kind || '' );
+    ) if 'hashicorp' eq ( $kind || '' );
 
-    return Voxgig::Sekreto::Providers::Boru->new( $spec->{addr} || '', $spec->{token} || '' )
+    return Voxgig::Sekreto::Providers::Boru->new(
+        $spec->{command}, $spec->{namespace}, $spec->{home} )
       if 'boru' eq ( $kind || '' );
 
     fail( 'sekreto: unknown provider kind: ' . ( defined $kind ? $kind : '' ) );

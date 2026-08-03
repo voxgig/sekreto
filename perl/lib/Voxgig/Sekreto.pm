@@ -193,20 +193,47 @@ sub redact {
     return $out;
 }
 
+# The store name a provider answers to when its spec does not say.
+#
+# `describe` opens with the provider's kind - `hashicorp:...`, `dotenv:...`,
+# plain `env` - so the kind is the natural default, and a custom provider
+# gets a sensible name without implementing anything extra.
+sub storename {
+    my ( $provider, $spec ) = @_;
+
+    return $spec->{name} if $spec && $spec->{name};
+
+    return ( split( /:/, $provider->describe(), 2 ) )[0];
+}
+
 # The secrets facade: a chain of providers plus a cache.
+#
+# Two ways to read. `get` is transparent - it walks the chain and takes the
+# first hit, and the caller never learns which store answered. `getfrom` is
+# directed - it names the store, and only that store is asked.
 sub new {
     my ( $class, $options ) = @_;
 
     my $opts = $options || {};
 
-    my @providers =
-      map { ref($_) && 'HASH' eq ref($_) ? makeprovider($_) : $_ } @{ $opts->{providers} || [] };
+    my @entries;
+    for my $entry ( @{ $opts->{providers} || [] } ) {
+        if ( ref($entry) && 'HASH' eq ref($entry) ) {
+            my $provider = makeprovider($entry);
+            push @entries, [ storename( $provider, $entry ), $provider ];
+        }
+        else {
+            push @entries, [ storename($entry), $entry ];
+        }
+    }
 
     my $self = {
-        providers => \@providers,
+        entries => \@entries,
         docache => ( exists $opts->{cache} && !$opts->{cache} ) ? 0 : 1,
-        cache => {},
-        order => [],
+
+        # A list, not a hash: the store a value came from stays attached,
+        # and redaction order does not vary between runs.
+        cache => [],
     };
 
     return bless $self, $class;
@@ -226,19 +253,52 @@ sub get {
 # The secret, or undef if no provider has it.
 sub try {
     my ( $self, $name ) = @_;
+    return $self->_resolve( '', $name, $self->{entries} );
+}
+
+# The secret from one named store, or a SekretoError if that store does not
+# have it.
+sub getfrom {
+    my ( $self, $store, $name ) = @_;
+
+    my $found = $self->tryfrom( $store, $name );
+
+    fail( 'sekreto: unknown secret: ' . $store . ':' . $name ) if !defined $found;
+
+    return $found;
+}
+
+# The secret from one named store, or undef if that store does not have it.
+#
+# Naming a store that is not in the chain is an error, not a miss: `try`
+# already means "this store may not have it", so it cannot also mean "this
+# store may not exist" without hiding a typo.
+sub tryfrom {
+    my ( $self, $store, $name ) = @_;
+
+    my @matching = grep { $_->[0] eq $store } @{ $self->{entries} };
+
+    fail( 'sekreto: unknown store: ' . $store ) if 0 == scalar(@matching);
+
+    return $self->_resolve( $store, $name, \@matching );
+}
+
+sub _resolve {
+    my ( $self, $store, $name, $entries ) = @_;
 
     checkname($name);
 
-    return $self->{cache}{$name} if $self->{docache} && exists $self->{cache}{$name};
+    if ( $self->{docache} ) {
+        for my $cached ( @{ $self->{cache} } ) {
+            return $cached->[2] if $cached->[0] eq $store && $cached->[1] eq $name;
+        }
+    }
 
-    for my $provider ( @{ $self->{providers} } ) {
-        my $found = $provider->lookup($name);
+    for my $entry ( @{$entries} ) {
+        my $found = $entry->[1]->lookup($name);
 
         if ( defined $found ) {
-            if ( $self->{docache} ) {
-                push @{ $self->{order} }, $name if !exists $self->{cache}{$name};
-                $self->{cache}{$name} = $found;
-            }
+            push @{ $self->{cache} }, [ $store, $name, $found ] if $self->{docache};
             return $found;
         }
     }
@@ -250,6 +310,12 @@ sub try {
 sub has {
     my ( $self, $name ) = @_;
     return defined $self->try($name) ? 1 : 0;
+}
+
+# Does this named store have this secret?
+sub hasin {
+    my ( $self, $store, $name ) = @_;
+    return defined $self->tryfrom( $store, $name ) ? 1 : 0;
 }
 
 # Every named secret at once. Missing ones are an error.
@@ -265,20 +331,32 @@ sub all {
 # A description of each provider, in resolution order.
 sub sources {
     my ($self) = @_;
-    return [ map { $_->describe() } @{ $self->{providers} } ];
+    return [ map { $_->[1]->describe() } @{ $self->{entries} } ];
+}
+
+# The name of each store that can be named by `getfrom`, in resolution order
+# and without repeats.
+sub stores {
+    my ($self) = @_;
+
+    my ( @out, %seen );
+    for my $entry ( @{ $self->{entries} } ) {
+        push @out, $entry->[0] if !$seen{ $entry->[0] }++;
+    }
+
+    return \@out;
 }
 
 # Replace every value this Sekreto has resolved with `[redacted]`.
 sub redactall {
     my ( $self, $text ) = @_;
-    return redact( $text, [ map { $self->{cache}{$_} } @{ $self->{order} } ] );
+    return redact( $text, [ map { $_->[2] } @{ $self->{cache} } ] );
 }
 
 # Drop cached values, so the next `get` asks the providers again.
 sub refresh {
     my ($self) = @_;
-    $self->{cache} = {};
-    $self->{order} = [];
+    $self->{cache} = [];
     return;
 }
 
