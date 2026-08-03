@@ -51,7 +51,8 @@ internal static class Program
     // Build a Sekreto from the spec's declarative chain description.
     private static Sekreto ChainOf(object value)
     {
-        return new Sekreto(Providers.MakeChain(Entry(value)["chain"]), false);
+        object chain = Entry(value)["chain"];
+        return new Sekreto(Providers.MakeChain(chain), Providers.ChainNames(chain), false);
     }
 
     private static readonly Subject VALIDNAME = args => Names.ValidName(args[0]);
@@ -70,6 +71,14 @@ internal static class Program
         args => ChainOf(args[0]).TryGet(Text(Entry(args[0])["name"]));
 
     private static readonly Subject SOURCES = args => ChainOf(args[0]).Sources();
+
+    private static readonly Subject STORES = args => ChainOf(args[0]).Stores();
+
+    private static readonly Subject GETFROM = args => ChainOf(args[0]).GetFrom(
+        Text(Entry(args[0])["store"]), Text(Entry(args[0])["name"]));
+
+    private static readonly Subject TRYFROM = args => ChainOf(args[0]).TryFrom(
+        Text(Entry(args[0])["store"]), Text(Entry(args[0])["name"]));
 
     private static readonly Subject REDACT = args => Sekreto.Redact(
         Entry(args[0])["text"], Entry(args[0])["values"] as List<object>);
@@ -111,6 +120,9 @@ internal static class Program
         TestCase("resolve", () => R.RunSet(R.Set("resolve"), RESOLVE));
         TestCase("trysecret", () => R.RunSet(R.Set("trysecret"), TRYSECRET));
         TestCase("sources", () => R.RunSet(R.Set("sources"), SOURCES));
+        TestCase("stores", () => R.RunSet(R.Set("stores"), STORES));
+        TestCase("getfrom", () => R.RunSet(R.Set("getfrom"), GETFROM));
+        TestCase("tryfrom", () => R.RunSet(R.Set("tryfrom"), TRYFROM));
         TestCase("redact", () => R.RunSet(R.Set("redact"), REDACT));
 
         Console.WriteLine("\n" + passcount + " passed, " + failcount + " failed");

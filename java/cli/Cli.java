@@ -6,6 +6,7 @@
 // proves the library, rather than the spec alone.
 //
 // Usage: java -cp build/classes sekreto.Cli <api-url> [--source <source>]
+//                                                     [--store <name>]
 
 package sekreto;
 
@@ -42,19 +43,20 @@ public final class Cli {
     return out;
   }
 
-  static List<Provider> chainfor(String source) {
+  static List<Object> chainspecs(String source) {
     Map<String, Object> envspec = spec("kind", "env", "prefix", System.getenv("SEKRETO_PREFIX"));
     Map<String, Object> dotenvspec =
         spec("kind", "dotenv", "file", envor("SEKRETO_DOTENV", ".env"));
-    Map<String, Object> vaultspec = spec(
-        "kind", "vault",
+    Map<String, Object> hashicorpspec = spec(
+        "kind", "hashicorp",
         "addr", envor("VAULT_ADDR", ""),
         "token", envor("VAULT_TOKEN", ""),
         "mount", System.getenv("VAULT_MOUNT"));
     Map<String, Object> boruspec = spec(
         "kind", "boru",
-        "addr", envor("BORU_VAULT_ADDR", ""),
-        "token", envor("BORU_VAULT_TOKEN", ""));
+        "command", envor("BORU_COMMAND", "boru"),
+        "namespace", System.getenv("BORU_NAMESPACE"),
+        "home", System.getenv("BORU_HOME"));
 
     List<Object> chain = new ArrayList<>();
 
@@ -62,17 +64,17 @@ public final class Cli {
       chain.add(envspec);
     } else if ("dotenv".equals(source)) {
       chain.add(dotenvspec);
-    } else if ("vault".equals(source)) {
-      chain.add(vaultspec);
+    } else if ("hashicorp".equals(source)) {
+      chain.add(hashicorpspec);
     } else if ("boru".equals(source)) {
       chain.add(boruspec);
     } else {
       // The default: the chain an app would actually ship with - local
       // overrides first, shared vaults last.
-      chain.addAll(Arrays.asList(envspec, dotenvspec, vaultspec, boruspec));
+      chain.addAll(Arrays.asList(envspec, dotenvspec, hashicorpspec, boruspec));
     }
 
-    return Providers.makechain(chain);
+    return chain;
   }
 
   @SuppressWarnings("unchecked")
@@ -86,11 +88,22 @@ public final class Cli {
       }
     }
 
-    Sekreto secrets = new Sekreto(chainfor(source));
+    // --store names a store outright: the secret must come from that one, not
+    // from whichever provider happens to answer first.
+    String store = "";
+    for (int index = 0; index < args.length; index++) {
+      if ("--store".equals(args[index]) && index + 1 < args.length) {
+        store = args[index + 1];
+      }
+    }
+
+    Object chain = chainspecs(source);
+    Sekreto secrets =
+        new Sekreto(Providers.makechain(chain), Providers.chainnames(chain), true);
 
     String token;
     try {
-      token = secrets.get("api.token");
+      token = store.isEmpty() ? secrets.get("api.token") : secrets.getfrom(store, "api.token");
     } catch (RuntimeException err) {
       System.err.println("sekreto-cli: " + err.getMessage());
       return 2;
@@ -121,7 +134,9 @@ public final class Cli {
     Object caller = body instanceof Map ? ((Map<String, Object>) body).get("caller") : null;
 
     System.out.println(
-        Json.stringify(spec("ok", Boolean.TRUE, "lang", LANG, "source", source, "caller", caller)));
+        Json.stringify(
+            spec("ok", Boolean.TRUE, "lang", LANG, "source", source, "store", store,
+                "caller", caller)));
 
     return 0;
   }

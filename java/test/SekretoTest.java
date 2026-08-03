@@ -46,8 +46,8 @@ public final class SekretoTest {
   @SuppressWarnings("unchecked")
   static Sekreto chainof(Object value) {
     Map<String, Object> entry = (Map<String, Object>) value;
-    List<Provider> providers = Providers.makechain(entry.get("chain"));
-    return new Sekreto(providers, false);
+    Object chain = entry.get("chain");
+    return new Sekreto(Providers.makechain(chain), Providers.chainnames(chain), false);
   }
 
   @SuppressWarnings("unchecked")
@@ -74,6 +74,16 @@ public final class SekretoTest {
       args -> chainof(args[0]).tryget(text(entry(args[0]).get("name")));
 
   static final Subject SOURCES = args -> chainof(args[0]).sources();
+
+  static final Subject STORES = args -> chainof(args[0]).stores();
+
+  static final Subject GETFROM =
+      args -> chainof(args[0]).getfrom(text(entry(args[0]).get("store")),
+          text(entry(args[0]).get("name")));
+
+  static final Subject TRYFROM =
+      args -> chainof(args[0]).tryfrom(text(entry(args[0]).get("store")),
+          text(entry(args[0]).get("name")));
 
   @SuppressWarnings("unchecked")
   static final Subject REDACT =
@@ -116,6 +126,9 @@ public final class SekretoTest {
     testcase("resolve", () -> R.runset(R.set("resolve"), RESOLVE));
     testcase("trysecret", () -> R.runset(R.set("trysecret"), TRYSECRET));
     testcase("sources", () -> R.runset(R.set("sources"), SOURCES));
+    testcase("stores", () -> R.runset(R.set("stores"), STORES));
+    testcase("getfrom", () -> R.runset(R.set("getfrom"), GETFROM));
+    testcase("tryfrom", () -> R.runset(R.set("tryfrom"), TRYFROM));
     testcase("redact", () -> R.runset(R.set("redact"), REDACT));
 
     System.out.println("\n" + passcount + " passed, " + failcount + " failed");

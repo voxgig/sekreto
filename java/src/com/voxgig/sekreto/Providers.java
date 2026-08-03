@@ -112,6 +112,37 @@ public final class Providers {
     }
   }
 
+  /**
+   * Refuse to send a Vault token in the clear.
+   *
+   * <p>Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
+   * convenience. Sending `X-Vault-Token` over http to anything but the local
+   * machine puts both the token and the secret it fetches on the wire for
+   * anyone on the path, so sekreto will not do it. Loopback stays allowed:
+   * that is `vault server -dev` and this repo's own test harness.
+   */
+  public static void checkaddr(String addr) {
+    if (addr.startsWith("https://")) {
+      return;
+    }
+
+    if (!addr.startsWith("http://")) {
+      throw new SekretoError("sekreto: not an http(s) address: " + addr);
+    }
+
+    String host = addr.substring("http://".length()).split("/")[0].split(":")[0];
+
+    if ("localhost".equals(host)
+        || "127.0.0.1".equals(host)
+        || "::1".equals(host)
+        || "[::1]".equals(host)) {
+      return;
+    }
+
+    throw new SekretoError(
+        "sekreto: refusing to send a token in plaintext to " + addr + " (use https)");
+  }
+
   private static final HttpClient CLIENT =
       HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
@@ -141,12 +172,12 @@ public final class Providers {
    * field of `data.data`. A 404 means "not here", which is a miss rather
    * than an error, so a vault can sit in a chain with fallbacks.
    */
-  public static final class Vault implements Provider {
+  public static final class Hashicorp implements Provider {
     private final String addr;
     private final String token;
     private final String mount;
 
-    public Vault(String addr, String token, String mount) {
+    public Hashicorp(String addr, String token, String mount) {
       this.addr = null == addr ? "" : addr;
       this.token = null == token ? "" : token;
       this.mount = null == mount || mount.isEmpty() ? "secret" : mount;
@@ -155,6 +186,8 @@ public final class Providers {
     @Override
     @SuppressWarnings("unchecked")
     public String lookup(String name) {
+      checkaddr(addr);
+
       Map<String, Object> ref = Sekreto.vaultref(name);
       String url = trimslash(addr) + "/v1/" + mount + "/data/" + ref.get("path");
 
@@ -165,7 +198,7 @@ public final class Providers {
       }
 
       if (200 != response.statusCode()) {
-        throw new SekretoError("sekreto: vault error: " + response.statusCode() + ": " + url);
+        throw new SekretoError("sekreto: hashicorp error: " + response.statusCode() + ": " + url);
       }
 
       Object body = Json.parse(response.body());
@@ -190,62 +223,101 @@ public final class Providers {
 
     @Override
     public String describe() {
-      return "vault:" + addr + "/" + mount;
+      return "hashicorp:" + addr + "/" + mount;
     }
   }
 
   /**
-   * A boru vault.
+   * A boru vault (https://github.com/boru-lang/boru).
    *
-   * <p>The boru vault protocol as sekreto uses it: a GET of
-   * `{addr}/vault/{path}?field={field}` with an `X-Boru-Token` header,
-   * answering `{"ok":true,"value":"..."}` when the secret exists and
-   * `{"ok":false}` (or 404) when it does not.
+   * <p>boru keeps secrets in a local encrypted keyring and hands a value out
+   * through its own CLI: `boru vault get --reveal <alias>` prints the secret
+   * on stdout, and nothing else.
+   *
+   * <p>There is deliberately no HTTP read here. boru's `vault proxy` and
+   * `vault mcp` are a *credential broker*: they inject the real secret into
+   * an outbound request and forward it, so an agent can call an API without
+   * ever holding the credential. Handing a value back is the one thing that
+   * broker is built not to do, so sekreto reads the vault the way boru itself
+   * does - through the CLI.
+   *
+   * <p>A sekreto name is already a valid boru alias, so `api.token` crosses
+   * over unchanged. A namespace qualifies it the way boru writes it,
+   * `ns:name`.
+   *
+   * <p>The passphrase is read by boru itself from `BORU_VAULT_PASSPHRASE`.
+   * sekreto never accepts it as config and never puts it on a command line,
+   * where it would show up in the process table.
    */
   public static final class Boru implements Provider {
-    private final String addr;
-    private final String token;
+    private final String command;
+    private final String namespace;
+    private final String home;
 
-    public Boru(String addr, String token) {
-      this.addr = null == addr ? "" : addr;
-      this.token = null == token ? "" : token;
+    public Boru(String command, String namespace, String home) {
+      this.command = null == command || command.isEmpty() ? "boru" : command;
+      this.namespace = namespace;
+      this.home = home;
     }
 
     @Override
-    @SuppressWarnings("unchecked")
     public String lookup(String name) {
-      Map<String, Object> ref = Sekreto.vaultref(name);
-      String url = trimslash(addr) + "/vault/" + ref.get("path") + "?field="
-          + URLEncoder.encode(String.valueOf(ref.get("field")), StandardCharsets.UTF_8);
+      Sekreto.checkname(name);
 
-      HttpResponse<String> response = httpget(url, "X-Boru-Token", token);
+      String alias = null == namespace || namespace.isEmpty() ? name : namespace + ":" + name;
 
-      if (404 == response.statusCode()) {
+      ProcessBuilder builder =
+          new ProcessBuilder(command, "vault", "get", "--reveal", alias);
+
+      if (null != home && !home.isEmpty()) {
+        builder.environment().put("BORU_HOME", home);
+      }
+
+      String out;
+      String why;
+      int status;
+
+      try {
+        Process process = builder.start();
+        out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        why = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).trim();
+        status = process.waitFor();
+      } catch (IOException err) {
+        throw new SekretoError("sekreto: cannot run " + command + ": " + err.getMessage());
+      } catch (InterruptedException err) {
+        Thread.currentThread().interrupt();
+        throw new SekretoError("sekreto: interrupted running " + command);
+      }
+
+      if (0 == status) {
+        // boru prints the value and one newline, and nothing else.
+        return out.endsWith("\n") ? out.substring(0, out.length() - 1) : out;
+      }
+
+      // "no alias named" is boru saying it does not hold this secret, which is
+      // a miss: the chain carries on to the next provider. A locked vault or a
+      // wrong passphrase is not a miss - treating it as one would fall through
+      // to a weaker store without saying so.
+      if (borumiss(why)) {
         return null;
       }
 
-      if (200 != response.statusCode()) {
-        throw new SekretoError("sekreto: boru vault error: " + response.statusCode() + ": " + url);
-      }
-
-      Object body = Json.parse(response.body());
-      if (!(body instanceof Map)) {
-        return null;
-      }
-
-      if (!Boolean.TRUE.equals(((Map<String, Object>) body).get("ok"))) {
-        return null;
-      }
-
-      Object value = ((Map<String, Object>) body).get("value");
-
-      return null == value ? null : String.valueOf(value);
+      throw new SekretoError(
+          "sekreto: boru vault error: " + (why.isEmpty() ? "exit " + status : why));
     }
 
     @Override
     public String describe() {
-      return "boru:" + addr;
+      return "boru" + (null == namespace || namespace.isEmpty() ? "" : ":" + namespace);
     }
+  }
+
+  /**
+   * Does this boru failure mean "no such secret" rather than "I could not
+   * answer"? Matched on boru's own wording for a missing alias.
+   */
+  static boolean borumiss(String why) {
+    return why.contains("no alias named");
   }
 
   static String trimslash(String text) {
@@ -279,15 +351,38 @@ public final class Providers {
       return new Memory(
           values instanceof Map ? (Map<String, Object>) values : null, text(spec.get("prefix")));
     }
-    if ("vault".equals(kind)) {
-      return new Vault(
+    if ("hashicorp".equals(kind)) {
+      return new Hashicorp(
           textor(spec.get("addr"), ""), textor(spec.get("token"), ""), text(spec.get("mount")));
     }
     if ("boru".equals(kind)) {
-      return new Boru(textor(spec.get("addr"), ""), textor(spec.get("token"), ""));
+      return new Boru(
+          text(spec.get("command")), text(spec.get("namespace")), text(spec.get("home")));
     }
 
     throw new SekretoError("sekreto: unknown provider kind: " + (null == kind ? "" : kind));
+  }
+
+  /**
+   * The store name each spec asks for, in order, so Sekreto.getfrom can
+   * address them. An entry is empty when the spec does not name one.
+   */
+  @SuppressWarnings("unchecked")
+  public static List<String> chainnames(Object specs) {
+    List<String> out = new ArrayList<>();
+
+    if (!(specs instanceof List)) {
+      return out;
+    }
+
+    for (Object entry : (List<Object>) specs) {
+      if (entry instanceof Map) {
+        Object name = ((Map<String, Object>) entry).get("name");
+        out.add(null == name ? "" : String.valueOf(name));
+      }
+    }
+
+    return out;
   }
 
   /** Build a whole provider chain from its declarative form. */

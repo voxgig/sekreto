@@ -188,22 +188,73 @@ namespace Voxgig.Sekreto
     /// <summary>The secrets facade: a chain of providers plus a cache.</summary>
     public class Sekreto
     {
-        private readonly List<IProvider> providers = new List<IProvider>();
+        /// <summary>One provider in the chain, under the store name it answers to.</summary>
+        private sealed class Entry
+        {
+            public string Store;
+            public IProvider Provider;
+        }
+
+        /// <summary>One resolved value, with the store it came from.</summary>
+        private sealed class Cached
+        {
+            public string Store;
+            public string Name;
+            public string Value;
+        }
+
+        private readonly List<Entry> entries = new List<Entry>();
         private readonly bool docache;
 
-        // Insertion-ordered by construction: redaction walks the resolved
-        // values, and their order must not vary between runs.
-        private readonly List<KeyValuePair<string, string>> cache =
-            new List<KeyValuePair<string, string>>();
+        // A list, not a dictionary: the store a value came from stays
+        // attached, and redaction order does not vary between runs.
+        private readonly List<Cached> cache = new List<Cached>();
 
         public Sekreto(IEnumerable<IProvider> useproviders, bool usecache = true)
+            : this(useproviders, null, usecache)
+        {
+        }
+
+        /// <summary>
+        /// A Sekreto whose providers answer to the given store names, in the
+        /// same order. A name left null or empty falls back to the provider's
+        /// kind.
+        /// </summary>
+        public Sekreto(IEnumerable<IProvider> useproviders, IList<string> names, bool usecache)
         {
             if (null != useproviders)
             {
-                providers.AddRange(useproviders);
+                int index = 0;
+
+                foreach (IProvider provider in useproviders)
+                {
+                    string store = StoreName(provider);
+
+                    if (null != names && index < names.Count
+                        && !string.IsNullOrEmpty(names[index]))
+                    {
+                        store = names[index];
+                    }
+
+                    entries.Add(new Entry { Store = store, Provider = provider });
+                    index++;
+                }
             }
 
             docache = usecache;
+        }
+
+        /// <summary>
+        /// The store name a provider answers to when nothing says otherwise.
+        ///
+        /// <para>Describe opens with the provider's kind - hashicorp:...,
+        /// dotenv:..., plain env - so the kind is the natural default, and a
+        /// custom provider gets a sensible name without implementing anything
+        /// extra.</para>
+        /// </summary>
+        public static string StoreName(IProvider provider)
+        {
+            return provider.Describe().Split(new[] { ':' }, 2)[0];
         }
 
         /// <summary>
@@ -251,28 +302,78 @@ namespace Voxgig.Sekreto
         /// <summary>The secret, or null if no provider has it.</summary>
         public string TryGet(string name)
         {
+            return Resolve("", name, entries);
+        }
+
+        /// <summary>
+        /// The secret from one named store, or a SekretoError if that store
+        /// does not have it.
+        /// </summary>
+        public string GetFrom(string store, string name)
+        {
+            string found = TryFrom(store, name);
+
+            if (null == found)
+            {
+                throw new SekretoError("sekreto: unknown secret: " + store + ":" + name);
+            }
+
+            return found;
+        }
+
+        /// <summary>
+        /// The secret from one named store, or null if that store does not
+        /// have it.
+        ///
+        /// <para>Naming a store that is not in the chain is an error, not a
+        /// miss: TryGet already means "this store may not have it", so it
+        /// cannot also mean "this store may not exist" without hiding a
+        /// typo.</para>
+        /// </summary>
+        public string TryFrom(string store, string name)
+        {
+            var matching = new List<Entry>();
+
+            foreach (Entry entry in entries)
+            {
+                if (entry.Store == store)
+                {
+                    matching.Add(entry);
+                }
+            }
+
+            if (0 == matching.Count)
+            {
+                throw new SekretoError("sekreto: unknown store: " + store);
+            }
+
+            return Resolve(store, name, matching);
+        }
+
+        private string Resolve(string store, string name, List<Entry> useentries)
+        {
             Names.CheckName(name);
 
             if (docache)
             {
-                foreach (var entry in cache)
+                foreach (Cached hit in cache)
                 {
-                    if (entry.Key == name)
+                    if (hit.Store == store && hit.Name == name)
                     {
-                        return entry.Value;
+                        return hit.Value;
                     }
                 }
             }
 
-            foreach (IProvider provider in providers)
+            foreach (Entry entry in useentries)
             {
-                string found = provider.Lookup(name);
+                string found = entry.Provider.Lookup(name);
 
                 if (null != found)
                 {
                     if (docache)
                     {
-                        cache.Add(new KeyValuePair<string, string>(name, found));
+                        cache.Add(new Cached { Store = store, Name = name, Value = found });
                     }
                     return found;
                 }
@@ -285,6 +386,12 @@ namespace Voxgig.Sekreto
         public bool Has(string name)
         {
             return null != TryGet(name);
+        }
+
+        /// <summary>Does this named store have this secret?</summary>
+        public bool HasIn(string store, string name)
+        {
+            return null != TryFrom(store, name);
         }
 
         /// <summary>Every named secret at once. Missing ones are an error.</summary>
@@ -305,9 +412,28 @@ namespace Voxgig.Sekreto
         {
             var out_ = new List<object>();
 
-            foreach (IProvider provider in providers)
+            foreach (Entry entry in entries)
             {
-                out_.Add(provider.Describe());
+                out_.Add(entry.Provider.Describe());
+            }
+
+            return out_;
+        }
+
+        /// <summary>
+        /// The name of each store that can be named by GetFrom, in resolution
+        /// order and without repeats.
+        /// </summary>
+        public List<object> Stores()
+        {
+            var out_ = new List<object>();
+
+            foreach (Entry entry in entries)
+            {
+                if (!out_.Contains(entry.Store))
+                {
+                    out_.Add(entry.Store);
+                }
             }
 
             return out_;
@@ -320,9 +446,9 @@ namespace Voxgig.Sekreto
         {
             var values = new List<object>();
 
-            foreach (var entry in cache)
+            foreach (Cached hit in cache)
             {
-                values.Add(entry.Value);
+                values.Add(hit.Value);
             }
 
             return Redact(text, values);

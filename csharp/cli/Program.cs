@@ -5,7 +5,8 @@
 // them against the same server from all four secret sources - which is what
 // proves the library, rather than the spec alone.
 //
-// Usage: dotnet SekretoCli.dll <api-url> [--source env|dotenv|vault|boru|chain]
+// Usage: dotnet SekretoCli.dll <api-url> [--source env|dotenv|hashicorp|boru|chain]
+//                                        [--store <name>]   directed read
 
 using System;
 using System.Collections.Generic;
@@ -35,19 +36,20 @@ internal static class Program
         return out_;
     }
 
-    private static List<IProvider> ChainFor(string source)
+    private static List<object> ChainSpecs(string source)
     {
         var envspec = Spec("kind", "env", "prefix", Environment.GetEnvironmentVariable("SEKRETO_PREFIX"));
         var dotenvspec = Spec("kind", "dotenv", "file", EnvOr("SEKRETO_DOTENV", ".env"));
-        var vaultspec = Spec(
-            "kind", "vault",
+        var hashicorpspec = Spec(
+            "kind", "hashicorp",
             "addr", EnvOr("VAULT_ADDR", ""),
             "token", EnvOr("VAULT_TOKEN", ""),
             "mount", Environment.GetEnvironmentVariable("VAULT_MOUNT"));
         var boruspec = Spec(
             "kind", "boru",
-            "addr", EnvOr("BORU_VAULT_ADDR", ""),
-            "token", EnvOr("BORU_VAULT_TOKEN", ""));
+            "command", EnvOr("BORU_COMMAND", "boru"),
+            "namespace", Environment.GetEnvironmentVariable("BORU_NAMESPACE"),
+            "home", Environment.GetEnvironmentVariable("BORU_HOME"));
 
         var chain = new List<object>();
 
@@ -55,16 +57,16 @@ internal static class Program
         {
             case "env": chain.Add(envspec); break;
             case "dotenv": chain.Add(dotenvspec); break;
-            case "vault": chain.Add(vaultspec); break;
+            case "hashicorp": chain.Add(hashicorpspec); break;
             case "boru": chain.Add(boruspec); break;
             default:
                 // The default: the chain an app would actually ship with -
                 // local overrides first, shared vaults last.
-                chain.AddRange(new object[] { envspec, dotenvspec, vaultspec, boruspec });
+                chain.AddRange(new object[] { envspec, dotenvspec, hashicorpspec, boruspec });
                 break;
         }
 
-        return Providers.MakeChain(chain);
+        return chain;
     }
 
     private static int Main(string[] args)
@@ -80,12 +82,26 @@ internal static class Program
             }
         }
 
-        var secrets = new Sekreto(ChainFor(source));
+        // --store names a store outright: the secret must come from that one,
+        // not from whichever provider happens to answer first.
+        string store = "";
+        for (int index = 0; index < args.Length; index++)
+        {
+            if ("--store" == args[index] && index + 1 < args.Length)
+            {
+                store = args[index + 1];
+            }
+        }
+
+        object chain = ChainSpecs(source);
+        var secrets = new Sekreto(Providers.MakeChain(chain), Providers.ChainNames(chain), true);
 
         string token;
         try
         {
-            token = secrets.Get("api.token");
+            token = 0 == store.Length
+                ? secrets.Get("api.token")
+                : secrets.GetFrom(store, "api.token");
         }
         catch (Exception err)
         {
@@ -122,7 +138,7 @@ internal static class Program
         object caller = (Json.Parse(body) as Dictionary<string, object>)?.GetValueOrDefault("caller");
 
         Console.WriteLine(Json.Stringify(
-            Spec("ok", true, "lang", Lang, "source", source, "caller", caller)));
+            Spec("ok", true, "lang", Lang, "source", source, "store", store, "caller", caller)));
 
         return 0;
     }
