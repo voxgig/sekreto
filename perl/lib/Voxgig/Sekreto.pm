@@ -269,6 +269,12 @@ sub new {
         # A list, not a hash: the store a value came from stays attached,
         # and redaction order does not vary between runs.
         cache => [],
+
+        # Every value ever resolved, for redactall. Kept independently of
+        # the read cache so that redaction still works when cache is off -
+        # otherwise `cache => 0` would silently disable redactall and leak
+        # secrets to logs.
+        seen => [],
     };
 
     return bless $self, $class;
@@ -334,6 +340,7 @@ sub _resolve {
 
         if ( defined $found ) {
             push @{ $self->{cache} }, [ $store, $name, $found ] if $self->{docache};
+            push @{ $self->{seen} }, $found;
             return $found;
         }
     }
@@ -383,9 +390,12 @@ sub stores {
 }
 
 # Replace every value this Sekreto has resolved with `[redacted]`.
+#
+# Works whether or not caching is enabled: the redaction list is kept
+# independently of the read cache.
 sub redactall {
     my ( $self, $text ) = @_;
-    return redact( $text, [ map { $_->[2] } @{ $self->{cache} } ] );
+    return redact( $text, $self->{seen} );
 }
 
 # Drop cached values, so the next `get` asks the providers again.

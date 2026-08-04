@@ -229,6 +229,10 @@ export class Sekreto {
   private entries: Entry[]
   private docache: boolean
   private cache: Cached[]
+  // Every value ever resolved, for redact(). Kept independently of the
+  // read cache so that redaction still works when cache is off - otherwise
+  // `cache: false` would silently disable redact() and leak secrets to logs.
+  private seen: string[]
 
   constructor(options?: SekretoOptions) {
     const opts = options || {}
@@ -246,6 +250,7 @@ export class Sekreto {
 
     this.docache = false === opts.cache ? false : true
     this.cache = []
+    this.seen = []
   }
 
   /** The secret, or a SekretoError if no provider has it. */
@@ -313,6 +318,7 @@ export class Sekreto {
         if (this.docache) {
           this.cache.push({ store, name, value: found })
         }
+        this.seen.push(found)
         return found
       }
     }
@@ -360,12 +366,12 @@ export class Sekreto {
     return out
   }
 
-  /** Replace every value this Sekreto has resolved with `[redacted]`. */
+  /** Replace every value this Sekreto has resolved with `[redacted]`.
+   *
+   * Works whether or not caching is enabled: the redaction list is kept
+   * independently of the read cache. */
   redact(text: string): string {
-    return redact(
-      text,
-      this.cache.map((entry) => entry.value),
-    )
+    return redact(text, this.seen)
   }
 
   /** Drop cached values, so the next `get` asks the providers again. */

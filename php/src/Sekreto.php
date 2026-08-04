@@ -255,6 +255,15 @@ class Sekreto
     private bool $docache;
     /** @var array<int, array{0: string, 1: string, 2: string}> */
     private array $cache = [];
+    /**
+     * Every value ever resolved, for redact(). Kept independently of the
+     * read cache so that redaction still works when cache is off -
+     * otherwise `cache: false` would silently disable redact() and leak
+     * secrets to logs.
+     *
+     * @var array<int, string>
+     */
+    private array $seen = [];
 
     /** @param array<string, mixed>|null $options */
     public function __construct(?array $options = null)
@@ -348,6 +357,7 @@ class Sekreto
                 if ($this->docache) {
                     $this->cache[] = [$store, $name, $found];
                 }
+                $this->seen[] = $found;
                 return $found;
             }
         }
@@ -413,10 +423,15 @@ class Sekreto
         return $out;
     }
 
-    /** Replace every value this Sekreto has resolved with `[redacted]`. */
+    /**
+     * Replace every value this Sekreto has resolved with `[redacted]`.
+     *
+     * Works whether or not caching is enabled: the redaction list is kept
+     * independently of the read cache.
+     */
     public function redact(string $text): string
     {
-        return redact($text, array_map(fn(array $cached) => $cached[2], $this->cache));
+        return redact($text, $this->seen);
     }
 
     /** Drop cached values, so the next `get` asks the providers again. */

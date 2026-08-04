@@ -81,12 +81,25 @@ public final class Providers {
 
     private Map<String, Object> load() {
       if (null == values) {
+        Path path = Paths.get(file);
         try {
           values = Sekreto.parsedotenv(
-              new String(Files.readAllBytes(Paths.get(file)), StandardCharsets.UTF_8));
-        } catch (IOException | RuntimeException err) {
-          // A missing .env file is not an error: it means "no secrets here".
+              new String(Files.readAllBytes(path), StandardCharsets.UTF_8));
+        } catch (NoSuchFileException err) {
+          // An absent file - or an absent directory - means "no secrets
+          // here", exactly like the file provider.
           values = new LinkedHashMap<>();
+        } catch (IOException err) {
+          // A path component that is a plain file reads as "not a directory",
+          // which is still "no secrets here". Anything else (permission
+          // denied, an unreadable mount) is a store that could not answer,
+          // and swallowing it would fall through to a weaker store.
+          if (!Files.exists(path)) {
+            values = new LinkedHashMap<>();
+          } else {
+            throw new SekretoError(
+                "sekreto: dotenv provider cannot read " + file + ": " + err.getMessage());
+          }
         }
       }
       return values;

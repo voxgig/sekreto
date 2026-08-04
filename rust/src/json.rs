@@ -88,11 +88,16 @@ pub fn quote(text: &str) -> String {
     out
 }
 
+/// The deepest nesting the parser will follow. A response is trusted only
+/// as far as its status; the body arrives before any check, so a hostile
+/// or buggy upstream must not be able to overflow the stack with `[[[...`.
+const MAX_DEPTH: usize = 128;
+
 /// Parse JSON text, answering None for anything unreadable.
 pub fn parse(text: &str) -> Option<Json> {
     let chars: Vec<char> = text.chars().collect();
     let mut at = 0usize;
-    let value = value(&chars, &mut at)?;
+    let value = value(&chars, &mut at, 0)?;
     Some(value)
 }
 
@@ -102,7 +107,11 @@ fn skip(chars: &[char], at: &mut usize) {
     }
 }
 
-fn value(chars: &[char], at: &mut usize) -> Option<Json> {
+fn value(chars: &[char], at: &mut usize, depth: usize) -> Option<Json> {
+    if depth > MAX_DEPTH {
+        return None;
+    }
+
     skip(chars, at);
 
     if *at >= chars.len() {
@@ -110,8 +119,8 @@ fn value(chars: &[char], at: &mut usize) -> Option<Json> {
     }
 
     match chars[*at] {
-        '{' => map(chars, at),
-        '[' => list(chars, at),
+        '{' => map(chars, at, depth),
+        '[' => list(chars, at, depth),
         '"' => string(chars, at).map(Json::Str),
         't' => literal(chars, at, "true", Json::Bool(true)),
         'f' => literal(chars, at, "false", Json::Bool(false)),
@@ -130,7 +139,7 @@ fn literal(chars: &[char], at: &mut usize, word: &str, value: Json) -> Option<Js
     Some(value)
 }
 
-fn map(chars: &[char], at: &mut usize) -> Option<Json> {
+fn map(chars: &[char], at: &mut usize, depth: usize) -> Option<Json> {
     let mut out = BTreeMap::new();
     *at += 1; // {
     skip(chars, at);
@@ -150,7 +159,7 @@ fn map(chars: &[char], at: &mut usize) -> Option<Json> {
         }
         *at += 1;
 
-        out.insert(key, value(chars, at)?);
+        out.insert(key, value(chars, at, depth + 1)?);
         skip(chars, at);
 
         if *at >= chars.len() {
@@ -169,7 +178,7 @@ fn map(chars: &[char], at: &mut usize) -> Option<Json> {
     Some(Json::Map(out))
 }
 
-fn list(chars: &[char], at: &mut usize) -> Option<Json> {
+fn list(chars: &[char], at: &mut usize, depth: usize) -> Option<Json> {
     let mut out = Vec::new();
     *at += 1; // [
     skip(chars, at);
@@ -180,7 +189,7 @@ fn list(chars: &[char], at: &mut usize) -> Option<Json> {
     }
 
     loop {
-        out.push(value(chars, at)?);
+        out.push(value(chars, at, depth + 1)?);
         skip(chars, at);
 
         if *at >= chars.len() {
@@ -258,5 +267,31 @@ fn number(chars: &[char], at: &mut usize) -> Option<Json> {
 
     let text: String = chars[start..*at].iter().collect();
 
-    text.parse::<f64>().ok().map(Json::Num)
+    // Reject non-finite results: `1e999` parses to f64::INFINITY, which
+    // later panics Duration::from_secs_f64 when it lands in a token-expiry
+    // field. JSON has no infinity, so this is also stricter-correct.
+    match text.parse::<f64>() {
+        Ok(value) if value.is_finite() => Some(Json::Num(value)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse;
+
+    #[test]
+    fn deep_nesting_does_not_overflow() {
+        // A hostile/buggy upstream must not crash the client with `[[[...`.
+        let deep = "[".repeat(100_000) + &"]".repeat(100_000);
+        assert!(parse(&deep).is_none());
+    }
+
+    #[test]
+    fn non_finite_numbers_are_rejected() {
+        // 1e999 -> f64::INFINITY would later panic Duration::from_secs_f64.
+        assert!(parse("1e999").is_none());
+        assert!(parse("[1e999]").is_none());
+        assert!(parse("5").is_some());
+    }
 }

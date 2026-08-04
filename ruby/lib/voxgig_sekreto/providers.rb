@@ -51,9 +51,14 @@ module VoxgigSekreto
       if @values.nil?
         @values = begin
           VoxgigSekreto.parsedotenv(File.read(@file))
-        rescue SystemCallError
-          # A missing .env file is not an error: it means "no secrets here".
+        rescue Errno::ENOENT, Errno::ENOTDIR
+          # An absent file - or an absent directory - means "no secrets
+          # here", exactly like FileProvider. Anything else (permission
+          # denied, an unreadable mount) is a store that could not answer,
+          # and swallowing it would fall through to a weaker store.
           {}
+        rescue StandardError => e
+          raise SekretoError, 'sekreto: dotenv provider cannot read ' + @file + ': ' + e.message
         end
       end
       @values

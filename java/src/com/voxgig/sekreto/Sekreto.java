@@ -62,6 +62,12 @@ public final class Sekreto {
   // redaction order does not vary between runs.
   private final List<Cached> cache = new ArrayList<>();
 
+  // Every value ever resolved, for redact(). Kept independently of the
+  // read cache so that redaction still works when cache is off - otherwise
+  // an uncached Sekreto would silently disable redact() and leak secrets
+  // to logs.
+  private final List<String> seen = new ArrayList<>();
+
   public Sekreto(List<Provider> useproviders) {
     this(useproviders, true);
   }
@@ -378,6 +384,7 @@ public final class Sekreto {
         if (docache) {
           cache.add(new Cached(store, name, found));
         }
+        seen.add(found);
         return found;
       }
     }
@@ -433,14 +440,14 @@ public final class Sekreto {
     return out;
   }
 
-  /** Replace every value this Sekreto has resolved with `[redacted]`. */
+  /**
+   * Replace every value this Sekreto has resolved with `[redacted]`.
+   *
+   * <p>Works whether or not caching is enabled: the redaction list is kept
+   * independently of the read cache.
+   */
   public String redact(String text) {
-    List<Object> values = new ArrayList<>();
-
-    for (Cached hit : cache) {
-      values.add(hit.value);
-    }
-
+    List<Object> values = new ArrayList<>(seen);
     return redact(text, values);
   }
 

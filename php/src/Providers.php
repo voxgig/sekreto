@@ -74,9 +74,40 @@ class DotenvProvider implements Provider
     private function load(): array
     {
         if (null === $this->values) {
-            // A missing .env file is not an error: it means "no secrets here".
+            // Attempt the read outright rather than pre-checking with
+            // file_exists(): that also reports false when a parent directory
+            // is unreadable for permission reasons, which is a store that
+            // could not answer, not a store without the secret.
+            error_clear_last();
             $text = @file_get_contents($this->file);
-            $this->values = false === $text ? [] : parsedotenv($text);
+            $raised = error_get_last();
+
+            if (false === $text || null !== $raised) {
+                $why = $raised['message'] ?? 'unknown error';
+
+                // PHP's warning text carries the OS reason after its
+                // "Failed to open stream:" preamble; keep just the reason.
+                if (1 === preg_match('/Failed to open stream: (.*)$/s', $why, $match)) {
+                    $why = $match[1];
+                }
+
+                // An absent file - or an absent directory - means "no secrets
+                // here", exactly like FileProvider. Anything else (permission
+                // denied, an unreadable mount) is a store that could not
+                // answer, and swallowing it would fall through to a weaker
+                // store.
+                if (!str_contains($why, 'No such file or directory')
+                    && !str_contains($why, 'Not a directory')
+                ) {
+                    throw new SekretoError(
+                        'sekreto: dotenv provider cannot read ' . $this->file . ': ' . $why
+                    );
+                }
+
+                $this->values = [];
+            } else {
+                $this->values = parsedotenv($text);
+            }
         }
 
         return $this->values;
@@ -170,7 +201,7 @@ class FileProvider implements Provider
             );
         }
 
-        return preg_replace('/\r?\n$/', '', $text);
+        return preg_replace('/\r?\n\z/', '', $text, 1);
     }
 
     public function describe(): string
@@ -198,6 +229,8 @@ function fetchjson(string $method, string $url, array $headers, ?string $body = 
         // Read the body of an error response rather than throwing it away.
         'ignore_errors' => true,
         'timeout' => 10,
+        'follow_location' => 0,
+        'max_redirects' => 0,
     ];
 
     if (null !== $body) {
@@ -522,7 +555,7 @@ class BoruProvider implements Provider
 
         if (0 === $status) {
             // boru prints the value and one newline, and nothing else.
-            return preg_replace('/\n$/', '', $out);
+            return preg_replace('/\r?\n\z/', '', $out, 1);
         }
 
         $why = trim($err);

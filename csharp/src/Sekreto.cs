@@ -255,6 +255,12 @@ namespace Voxgig.Sekreto
         // attached, and redaction order does not vary between runs.
         private readonly List<Cached> cache = new List<Cached>();
 
+        // Every value ever resolved, for Redact(). Kept independently of the
+        // read cache so that redaction still works when cache is off -
+        // otherwise an uncached Sekreto would silently disable Redact() and
+        // leak secrets to logs.
+        private readonly List<string> seen = new List<string>();
+
         public Sekreto(IEnumerable<IProvider> useproviders, bool usecache = true)
             : this(useproviders, null, usecache)
         {
@@ -420,6 +426,7 @@ namespace Voxgig.Sekreto
                     {
                         cache.Add(new Cached { Store = store, Name = name, Value = found });
                     }
+                    seen.Add(found);
                     return found;
                 }
             }
@@ -486,14 +493,17 @@ namespace Voxgig.Sekreto
 
         /// <summary>
         /// Replace every value this Sekreto has resolved with `[redacted]`.
+        ///
+        /// <para>Works whether or not caching is enabled: the redaction list
+        /// is kept independently of the read cache.</para>
         /// </summary>
         public string Redact(string text)
         {
             var values = new List<object>();
 
-            foreach (Cached hit in cache)
+            foreach (string value in seen)
             {
-                values.Add(hit.Value);
+                values.Add(value);
             }
 
             return Redact(text, values);
