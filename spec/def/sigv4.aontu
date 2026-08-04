@@ -1,0 +1,119 @@
+
+# AWS Signature Version 4.
+#
+# sekreto talks to AWS Secrets Manager and Parameter Store over plain HTTP
+# rather than pulling in an SDK, so every port implements SigV4 itself.
+# These are golden vectors: the expected signatures below were produced
+# once and are now fixed, so a port that signs differently fails here
+# instead of failing against AWS.
+#
+# The signing time is supplied as `datetime` precisely so the vectors stay
+# deterministic. The first entry is the canonical aws4_request test case.
+
+
+sigv4: set: [
+  {
+    id: 'sigv4#get-vanilla', doc: true
+    in: {
+      method: 'GET'
+      url: 'https://example.amazonaws.com/'
+      body: ''
+      service: 'service'
+      region: 'us-east-1'
+      datetime: '20150830T123600Z'
+      keyid: 'AKIDEXAMPLE'
+      secret: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY'
+    }
+    out: {
+      authorization: 'AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31'
+      'x-amz-date': '20150830T123600Z'
+    }
+  }
+
+  # A real Secrets Manager call: POST with a JSON body, so the payload hash
+  # is not the empty-string hash, and extra signed headers are in play.
+  {
+    in: {
+      method: 'POST'
+      url: 'http://127.0.0.1:9099/'
+      headers: {
+        'content-type': 'application/x-amz-json-1.1'
+        'x-amz-target': 'secretsmanager.GetSecretValue'
+      }
+      body: '{"SecretId":"api"}'
+      service: 'secretsmanager'
+      region: 'us-east-1'
+      datetime: '20260803T120000Z'
+      keyid: 'AKIDEXAMPLE'
+      secret: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY'
+    }
+    out: {
+      authorization: 'AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260803/us-east-1/secretsmanager/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-target, Signature=15d2cb8c37ecd019ecf393b16bd92813b99e8652839533d7a3043a4d545d5702'
+      'x-amz-date': '20260803T120000Z'
+    }
+  }
+
+  # Temporary credentials: the session token becomes a signed header and is
+  # echoed back for the caller to send.
+  {
+    in: {
+      method: 'POST'
+      url: 'https://ssm.eu-west-1.amazonaws.com/'
+      headers: {
+        'content-type': 'application/x-amz-json-1.1'
+        'x-amz-target': 'AmazonSSM.GetParameter'
+      }
+      body: '{"Name":"/db/pass/main","WithDecryption":true}'
+      service: 'ssm'
+      region: 'eu-west-1'
+      session: 'THESESSIONTOKEN'
+      datetime: '20260101T000000Z'
+      keyid: 'AKIDEXAMPLE'
+      secret: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY'
+    }
+    out: {
+      authorization: 'AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260101/eu-west-1/ssm/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token;x-amz-target, Signature=9174d68dc4eed358bb8054c52e795ad7cfe30a7d5e452213a744316c8113585f'
+      'x-amz-date': '20260101T000000Z'
+      'x-amz-security-token': 'THESESSIONTOKEN'
+    }
+  }
+
+  # Query parameters must be sorted into the canonical request, so signing
+  # '?b=2&a=1' has to produce the signature for 'a=1&b=2'.
+  {
+    in: {
+      method: 'GET'
+      url: 'https://example.amazonaws.com/path/to?b=2&a=1'
+      body: ''
+      service: 'service'
+      region: 'us-east-1'
+      datetime: '20150830T123600Z'
+      keyid: 'AKIDEXAMPLE'
+      secret: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY'
+    }
+    out: {
+      authorization: 'AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=eff4168718a416b2d30f67b2ade46372495930d2f8b0026395b61bfcb3a32b03'
+      'x-amz-date': '20150830T123600Z'
+    }
+  }
+
+  # Header values are canonicalised: runs of internal whitespace — spaces
+  # AND tabs — collapse to a single space before signing.
+  {
+    in: {
+      method: 'POST'
+      url: 'https://example.amazonaws.com/'
+      headers: { 'x-amz-target': 'a  b\tc' }
+      body: ''
+      service: 'service'
+      region: 'us-east-1'
+      keyid: 'AKIDEXAMPLE'
+      secret: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY'
+      datetime: '20150830T123600Z'
+    }
+    out: {
+      authorization: 'AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date;x-amz-target, Signature=19e8a3f4b467cf96fd355ae7642f439d2df7698aafd1ec373ea2c6af42b8b273'
+      'x-amz-date': '20150830T123600Z'
+    }
+  }
+]

@@ -1,0 +1,147 @@
+
+# Describing a chain: `sources` and `stores`.
+#
+# `sources` lists every source in order with enough configuration detail to
+# tell two instances of the same backend apart — it is what a diagnostic
+# dump prints. `stores` lists the addressable NAMES instead: duplicates
+# collapse, because a name is what `getfrom` takes.
+#
+# Both are pure functions of the chain description, so neither contacts a
+# backend and both are safe to run offline.
+
+
+# kind, plus whatever distinguishes this instance from another of the same
+# kind (prefix, namespace, region, project, directory, address).
+sources: set: [
+  {
+    id: 'sources#kinds', doc: true
+    in: {
+      chain: [
+        { kind: 'memory', values: {} }
+        { kind: 'memory', prefix: 'APP_', values: {} }
+      ]
+    }
+    out: [ 'memory', 'memory:APP_' ]
+  }
+  {
+    in: {
+      chain: [
+        { kind: 'boru' }
+        { kind: 'boru', namespace: 'prod' }
+        { kind: 'hashicorp', addr: 'http://127.0.0.1:8200' }
+      ]
+    }
+    out: [ 'boru', 'boru:prod', 'hashicorp:http://127.0.0.1:8200/secret' ]
+  }
+  {
+    in: { chain: [] }
+    out: []
+  }
+
+  # One entry per supported backend — this is the roll-call that catches a
+  # port forgetting to describe a kind it otherwise implements.
+  {
+    in: {
+      chain: [
+        { kind: 'file', dir: '/run/secrets' }
+        { kind: 'awssecrets', region: 'us-east-1' }
+        { kind: 'awsparams', region: 'eu-west-1', prefix: '/app' }
+        { kind: 'gcpsecrets', project: 'proj1' }
+        { kind: 'azuresecrets', vault: 'corp' }
+        { kind: 'onepassword', vault: 'dev' }
+        { kind: 'doppler', project: 'app', config: 'prd' }
+        { kind: 'infisical', project: 'w1', environment: 'prod' }
+        { kind: 'boru', addr: 'http://127.0.0.1:8200' }
+      ]
+    }
+    out: [
+      'file:/run/secrets'
+      'awssecrets:us-east-1'
+      'awsparams:eu-west-1/app'
+      'gcpsecrets:proj1'
+      'azuresecrets:corp'
+      'onepassword:dev'
+      'doppler:app/prd'
+      'infisical:w1/prod'
+      'boru:http://127.0.0.1:8200'
+    ]
+  }
+]
+
+
+# The addressable names. A source's name defaults to its kind, so two
+# unnamed sources of one kind collapse to a single entry.
+stores: set: [
+  {
+    id: 'stores#default', doc: true
+    in: {
+      chain: [
+        { kind: 'env' }
+        { kind: 'dotenv', file: '.env' }
+        { kind: 'memory', values: {} }
+      ]
+    }
+    out: [ 'env', 'dotenv', 'memory' ]
+  }
+
+  # Explicit names are kept, in chain order.
+  {
+    in: {
+      chain: [
+        { kind: 'memory', name: 'local', values: {} }
+        { kind: 'memory', name: 'shared', values: {} }
+      ]
+    }
+    out: [ 'local', 'shared' ]
+  }
+
+  # Two unnamed sources of the same kind are one addressable store — note
+  # this is where `stores` and `sources` disagree, deliberately.
+  {
+    in: {
+      chain: [
+        { kind: 'memory', values: {} }
+        { kind: 'memory', prefix: 'APP_', values: {} }
+      ]
+    }
+    out: [ 'memory' ]
+  }
+  {
+    in: {
+      chain: [
+        { kind: 'boru' }
+        { kind: 'boru', namespace: 'prod' }
+      ]
+    }
+    out: [ 'boru' ]
+  }
+
+  # ...unless they are named apart.
+  {
+    in: {
+      chain: [
+        { kind: 'boru', name: 'personal' }
+        { kind: 'boru', name: 'team', namespace: 'prod' }
+      ]
+    }
+    out: [ 'personal', 'team' ]
+  }
+
+  {
+    in: { chain: [] }
+    out: []
+  }
+
+  # Mixed defaulted and explicit names.
+  {
+    in: {
+      chain: [
+        { kind: 'file', dir: '/x' }
+        { kind: 'awssecrets', region: 'r' }
+        { kind: 'doppler' }
+        { kind: 'onepassword', vault: 'v', name: 'op' }
+      ]
+    }
+    out: [ 'file', 'awssecrets', 'doppler', 'op' ]
+  }
+]

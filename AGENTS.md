@@ -9,12 +9,20 @@ ten stay one.
    `typescript/src/Providers.ts` define the behaviour. Every other port is
    a translation of them. Change canonical first, then propagate.
 
-2. **`spec/sekreto.json` is the contract.** It runs against every port. A
+2. **`spec/sekreto.aontu` is the contract.** It runs against every port. A
    port that disagrees with the spec is the thing that is wrong — not the
    spec. Changing the spec means changing ten ports, so change it
    deliberately.
 
-3. **No third-party dependencies, with exactly one exception.** Where a
+   The cases live in `spec/def/*.aontu`; `spec/sekreto.json` is **generated**
+   from them by `make spec` and committed so that no port needs a Node
+   toolchain to run its tests. Never hand-edit the JSON — edit the aontu,
+   run `make spec`, commit both. CI's `spec-freshness` job rebuilds and
+   fails on any drift.
+
+3. **No third-party dependencies, with exactly one exception.** (`tools/` is
+   build machinery, not a port — it depends on `@voxgig/model`, and nothing
+   at test time ever reaches it.) Where a
    standard library is missing something, the port carries a small one of
    its own: JSON in Java and Rust (C# uses the BCL's), HTTP in Rust. That is
    the cost of the rule and it is worth paying.

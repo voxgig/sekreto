@@ -1,0 +1,50 @@
+
+# Redaction: replace known secret values in text before it is logged.
+#
+# The short-value rule is the interesting one. Redacting a 3-character
+# secret would blank out unrelated text everywhere it happens to occur, so
+# values below the length threshold are left alone — better a leak the
+# caller can see than a log that quietly rewrites itself.
+
+
+redact: set: [
+  {
+    id: 'redact#one', doc: true
+    in: { text: 'token is s3cr3t-value', values: [ 's3cr3t-value' ] }
+    out: 'token is [redacted]'
+  }
+
+  # No occurrence, no change.
+  {
+    in: { text: 'nothing here', values: [ 's3cr3t' ] }
+    out: 'nothing here'
+  }
+
+  # Every value, and every occurrence of each.
+  {
+    in: { text: 'a=AAAA b=BBBB', values: [ 'AAAA', 'BBBB' ] }
+    out: 'a=[redacted] b=[redacted]'
+  }
+  {
+    in: { text: 'twice AAAA and AAAA', values: [ 'AAAA' ] }
+    out: 'twice [redacted] and [redacted]'
+  }
+
+  # Too short to redact safely — left as-is.
+  {
+    in: { text: 'short abc', values: [ 'abc' ] }
+    out: 'short abc'
+  }
+
+  # An empty value would match everywhere; it must be ignored outright.
+  {
+    in: { text: 'empty', values: [ '' ] }
+    out: 'empty'
+  }
+
+  # Empty text stays empty.
+  {
+    in: { text: '', values: [ 'AAAA' ] }
+    out: ''
+  }
+]

@@ -1,237 +1,11 @@
 {
   "primary": {
     "sekreto": {
-      "validname": {
-        "set": [
-          {
-            "id": "validname#ok",
-            "doc": true,
-            "in": "api.token",
-            "out": true
-          },
-          {
-            "in": "token",
-            "out": true
-          },
-          {
-            "in": "db.pass.main",
-            "out": true
-          },
-          {
-            "in": "a",
-            "out": true
-          },
-          {
-            "in": "a1.b2",
-            "out": true
-          },
-          {
-            "in": "with_underscore",
-            "out": true
-          },
-          {
-            "in": "",
-            "out": false
-          },
-          {
-            "in": ".",
-            "out": false
-          },
-          {
-            "in": "a.",
-            "out": false
-          },
-          {
-            "in": ".a",
-            "out": false
-          },
-          {
-            "in": "a..b",
-            "out": false
-          },
-          {
-            "in": "a b",
-            "out": false
-          },
-          {
-            "in": "a-b",
-            "out": false
-          },
-          {
-            "in": "A.B",
-            "out": false
-          },
-          {
-            "in": "a/b",
-            "out": false
-          },
-          {
-            "in": "a$b",
-            "out": false
-          }
-        ]
-      },
-      "envkey": {
-        "set": [
-          {
-            "id": "envkey#dotted",
-            "doc": true,
-            "in": {
-              "name": "api.token"
-            },
-            "out": "API_TOKEN"
-          },
-          {
-            "in": {
-              "name": "token"
-            },
-            "out": "TOKEN"
-          },
-          {
-            "in": {
-              "name": "db.pass.main"
-            },
-            "out": "DB_PASS_MAIN"
-          },
-          {
-            "in": {
-              "name": "with_underscore"
-            },
-            "out": "WITH_UNDERSCORE"
-          },
-          {
-            "in": {
-              "name": "api.token",
-              "prefix": "SEKRETO_"
-            },
-            "out": "SEKRETO_API_TOKEN"
-          },
-          {
-            "in": {
-              "name": "token",
-              "prefix": "APP_"
-            },
-            "out": "APP_TOKEN"
-          },
-          {
-            "in": {
-              "name": "a b"
-            },
-            "err": "invalid name"
-          },
-          {
-            "in": {
-              "name": ""
-            },
-            "err": "sekreto: invalid name: "
-          }
-        ]
-      },
-      "vaultref": {
-        "set": [
-          {
-            "id": "vaultref#dotted",
-            "doc": true,
-            "in": "api.token",
-            "out": {
-              "path": "api",
-              "field": "token"
-            }
-          },
-          {
-            "in": "db.pass.main",
-            "out": {
-              "path": "db/pass",
-              "field": "main"
-            }
-          },
-          {
-            "in": "token",
-            "out": {
-              "path": "token",
-              "field": "value"
-            }
-          },
-          {
-            "in": "a.b.c.d",
-            "out": {
-              "path": "a/b/c",
-              "field": "d"
-            }
-          },
-          {
-            "in": "a b",
-            "err": "invalid name"
-          }
-        ]
-      },
-      "flatname": {
-        "set": [
-          {
-            "id": "flatname#gcp",
-            "doc": true,
-            "in": {
-              "name": "api.token",
-              "sep": "_"
-            },
-            "out": "api_token"
-          },
-          {
-            "in": {
-              "name": "api.token",
-              "sep": "-"
-            },
-            "out": "api-token"
-          },
-          {
-            "in": {
-              "name": "db.pass.main",
-              "sep": "-"
-            },
-            "out": "db-pass-main"
-          },
-          {
-            "in": {
-              "name": "token",
-              "sep": "_"
-            },
-            "out": "token"
-          },
-          {
-            "in": {
-              "name": "a b",
-              "sep": "_"
-            },
-            "err": "invalid name"
-          },
-          {
-            "in": {
-              "name": "with_underscore",
-              "sep": "-"
-            },
-            "out": "with-underscore"
-          },
-          {
-            "in": {
-              "name": "db_pass.main",
-              "sep": "-"
-            },
-            "out": "db-pass-main"
-          },
-          {
-            "in": {
-              "name": "with_underscore",
-              "sep": "_"
-            },
-            "out": "with_underscore"
-          }
-        ]
-      },
       "awsparam": {
         "set": [
           {
-            "id": "awsparam#root",
             "doc": true,
+            "id": "awsparam#root",
             "in": {
               "name": "api.token"
             },
@@ -271,18 +45,296 @@
             "out": "/app/api/token"
           },
           {
+            "err": "invalid name",
             "in": {
               "name": "a b"
+            }
+          }
+        ]
+      },
+      "envkey": {
+        "set": [
+          {
+            "doc": true,
+            "id": "envkey#dotted",
+            "in": {
+              "name": "api.token"
             },
-            "err": "invalid name"
+            "out": "API_TOKEN"
+          },
+          {
+            "in": {
+              "name": "token"
+            },
+            "out": "TOKEN"
+          },
+          {
+            "in": {
+              "name": "db.pass.main"
+            },
+            "out": "DB_PASS_MAIN"
+          },
+          {
+            "in": {
+              "name": "with_underscore"
+            },
+            "out": "WITH_UNDERSCORE"
+          },
+          {
+            "in": {
+              "name": "api.token",
+              "prefix": "SEKRETO_"
+            },
+            "out": "SEKRETO_API_TOKEN"
+          },
+          {
+            "in": {
+              "name": "token",
+              "prefix": "APP_"
+            },
+            "out": "APP_TOKEN"
+          },
+          {
+            "err": "invalid name",
+            "in": {
+              "name": "a b"
+            }
+          },
+          {
+            "err": "sekreto: invalid name: ",
+            "in": {
+              "name": ""
+            }
+          }
+        ]
+      },
+      "flatname": {
+        "set": [
+          {
+            "doc": true,
+            "id": "flatname#gcp",
+            "in": {
+              "name": "api.token",
+              "sep": "_"
+            },
+            "out": "api_token"
+          },
+          {
+            "in": {
+              "name": "api.token",
+              "sep": "-"
+            },
+            "out": "api-token"
+          },
+          {
+            "in": {
+              "name": "db.pass.main",
+              "sep": "-"
+            },
+            "out": "db-pass-main"
+          },
+          {
+            "in": {
+              "name": "token",
+              "sep": "_"
+            },
+            "out": "token"
+          },
+          {
+            "err": "invalid name",
+            "in": {
+              "name": "a b",
+              "sep": "_"
+            }
+          },
+          {
+            "in": {
+              "name": "with_underscore",
+              "sep": "-"
+            },
+            "out": "with-underscore"
+          },
+          {
+            "in": {
+              "name": "db_pass.main",
+              "sep": "-"
+            },
+            "out": "db-pass-main"
+          },
+          {
+            "in": {
+              "name": "with_underscore",
+              "sep": "_"
+            },
+            "out": "with_underscore"
+          }
+        ]
+      },
+      "getfrom": {
+        "set": [
+          {
+            "doc": true,
+            "id": "getfrom#named",
+            "in": {
+              "chain": [
+                {
+                  "kind": "memory",
+                  "name": "local",
+                  "values": {
+                    "API_TOKEN": "LOCAL"
+                  }
+                },
+                {
+                  "kind": "memory",
+                  "name": "shared",
+                  "values": {
+                    "API_TOKEN": "SHARED"
+                  }
+                }
+              ],
+              "name": "api.token",
+              "store": "shared"
+            },
+            "out": "SHARED"
+          },
+          {
+            "in": {
+              "chain": [
+                {
+                  "kind": "memory",
+                  "name": "local",
+                  "values": {
+                    "API_TOKEN": "LOCAL"
+                  }
+                },
+                {
+                  "kind": "memory",
+                  "name": "shared",
+                  "values": {
+                    "API_TOKEN": "SHARED"
+                  }
+                }
+              ],
+              "name": "api.token",
+              "store": "local"
+            },
+            "out": "LOCAL"
+          },
+          {
+            "in": {
+              "chain": [
+                {
+                  "kind": "memory",
+                  "values": {
+                    "API_TOKEN": "T"
+                  }
+                }
+              ],
+              "name": "api.token",
+              "store": "memory"
+            },
+            "out": "T"
+          },
+          {
+            "in": {
+              "chain": [
+                {
+                  "kind": "memory",
+                  "name": "pair",
+                  "values": {}
+                },
+                {
+                  "kind": "memory",
+                  "name": "pair",
+                  "values": {
+                    "API_TOKEN": "SECOND"
+                  }
+                }
+              ],
+              "name": "api.token",
+              "store": "pair"
+            },
+            "out": "SECOND"
+          },
+          {
+            "err": "sekreto: unknown secret: local:api.token",
+            "in": {
+              "chain": [
+                {
+                  "kind": "memory",
+                  "name": "local",
+                  "values": {}
+                }
+              ],
+              "name": "api.token",
+              "store": "local"
+            }
+          },
+          {
+            "err": "sekreto: unknown store: nosuch",
+            "in": {
+              "chain": [
+                {
+                  "kind": "memory",
+                  "name": "local",
+                  "values": {
+                    "API_TOKEN": "T"
+                  }
+                }
+              ],
+              "name": "api.token",
+              "store": "nosuch"
+            }
+          },
+          {
+            "err": "invalid name",
+            "in": {
+              "chain": [
+                {
+                  "kind": "memory",
+                  "values": {
+                    "API_TOKEN": "T"
+                  }
+                }
+              ],
+              "name": "a b",
+              "store": "memory"
+            }
+          },
+          {
+            "doc": true,
+            "err": "sekreto: refusing to send a token in plaintext to http://vault.example.com:8200 (use https)",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://vault.example.com:8200",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: not an http(s) address: ftp://vault.example.com",
+            "in": {
+              "chain": [
+                {
+                  "addr": "ftp://vault.example.com",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
           }
         ]
       },
       "parsedotenv": {
         "set": [
           {
-            "id": "parsedotenv#basic",
             "doc": true,
+            "id": "parsedotenv#basic",
             "in": "API_TOKEN=abc123",
             "out": {
               "API_TOKEN": "abc123"
@@ -390,11 +442,81 @@
           }
         ]
       },
+      "redact": {
+        "set": [
+          {
+            "doc": true,
+            "id": "redact#one",
+            "in": {
+              "text": "token is s3cr3t-value",
+              "values": [
+                "s3cr3t-value"
+              ]
+            },
+            "out": "token is [redacted]"
+          },
+          {
+            "in": {
+              "text": "nothing here",
+              "values": [
+                "s3cr3t"
+              ]
+            },
+            "out": "nothing here"
+          },
+          {
+            "in": {
+              "text": "a=AAAA b=BBBB",
+              "values": [
+                "AAAA",
+                "BBBB"
+              ]
+            },
+            "out": "a=[redacted] b=[redacted]"
+          },
+          {
+            "in": {
+              "text": "twice AAAA and AAAA",
+              "values": [
+                "AAAA"
+              ]
+            },
+            "out": "twice [redacted] and [redacted]"
+          },
+          {
+            "in": {
+              "text": "short abc",
+              "values": [
+                "abc"
+              ]
+            },
+            "out": "short abc"
+          },
+          {
+            "in": {
+              "text": "empty",
+              "values": [
+                ""
+              ]
+            },
+            "out": "empty"
+          },
+          {
+            "in": {
+              "text": "",
+              "values": [
+                "AAAA"
+              ]
+            },
+            "out": ""
+          }
+        ]
+      },
       "resolve": {
         "set": [
           {
-            "id": "resolve#first",
             "doc": true,
+            "id": "resolve#first",
             "in": {
               "chain": [
                 {
@@ -462,6 +584,7 @@
             "out": "P"
           },
           {
+            "err": "sekreto: unknown secret: api.token",
             "in": {
               "chain": [
                 {
@@ -472,17 +595,17 @@
                 }
               ],
               "name": "api.token"
-            },
-            "err": "sekreto: unknown secret: api.token"
+            }
           },
           {
+            "err": "unknown secret",
             "in": {
               "chain": [],
               "name": "api.token"
-            },
-            "err": "unknown secret"
+            }
           },
           {
+            "err": "invalid name",
             "in": {
               "chain": [
                 {
@@ -493,8 +616,7 @@
                 }
               ],
               "name": "a b"
-            },
-            "err": "invalid name"
+            }
           },
           {
             "in": {
@@ -514,8 +636,8 @@
             "in": {
               "chain": [
                 {
-                  "kind": "file",
-                  "dir": "/nonexistent-sekreto-spec-dir"
+                  "dir": "/nonexistent-sekreto-spec-dir",
+                  "kind": "file"
                 },
                 {
                   "kind": "memory",
@@ -529,58 +651,125 @@
             "out": "FT1"
           },
           {
+            "err": "unsupported kv version",
             "in": {
               "chain": [
                 {
-                  "kind": "hashicorp",
                   "addr": "http://127.0.0.1:1",
-                  "token": "t",
-                  "kv": 3
+                  "kind": "hashicorp",
+                  "kv": 3,
+                  "token": "t"
                 }
               ],
               "name": "api.token"
-            },
-            "err": "unsupported kv version"
+            }
           }
         ]
       },
-      "trysecret": {
+      "sigv4": {
         "set": [
           {
-            "id": "trysecret#hit",
             "doc": true,
+            "id": "sigv4#get-vanilla",
             "in": {
-              "chain": [
-                {
-                  "kind": "memory",
-                  "values": {
-                    "API_TOKEN": "T"
-                  }
-                }
-              ],
-              "name": "api.token"
+              "body": "",
+              "datetime": "20150830T123600Z",
+              "keyid": "AKIDEXAMPLE",
+              "method": "GET",
+              "region": "us-east-1",
+              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+              "service": "service",
+              "url": "https://example.amazonaws.com/"
             },
-            "out": "T"
+            "out": {
+              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31",
+              "x-amz-date": "20150830T123600Z"
+            }
           },
           {
             "in": {
-              "chain": [
-                {
-                  "kind": "memory",
-                  "values": {}
-                }
-              ],
-              "name": "api.token"
+              "body": "{\"SecretId\":\"api\"}",
+              "datetime": "20260803T120000Z",
+              "headers": {
+                "content-type": "application/x-amz-json-1.1",
+                "x-amz-target": "secretsmanager.GetSecretValue"
+              },
+              "keyid": "AKIDEXAMPLE",
+              "method": "POST",
+              "region": "us-east-1",
+              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+              "service": "secretsmanager",
+              "url": "http://127.0.0.1:9099/"
             },
-            "out": "__NULL__"
+            "out": {
+              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260803/us-east-1/secretsmanager/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-target, Signature=15d2cb8c37ecd019ecf393b16bd92813b99e8652839533d7a3043a4d545d5702",
+              "x-amz-date": "20260803T120000Z"
+            }
+          },
+          {
+            "in": {
+              "body": "{\"Name\":\"/db/pass/main\",\"WithDecryption\":true}",
+              "datetime": "20260101T000000Z",
+              "headers": {
+                "content-type": "application/x-amz-json-1.1",
+                "x-amz-target": "AmazonSSM.GetParameter"
+              },
+              "keyid": "AKIDEXAMPLE",
+              "method": "POST",
+              "region": "eu-west-1",
+              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+              "service": "ssm",
+              "session": "THESESSIONTOKEN",
+              "url": "https://ssm.eu-west-1.amazonaws.com/"
+            },
+            "out": {
+              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260101/eu-west-1/ssm/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token;x-amz-target, Signature=9174d68dc4eed358bb8054c52e795ad7cfe30a7d5e452213a744316c8113585f",
+              "x-amz-date": "20260101T000000Z",
+              "x-amz-security-token": "THESESSIONTOKEN"
+            }
+          },
+          {
+            "in": {
+              "body": "",
+              "datetime": "20150830T123600Z",
+              "keyid": "AKIDEXAMPLE",
+              "method": "GET",
+              "region": "us-east-1",
+              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+              "service": "service",
+              "url": "https://example.amazonaws.com/path/to?b=2&a=1"
+            },
+            "out": {
+              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=eff4168718a416b2d30f67b2ade46372495930d2f8b0026395b61bfcb3a32b03",
+              "x-amz-date": "20150830T123600Z"
+            }
+          },
+          {
+            "in": {
+              "body": "",
+              "datetime": "20150830T123600Z",
+              "headers": {
+                "x-amz-target": "a  b\tc"
+              },
+              "keyid": "AKIDEXAMPLE",
+              "method": "POST",
+              "region": "us-east-1",
+              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+              "service": "service",
+              "url": "https://example.amazonaws.com/"
+            },
+            "out": {
+              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date;x-amz-target, Signature=19e8a3f4b467cf96fd355ae7642f439d2df7698aafd1ec373ea2c6af42b8b273",
+              "x-amz-date": "20150830T123600Z"
+            }
           }
         ]
       },
       "sources": {
         "set": [
           {
-            "id": "sources#kinds",
             "doc": true,
+            "id": "sources#kinds",
             "in": {
               "chain": [
                 {
@@ -610,8 +799,8 @@
                   "namespace": "prod"
                 },
                 {
-                  "kind": "hashicorp",
-                  "addr": "http://127.0.0.1:8200"
+                  "addr": "http://127.0.0.1:8200",
+                  "kind": "hashicorp"
                 }
               ]
             },
@@ -631,8 +820,8 @@
             "in": {
               "chain": [
                 {
-                  "kind": "file",
-                  "dir": "/run/secrets"
+                  "dir": "/run/secrets",
+                  "kind": "file"
                 },
                 {
                   "kind": "awssecrets",
@@ -640,8 +829,8 @@
                 },
                 {
                   "kind": "awsparams",
-                  "region": "eu-west-1",
-                  "prefix": "/app"
+                  "prefix": "/app",
+                  "region": "eu-west-1"
                 },
                 {
                   "kind": "gcpsecrets",
@@ -656,18 +845,18 @@
                   "vault": "dev"
                 },
                 {
+                  "config": "prd",
                   "kind": "doppler",
-                  "project": "app",
-                  "config": "prd"
+                  "project": "app"
                 },
                 {
+                  "environment": "prod",
                   "kind": "infisical",
-                  "project": "w1",
-                  "environment": "prod"
+                  "project": "w1"
                 },
                 {
-                  "kind": "boru",
-                  "addr": "http://127.0.0.1:8200"
+                  "addr": "http://127.0.0.1:8200",
+                  "kind": "boru"
                 }
               ]
             },
@@ -688,16 +877,16 @@
       "stores": {
         "set": [
           {
-            "id": "stores#default",
             "doc": true,
+            "id": "stores#default",
             "in": {
               "chain": [
                 {
                   "kind": "env"
                 },
                 {
-                  "kind": "dotenv",
-                  "file": ".env"
+                  "file": ".env",
+                  "kind": "dotenv"
                 },
                 {
                   "kind": "memory",
@@ -794,8 +983,8 @@
             "in": {
               "chain": [
                 {
-                  "kind": "file",
-                  "dir": "/x"
+                  "dir": "/x",
+                  "kind": "file"
                 },
                 {
                   "kind": "awssecrets",
@@ -806,8 +995,8 @@
                 },
                 {
                   "kind": "onepassword",
-                  "vault": "v",
-                  "name": "op"
+                  "name": "op",
+                  "vault": "v"
                 }
               ]
             },
@@ -820,171 +1009,11 @@
           }
         ]
       },
-      "getfrom": {
-        "set": [
-          {
-            "id": "getfrom#named",
-            "doc": true,
-            "in": {
-              "chain": [
-                {
-                  "kind": "memory",
-                  "name": "local",
-                  "values": {
-                    "API_TOKEN": "LOCAL"
-                  }
-                },
-                {
-                  "kind": "memory",
-                  "name": "shared",
-                  "values": {
-                    "API_TOKEN": "SHARED"
-                  }
-                }
-              ],
-              "store": "shared",
-              "name": "api.token"
-            },
-            "out": "SHARED"
-          },
-          {
-            "in": {
-              "chain": [
-                {
-                  "kind": "memory",
-                  "name": "local",
-                  "values": {
-                    "API_TOKEN": "LOCAL"
-                  }
-                },
-                {
-                  "kind": "memory",
-                  "name": "shared",
-                  "values": {
-                    "API_TOKEN": "SHARED"
-                  }
-                }
-              ],
-              "store": "local",
-              "name": "api.token"
-            },
-            "out": "LOCAL"
-          },
-          {
-            "in": {
-              "chain": [
-                {
-                  "kind": "memory",
-                  "values": {
-                    "API_TOKEN": "T"
-                  }
-                }
-              ],
-              "store": "memory",
-              "name": "api.token"
-            },
-            "out": "T"
-          },
-          {
-            "in": {
-              "chain": [
-                {
-                  "kind": "memory",
-                  "name": "pair",
-                  "values": {}
-                },
-                {
-                  "kind": "memory",
-                  "name": "pair",
-                  "values": {
-                    "API_TOKEN": "SECOND"
-                  }
-                }
-              ],
-              "store": "pair",
-              "name": "api.token"
-            },
-            "out": "SECOND"
-          },
-          {
-            "in": {
-              "chain": [
-                {
-                  "kind": "memory",
-                  "name": "local",
-                  "values": {}
-                }
-              ],
-              "store": "local",
-              "name": "api.token"
-            },
-            "err": "sekreto: unknown secret: local:api.token"
-          },
-          {
-            "in": {
-              "chain": [
-                {
-                  "kind": "memory",
-                  "name": "local",
-                  "values": {
-                    "API_TOKEN": "T"
-                  }
-                }
-              ],
-              "store": "nosuch",
-              "name": "api.token"
-            },
-            "err": "sekreto: unknown store: nosuch"
-          },
-          {
-            "in": {
-              "chain": [
-                {
-                  "kind": "memory",
-                  "values": {
-                    "API_TOKEN": "T"
-                  }
-                }
-              ],
-              "store": "memory",
-              "name": "a b"
-            },
-            "err": "invalid name"
-          },
-          {
-            "doc": true,
-            "in": {
-              "chain": [
-                {
-                  "kind": "hashicorp",
-                  "addr": "http://vault.example.com:8200"
-                }
-              ],
-              "store": "hashicorp",
-              "name": "api.token"
-            },
-            "err": "sekreto: refusing to send a token in plaintext to http://vault.example.com:8200 (use https)"
-          },
-          {
-            "in": {
-              "chain": [
-                {
-                  "kind": "hashicorp",
-                  "addr": "ftp://vault.example.com"
-                }
-              ],
-              "store": "hashicorp",
-              "name": "api.token"
-            },
-            "err": "sekreto: not an http(s) address: ftp://vault.example.com"
-          }
-        ]
-      },
       "tryfrom": {
         "set": [
           {
-            "id": "tryfrom#hit",
             "doc": true,
+            "id": "tryfrom#hit",
             "in": {
               "chain": [
                 {
@@ -995,8 +1024,8 @@
                   }
                 }
               ],
-              "store": "local",
-              "name": "api.token"
+              "name": "api.token",
+              "store": "local"
             },
             "out": "T"
           },
@@ -1009,8 +1038,8 @@
                   "values": {}
                 }
               ],
-              "store": "local",
-              "name": "api.token"
+              "name": "api.token",
+              "store": "local"
             },
             "out": "__NULL__"
           },
@@ -1030,12 +1059,13 @@
                   }
                 }
               ],
-              "store": "local",
-              "name": "api.token"
+              "name": "api.token",
+              "store": "local"
             },
             "out": "__NULL__"
           },
           {
+            "err": "sekreto: unknown store: nosuch",
             "in": {
               "chain": [
                 {
@@ -1044,179 +1074,149 @@
                   "values": {}
                 }
               ],
-              "store": "nosuch",
+              "name": "api.token",
+              "store": "nosuch"
+            }
+          }
+        ]
+      },
+      "trysecret": {
+        "set": [
+          {
+            "doc": true,
+            "id": "trysecret#hit",
+            "in": {
+              "chain": [
+                {
+                  "kind": "memory",
+                  "values": {
+                    "API_TOKEN": "T"
+                  }
+                }
+              ],
               "name": "api.token"
             },
-            "err": "sekreto: unknown store: nosuch"
+            "out": "T"
+          },
+          {
+            "in": {
+              "chain": [
+                {
+                  "kind": "memory",
+                  "values": {}
+                }
+              ],
+              "name": "api.token"
+            },
+            "out": "__NULL__"
           }
         ]
       },
-      "redact": {
+      "validname": {
         "set": [
           {
-            "id": "redact#one",
             "doc": true,
-            "in": {
-              "text": "token is s3cr3t-value",
-              "values": [
-                "s3cr3t-value"
-              ]
-            },
-            "out": "token is [redacted]"
+            "id": "validname#ok",
+            "in": "api.token",
+            "out": true
           },
           {
-            "in": {
-              "text": "nothing here",
-              "values": [
-                "s3cr3t"
-              ]
-            },
-            "out": "nothing here"
+            "in": "token",
+            "out": true
           },
           {
-            "in": {
-              "text": "a=AAAA b=BBBB",
-              "values": [
-                "AAAA",
-                "BBBB"
-              ]
-            },
-            "out": "a=[redacted] b=[redacted]"
+            "in": "db.pass.main",
+            "out": true
           },
           {
-            "in": {
-              "text": "twice AAAA and AAAA",
-              "values": [
-                "AAAA"
-              ]
-            },
-            "out": "twice [redacted] and [redacted]"
+            "in": "a",
+            "out": true
           },
           {
-            "in": {
-              "text": "short abc",
-              "values": [
-                "abc"
-              ]
-            },
-            "out": "short abc"
+            "in": "a1.b2",
+            "out": true
           },
           {
-            "in": {
-              "text": "empty",
-              "values": [
-                ""
-              ]
-            },
-            "out": "empty"
+            "in": "with_underscore",
+            "out": true
           },
           {
-            "in": {
-              "text": "",
-              "values": [
-                "AAAA"
-              ]
-            },
-            "out": ""
+            "in": "",
+            "out": false
+          },
+          {
+            "in": ".",
+            "out": false
+          },
+          {
+            "in": "a.",
+            "out": false
+          },
+          {
+            "in": ".a",
+            "out": false
+          },
+          {
+            "in": "a..b",
+            "out": false
+          },
+          {
+            "in": "a b",
+            "out": false
+          },
+          {
+            "in": "a-b",
+            "out": false
+          },
+          {
+            "in": "A.B",
+            "out": false
+          },
+          {
+            "in": "a/b",
+            "out": false
+          },
+          {
+            "in": "a$b",
+            "out": false
           }
         ]
       },
-      "sigv4": {
+      "vaultref": {
         "set": [
           {
-            "id": "sigv4#get-vanilla",
             "doc": true,
-            "in": {
-              "method": "GET",
-              "url": "https://example.amazonaws.com/",
-              "body": "",
-              "service": "service",
-              "region": "us-east-1",
-              "datetime": "20150830T123600Z",
-              "keyid": "AKIDEXAMPLE",
-              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
-            },
+            "id": "vaultref#dotted",
+            "in": "api.token",
             "out": {
-              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=5fa00fa31553b73ebf1942676e86291e8372ff2a2260956d9b8aae1d763fbf31",
-              "x-amz-date": "20150830T123600Z"
+              "field": "token",
+              "path": "api"
             }
           },
           {
-            "in": {
-              "method": "POST",
-              "url": "http://127.0.0.1:9099/",
-              "headers": {
-                "content-type": "application/x-amz-json-1.1",
-                "x-amz-target": "secretsmanager.GetSecretValue"
-              },
-              "body": "{\"SecretId\":\"api\"}",
-              "service": "secretsmanager",
-              "region": "us-east-1",
-              "datetime": "20260803T120000Z",
-              "keyid": "AKIDEXAMPLE",
-              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
-            },
+            "in": "db.pass.main",
             "out": {
-              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260803/us-east-1/secretsmanager/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-target, Signature=15d2cb8c37ecd019ecf393b16bd92813b99e8652839533d7a3043a4d545d5702",
-              "x-amz-date": "20260803T120000Z"
+              "field": "main",
+              "path": "db/pass"
             }
           },
           {
-            "in": {
-              "method": "POST",
-              "url": "https://ssm.eu-west-1.amazonaws.com/",
-              "headers": {
-                "content-type": "application/x-amz-json-1.1",
-                "x-amz-target": "AmazonSSM.GetParameter"
-              },
-              "body": "{\"Name\":\"/db/pass/main\",\"WithDecryption\":true}",
-              "service": "ssm",
-              "region": "eu-west-1",
-              "session": "THESESSIONTOKEN",
-              "datetime": "20260101T000000Z",
-              "keyid": "AKIDEXAMPLE",
-              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
-            },
+            "in": "token",
             "out": {
-              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20260101/eu-west-1/ssm/aws4_request, SignedHeaders=content-type;host;x-amz-date;x-amz-security-token;x-amz-target, Signature=9174d68dc4eed358bb8054c52e795ad7cfe30a7d5e452213a744316c8113585f",
-              "x-amz-date": "20260101T000000Z",
-              "x-amz-security-token": "THESESSIONTOKEN"
+              "field": "value",
+              "path": "token"
             }
           },
           {
-            "in": {
-              "method": "GET",
-              "url": "https://example.amazonaws.com/path/to?b=2&a=1",
-              "body": "",
-              "service": "service",
-              "region": "us-east-1",
-              "datetime": "20150830T123600Z",
-              "keyid": "AKIDEXAMPLE",
-              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
-            },
+            "in": "a.b.c.d",
             "out": {
-              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=eff4168718a416b2d30f67b2ade46372495930d2f8b0026395b61bfcb3a32b03",
-              "x-amz-date": "20150830T123600Z"
+              "field": "d",
+              "path": "a/b/c"
             }
           },
           {
-            "in": {
-              "method": "POST",
-              "url": "https://example.amazonaws.com/",
-              "headers": {
-                "x-amz-target": "a  b\tc"
-              },
-              "body": "",
-              "service": "service",
-              "region": "us-east-1",
-              "keyid": "AKIDEXAMPLE",
-              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
-              "datetime": "20150830T123600Z"
-            },
-            "out": {
-              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date;x-amz-target, Signature=19e8a3f4b467cf96fd355ae7642f439d2df7698aafd1ec373ea2c6af42b8b273",
-              "x-amz-date": "20150830T123600Z"
-            }
+            "err": "invalid name",
+            "in": "a b"
           }
         ]
       }

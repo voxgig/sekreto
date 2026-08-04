@@ -1,0 +1,56 @@
+
+# .env file parsing.
+#
+# There is no .env standard, so this group IS the specification: it fixes
+# the exact dialect every port must accept. The awkward cases (an inline
+# '#' that is not a comment, an escape sequence that only applies inside
+# double quotes, a line with no '=') are the ones real .env files trip on.
+
+
+parsedotenv: set: [
+  { id: 'parsedotenv#basic', doc: true, in: 'API_TOKEN=abc123', out: { API_TOKEN: 'abc123' } }
+
+  # Nothing to parse.
+  { in: '', out: {} }
+  { in: '\n\n', out: {} }
+  { in: '# only a comment', out: {} }
+
+  # Multiple entries, and a whole-line comment between them.
+  { in: 'A=1\nB=2', out: { A: '1', B: '2' } }
+  { in: 'A=1\n# comment\nB=2', out: { A: '1', B: '2' } }
+
+  # Surrounding whitespace is stripped from both key and value, and the
+  # shell-style `export` prefix is ignored so a .env file can be sourced.
+  { in: '  A  =  1  ', out: { A: '1' } }
+  { in: 'export A=1', out: { A: '1' } }
+
+  # Quotes delimit the value and are removed; either kind works.
+  { in: 'A="quoted value"', out: { A: 'quoted value' } }
+  { in: "A='single quoted'", out: { A: 'single quoted' } }
+
+  # Only the FIRST '=' splits, so a value may contain more of them.
+  { in: 'A=has=equals', out: { A: 'has=equals' } }
+
+  # An empty value is a value, not an absent key.
+  { in: 'A=', out: { A: '' } }
+  { in: 'A=""', out: { A: '' } }
+
+  # '#' only starts a comment at the start of a line — an unquoted value
+  # keeps it, because secrets legitimately contain '#'.
+  { in: 'A=trailing # not a comment', out: { A: 'trailing # not a comment' } }
+
+  # \n is an escape inside double quotes. (The aontu source doubles the
+  # backslash, so the parser under test sees a literal backslash-n.)
+  { in: 'A="line\\nbreak"', out: { A: 'line\nbreak' } }
+
+  # A line with no '=' is skipped, not an error — it must not abort the
+  # lines around it.
+  { in: 'A=1\nNOEQUALS\nB=2', out: { A: '1', B: '2' } }
+
+  # CRLF files parse the same as LF ones; the \r must not end up in the
+  # value.
+  { in: 'A=1\r\nB=2', out: { A: '1', B: '2' } }
+
+  # Keys are taken verbatim — no case folding on the way in.
+  { in: 'a=1', out: { a: '1' } }
+]

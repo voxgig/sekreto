@@ -1,0 +1,90 @@
+
+# Name handling: the pure, side-effect-free half of sekreto.
+#
+# A sekreto name is the portable identifier a caller uses; every backend
+# has its own spelling of it. These groups pin down the one canonical name
+# grammar and the exact translation into each backend's convention, so a
+# name written once resolves identically in every language port.
+
+
+# A valid name is lowercase [a-z0-9_] segments joined by single dots, with
+# no leading, trailing, or doubled dot. Uppercase is rejected so that the
+# env-var spelling (which uppercases) stays an injective mapping.
+validname: set: [
+  { id: 'validname#ok', doc: true, in: 'api.token', out: true }
+  { in: 'token', out: true }
+  { in: 'db.pass.main', out: true }
+  { in: 'a', out: true }
+  { in: 'a1.b2', out: true }
+  { in: 'with_underscore', out: true }
+
+  { in: '', out: false }
+  { in: '.', out: false }
+  { in: 'a.', out: false }
+  { in: '.a', out: false }
+  { in: 'a..b', out: false }
+  { in: 'a b', out: false }
+  { in: 'a-b', out: false }
+  { in: 'A.B', out: false }
+  { in: 'a/b', out: false }
+  { in: 'a$b', out: false }
+]
+
+
+# Environment variables: uppercase, dots to underscores, optional prefix
+# prepended verbatim (so the caller controls the separator).
+envkey: set: [
+  { id: 'envkey#dotted', doc: true, in: { name: 'api.token' }, out: 'API_TOKEN' }
+  { in: { name: 'token' }, out: 'TOKEN' }
+  { in: { name: 'db.pass.main' }, out: 'DB_PASS_MAIN' }
+  { in: { name: 'with_underscore' }, out: 'WITH_UNDERSCORE' }
+  { in: { name: 'api.token', prefix: 'SEKRETO_' }, out: 'SEKRETO_API_TOKEN' }
+  { in: { name: 'token', prefix: 'APP_' }, out: 'APP_TOKEN' }
+
+  { in: { name: 'a b' }, err: 'invalid name' }
+  { in: { name: '' }, err: 'sekreto: invalid name: ' }
+]
+
+
+# HashiCorp Vault: all but the last segment become the path, the last
+# becomes the field. A single-segment name has no field, so it defaults to
+# the conventional 'value'.
+vaultref: set: [
+  { id: 'vaultref#dotted', doc: true, in: 'api.token', out: { path: 'api', field: 'token' } }
+  { in: 'db.pass.main', out: { path: 'db/pass', field: 'main' } }
+  { in: 'token', out: { path: 'token', field: 'value' } }
+  { in: 'a.b.c.d', out: { path: 'a/b/c', field: 'd' } }
+
+  { in: 'a b', err: 'invalid name' }
+]
+
+
+# Backends with a flat namespace (GCP, Azure, 1Password): dots become the
+# caller's separator. Underscores already in the name are rewritten too, so
+# the result uses exactly one separator character.
+flatname: set: [
+  { id: 'flatname#gcp', doc: true, in: { name: 'api.token', sep: '_' }, out: 'api_token' }
+  { in: { name: 'api.token', sep: '-' }, out: 'api-token' }
+  { in: { name: 'db.pass.main', sep: '-' }, out: 'db-pass-main' }
+  { in: { name: 'token', sep: '_' }, out: 'token' }
+
+  { in: { name: 'a b', sep: '_' }, err: 'invalid name' }
+
+  { in: { name: 'with_underscore', sep: '-' }, out: 'with-underscore' }
+  { in: { name: 'db_pass.main', sep: '-' }, out: 'db-pass-main' }
+  { in: { name: 'with_underscore', sep: '_' }, out: 'with_underscore' }
+]
+
+
+# AWS Parameter Store: a slash-separated path, always absolute. The prefix
+# is normalised so that 'app', '/app' and '/app/' all mean the same thing.
+awsparam: set: [
+  { id: 'awsparam#root', doc: true, in: { name: 'api.token' }, out: '/api/token' }
+  { in: { name: 'db.pass.main' }, out: '/db/pass/main' }
+  { in: { name: 'token' }, out: '/token' }
+  { in: { name: 'api.token', prefix: '/app' }, out: '/app/api/token' }
+  { in: { name: 'api.token', prefix: 'app' }, out: '/app/api/token' }
+  { in: { name: 'api.token', prefix: '/app/' }, out: '/app/api/token' }
+
+  { in: { name: 'a b' }, err: 'invalid name' }
+]
