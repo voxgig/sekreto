@@ -1,0 +1,18 @@
+
+# The sekreto conformance spec — SOURCE OF TRUTH.
+#
+# sekreto.json beside this file is a COMMITTED build artifact compiled from
+# these sources by tools/build-spec.js (@voxgig/model). Every port's test
+# runner reads that JSON directly, so no port needs a Node toolchain to run
+# its tests. Edit the aontu, run `make spec`, and commit both.
+#
+# This file is the entry point: it names the categories. The cases live in
+# def/, one file per theme.
+
+primary: sekreto: @"def/names.aontu"
+primary: sekreto: @"def/dotenv.aontu"
+primary: sekreto: @"def/resolve.aontu"
+primary: sekreto: @"def/chain.aontu"
+primary: sekreto: @"def/store.aontu"
+primary: sekreto: @"def/redact.aontu"
+primary: sekreto: @"def/sigv4.aontu"

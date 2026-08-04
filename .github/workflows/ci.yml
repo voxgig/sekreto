@@ -28,6 +28,21 @@ permissions:
   contents: read
 
 jobs:
+  # spec/sekreto.json is generated from spec/*.aontu and committed so that
+  # no port needs a Node toolchain. Recompile it here and fail if the
+  # committed copy differs — a spec edit cannot land with a stale artifact.
+  spec-freshness:
+    name: spec regenerates from *.aontu
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: make spec
+      - name: Fail if a committed spec JSON is stale
+        run: git diff --exit-code spec/
+
   conformance:
     name: conformance / ${{ matrix.lang }}
     runs-on: ubuntu-latest

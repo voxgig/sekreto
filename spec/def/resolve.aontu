@@ -1,0 +1,128 @@
+
+# Resolution down a chain of sources.
+#
+# `resolve` walks the chain in order and returns the first hit, raising if
+# nothing has the secret. `trysecret` is the same walk but reports a miss
+# as a null rather than an error.
+#
+# Every entry builds its chain from the spec, so the chain description is
+# part of the input rather than test-harness setup — that is what lets all
+# 22 ports share these cases verbatim.
+
+
+resolve: set: [
+  {
+    id: 'resolve#first', doc: true
+    in: {
+      chain: [ { kind: 'memory', values: { API_TOKEN: 'T1' } } ]
+      name: 'api.token'
+    }
+    out: 'T1'
+  }
+
+  # An empty source is skipped, not treated as a hit.
+  {
+    in: {
+      chain: [
+        { kind: 'memory', values: {} }
+        { kind: 'memory', values: { API_TOKEN: 'T2' } }
+      ]
+      name: 'api.token'
+    }
+    out: 'T2'
+  }
+
+  # Chain order is precedence: the earlier source wins.
+  {
+    in: {
+      chain: [
+        { kind: 'memory', values: { API_TOKEN: 'FIRST' } }
+        { kind: 'memory', values: { API_TOKEN: 'SECOND' } }
+      ]
+      name: 'api.token'
+    }
+    out: 'FIRST'
+  }
+
+  # A per-source prefix applies to the lookup key, not the sekreto name.
+  {
+    in: {
+      chain: [ { kind: 'memory', prefix: 'SEKRETO_', values: { SEKRETO_API_TOKEN: 'P' } } ]
+      name: 'api.token'
+    }
+    out: 'P'
+  }
+
+  # Misses: a populated chain without the key, and an empty chain.
+  {
+    in: {
+      chain: [ { kind: 'memory', values: { OTHER: 'X' } } ]
+      name: 'api.token'
+    }
+    err: 'sekreto: unknown secret: api.token'
+  }
+  {
+    in: { chain: [], name: 'api.token' }
+    err: 'unknown secret'
+  }
+
+  # The name is validated before any source is consulted.
+  {
+    in: {
+      chain: [ { kind: 'memory', values: { API_TOKEN: 'T' } } ]
+      name: 'a b'
+    }
+    err: 'invalid name'
+  }
+
+  # An empty string is a real value: it stops the walk and is returned.
+  {
+    in: {
+      chain: [ { kind: 'memory', values: { API_TOKEN: '' } } ]
+      name: 'api.token'
+    }
+    out: ''
+  }
+
+  # An unreadable source is a miss, not a failure — the chain continues.
+  {
+    in: {
+      chain: [
+        { kind: 'file', dir: '/nonexistent-sekreto-spec-dir' }
+        { kind: 'memory', values: { API_TOKEN: 'FT1' } }
+      ]
+      name: 'api.token'
+    }
+    out: 'FT1'
+  }
+
+  # A misconfigured source IS a failure — it is caught before any network
+  # call, so this case needs no server.
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'http://127.0.0.1:1', token: 't', kv: 3 } ]
+      name: 'api.token'
+    }
+    err: 'unsupported kv version'
+  }
+]
+
+
+# Same walk, miss reported as null instead of an error.
+trysecret: set: [
+  {
+    id: 'trysecret#hit', doc: true
+    in: {
+      chain: [ { kind: 'memory', values: { API_TOKEN: 'T' } } ]
+      name: 'api.token'
+    }
+    out: 'T'
+  }
+  {
+    in: {
+      chain: [ { kind: 'memory', values: {} } ]
+      name: 'api.token'
+    }
+    out: '__NULL__'
+  }
+]

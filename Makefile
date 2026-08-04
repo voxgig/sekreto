@@ -8,6 +8,8 @@
 #   make build        - build every port
 #   make inspect      - show toolchain versions
 #   make clean        - clean build artifacts
+#   make spec         - recompile spec/*.json from spec/*.aontu
+#   make spec-check   - fail if a committed spec/*.json is stale
 #
 # The conformance suite proves each port computes the same answers from
 # spec/sekreto.json. The integration run proves each port can actually fetch
@@ -17,7 +19,7 @@
 # as `make -C <dir>`.
 LANGS = typescript javascript python ruby php perl go rust java csharp
 
-.PHONY: all test build integration inspect clean check
+.PHONY: all test build integration inspect clean check spec spec-check
 
 all: test integration
 
@@ -69,3 +71,15 @@ clean:
 	@for lang in $(LANGS); do $(MAKE) -s clean-$$lang; done
 
 check: test integration
+
+# spec/sekreto.json is a COMMITTED artifact compiled from spec/*.aontu (and
+# spec/def/*.aontu) by @voxgig/model. The aontu files are the source of
+# truth; every port reads only the JSON, so no port needs a Node toolchain
+# to run its tests. After editing an aontu source, run `make spec` and
+# commit the regenerated JSON — CI's spec-freshness check fails on a stale
+# artifact.
+spec:
+	@cd tools && npm install --no-audit --no-fund --silent && npm run --silent build-spec
+
+spec-check:
+	@cd tools && npm install --no-audit --no-fund --silent && npm run --silent build-spec-check

@@ -1,0 +1,152 @@
+
+# Targeted lookup: `getfrom` and `tryfrom`.
+#
+# Where `resolve` walks the whole chain, these address ONE store by name.
+# That makes them the escape hatch when precedence is not what you want —
+# and it means a miss in the named store is a miss, full stop, even when a
+# later store in the chain does have the secret.
+
+
+getfrom: set: [
+  {
+    id: 'getfrom#named', doc: true
+    in: {
+      chain: [
+        { kind: 'memory', name: 'local', values: { API_TOKEN: 'LOCAL' } }
+        { kind: 'memory', name: 'shared', values: { API_TOKEN: 'SHARED' } }
+      ]
+      store: 'shared'
+      name: 'api.token'
+    }
+    out: 'SHARED'
+  }
+
+  # The same chain, addressed the other way: chain order does not decide.
+  {
+    in: {
+      chain: [
+        { kind: 'memory', name: 'local', values: { API_TOKEN: 'LOCAL' } }
+        { kind: 'memory', name: 'shared', values: { API_TOKEN: 'SHARED' } }
+      ]
+      store: 'local'
+      name: 'api.token'
+    }
+    out: 'LOCAL'
+  }
+
+  # An unnamed source is addressable by its kind.
+  {
+    in: {
+      chain: [ { kind: 'memory', values: { API_TOKEN: 'T' } } ]
+      store: 'memory'
+      name: 'api.token'
+    }
+    out: 'T'
+  }
+
+  # When one name covers several sources, they are searched in chain order.
+  {
+    in: {
+      chain: [
+        { kind: 'memory', name: 'pair', values: {} }
+        { kind: 'memory', name: 'pair', values: { API_TOKEN: 'SECOND' } }
+      ]
+      store: 'pair'
+      name: 'api.token'
+    }
+    out: 'SECOND'
+  }
+
+  # Missing secret and missing store are different errors: the first says
+  # where it looked, the second says the name is not addressable at all.
+  {
+    in: {
+      chain: [ { kind: 'memory', name: 'local', values: {} } ]
+      store: 'local'
+      name: 'api.token'
+    }
+    err: 'sekreto: unknown secret: local:api.token'
+  }
+  {
+    in: {
+      chain: [ { kind: 'memory', name: 'local', values: { API_TOKEN: 'T' } } ]
+      store: 'nosuch'
+      name: 'api.token'
+    }
+    err: 'sekreto: unknown store: nosuch'
+  }
+
+  {
+    in: {
+      chain: [ { kind: 'memory', values: { API_TOKEN: 'T' } } ]
+      store: 'memory'
+      name: 'a b'
+    }
+    err: 'invalid name'
+  }
+
+  # Refusing plaintext is a client-side check, so it fires before any
+  # connection is attempted — no server is contacted by these two.
+  {
+    doc: true
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'http://vault.example.com:8200' } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'sekreto: refusing to send a token in plaintext to http://vault.example.com:8200 (use https)'
+  }
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'ftp://vault.example.com' } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'sekreto: not an http(s) address: ftp://vault.example.com'
+  }
+]
+
+
+# Same lookup, miss reported as null. An unknown STORE still raises: that
+# is a configuration bug, not a missing secret.
+tryfrom: set: [
+  {
+    id: 'tryfrom#hit', doc: true
+    in: {
+      chain: [ { kind: 'memory', name: 'local', values: { API_TOKEN: 'T' } } ]
+      store: 'local'
+      name: 'api.token'
+    }
+    out: 'T'
+  }
+  {
+    in: {
+      chain: [ { kind: 'memory', name: 'local', values: {} } ]
+      store: 'local'
+      name: 'api.token'
+    }
+    out: '__NULL__'
+  }
+
+  # The secret exists in the chain, but not in the store asked for.
+  {
+    in: {
+      chain: [
+        { kind: 'memory', name: 'local', values: {} }
+        { kind: 'memory', name: 'shared', values: { API_TOKEN: 'S' } }
+      ]
+      store: 'local'
+      name: 'api.token'
+    }
+    out: '__NULL__'
+  }
+
+  {
+    in: {
+      chain: [ { kind: 'memory', name: 'local', values: {} } ]
+      store: 'nosuch'
+      name: 'api.token'
+    }
+    err: 'sekreto: unknown store: nosuch'
+  }
+]
