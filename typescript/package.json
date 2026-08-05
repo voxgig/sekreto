@@ -1,18 +1,41 @@
 {
   "name": "@voxgig/sekreto",
   "version": "0.1.0",
-  "description": "sekreto: one interface for secrets (TypeScript, canonical)",
+  "description": "Sekreto: one name for a secret, resolved down a chain of providers (env, dotenv, file, vault, AWS, GCP, Azure, 1Password, Doppler, Infisical, boru). The TypeScript implementation of the polyglot sekreto library.",
   "license": "MIT",
   "main": "dist/src/index.js",
   "types": "dist/src/index.d.ts",
-  "files": ["dist/src"],
+  "files": [
+    "dist/src"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "npm run build && node --test \"dist/test/*.test.js\"",
-    "cli": "npm run build && node dist/cli/sekreto-cli.js"
+    "cli": "npm run build && node dist/cli/sekreto-cli.js",
+    "clean": "rm -rf dist node_modules package-lock.json",
+    "reset": "npm run clean && npm i && npm run build && npm test",
+    "repo-bump": "npm version patch --no-git-tag-version && node -e \"console.log('bumped to v' + require('./package.json').version + ' (package.json only - commit via repo-tag / repo-release)')\"",
+    "repo-tag": "REPO_VERSION=`node -e \"console.log(require('./package').version)\"` && echo TAG: ts/v$REPO_VERSION && git commit -a -m ts/v$REPO_VERSION && git push && git tag ts/v$REPO_VERSION && git push --tags;",
+    "repo-publish": "npm run clean && npm i && npm run repo-publish-quick",
+    "repo-publish-quick": "npm run build && npm run test && npm run repo-tag && npm stage publish --registry https://registry.npmjs.org --access=public"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "^5.5.0"
+  },
+  "homepage": "https://github.com/voxgig/sekreto",
+  "keywords": [
+    "secrets",
+    "vault",
+    "env",
+    "dotenv",
+    "sekreto",
+    "voxgig"
+  ],
+  "author": "Richard Rodger - richardrodger.com",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/voxgig/sekreto.git",
+    "directory": "typescript"
   }
 }
