@@ -1,7 +1,8 @@
 name: probe
 on: [push, workflow_dispatch]
 jobs:
-  probe:
+  a-checkout-sha:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "no actions used"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - run: echo ok
