@@ -1,5 +1,11 @@
-// RUN: cargo test
-// RUN-SOME: cargo test envkey
+// RUN: make test
+// RUN-SOME: cd corpus && cargo test envkey
+//
+// The commands name this SEPARATE package deliberately. This suite lives
+// outside the published crate (register 4.13: cargo resolves
+// dev-dependencies even for a plain build, so omni cannot sit in the
+// library's manifest), and `cargo test` from the port root runs only the
+// library's own unit tests - a green that ran no conformance at all.
 //
 // The sekreto conformance suite. Every port runs these same groups, from
 // the same spec/sekreto.json, through its own voxgig/omni runner.
