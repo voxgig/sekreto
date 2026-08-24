@@ -73,11 +73,11 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - name: Check out voxgig/omni
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          repository: voxgig/omni
-          path: .omni
+      # voxgig/omni is checked out AFTER the no-omni proofs below, not
+      # here: with .omni on disk a leaked `replace` or path dependency
+      # pointing into it would resolve, and the proof would pass on a
+      # library that does name omni. An absent checkout is the only
+      # machine that cannot be fooled.
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         if: matrix.lang == 'typescript' || matrix.lang == 'javascript'
@@ -124,9 +124,9 @@ jobs:
 
       # omni register 4.13: the conformance suite is a nested module
       # (go/testutil), so the published module must build - and its
-      # tests resolve - naming no omni. GOWORK=off keeps the proof
-      # honest even with the omni checkout on disk: a leaked require
-      # would go to the module proxy and fail.
+      # tests resolve - naming no omni. GOWORK=off disables workspace
+      # discovery; the omni checkout not existing yet closes the other
+      # door, a leaked `replace` resolving a relative path into it.
       - name: Library builds without omni
         if: matrix.lang == 'go'
         working-directory: ./go
@@ -145,6 +145,13 @@ jobs:
         if: matrix.lang == 'rust'
         working-directory: ./rust
         run: cargo build --all-targets
+
+      # Only now, with both proofs behind us, does omni reach the disk.
+      - name: Check out voxgig/omni
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: voxgig/omni
+          path: .omni
 
       - name: Install dependencies
         if: matrix.lang == 'typescript'

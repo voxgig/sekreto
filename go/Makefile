@@ -1,4 +1,4 @@
-.PHONY: build build-clean test clean inspect
+.PHONY: build build-clean test clean inspect go.work
 
 # voxgig/omni is a sibling checkout, not a published module, and it may sit
 # anywhere. Find it, then use a go workspace to point the import at it -
@@ -17,8 +17,15 @@ OMNI := $(shell \
     fi; \
   done)
 
+# PHONY, and it has to be: go.work is gitignored but survives on a
+# developer's disk, so a file target would leave a workspace written
+# before the testutil module existed looking up to date - and `go test
+# ./testutil/...` then fails with "directory prefix testutil does not
+# contain modules listed in go.work". Regenerating is cheap; being
+# stale is not.
 go.work:
 	@test -n "$(OMNI)" || { echo "sekreto: voxgig/omni not found - set OMNI_HOME" >&2; exit 1; }
+	@rm -f go.work go.work.sum
 	go work init . ./testutil $(OMNI)/go
 
 build: go.work
