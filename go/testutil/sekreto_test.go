@@ -1,5 +1,10 @@
-// RUN: go test ./...
-// RUN-SOME: go test -run 'TestSekreto/envkey'
+// RUN: make test
+// RUN-SOME: cd testutil && go test -run 'TestSekreto/envkey'
+//
+// The commands name this NESTED module deliberately. This suite lives
+// outside the published module (register 4.13: nothing the library
+// builds may name omni), so `go test ./...` from the port root skips it
+// entirely and reports a green that ran no conformance at all.
 //
 // The sekreto conformance suite. Every port runs these same groups, from
 // the same spec/sekreto.json, through its own voxgig/omni runner.
