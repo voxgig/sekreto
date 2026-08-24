@@ -23,7 +23,13 @@ name = "sekreto-cli"
 path = "src/bin/sekreto-cli.rs"
 
 # voxgig/omni drives the conformance suite only - the library and CLI depend
-# on nothing but std. `make test` links vendor/omni to wherever the omni
-# checkout actually is, so this path works on any machine.
-[dev-dependencies]
-voxgig_omni = { path = "vendor/omni" }
+# on nothing but the crates above. The suite is its own package (`corpus/`),
+# so that omni - which it needs and this library does not - stays out of this
+# manifest entirely. Cargo resolves dev-dependencies even for `cargo build`,
+# so a dev-dependency here broke a checkout with no omni link under vendor/.
+# Omni register 4.13; the same shape as voxgig/struct#97.
+# `vendor` is excluded as well: the link under it points at a whole sibling
+# checkout, which can be a workspace root of its own - unexcluded, Cargo
+# reads it as a nested root of THIS workspace and refuses to build.
+[workspace]
+exclude = ["corpus", "vendor"]

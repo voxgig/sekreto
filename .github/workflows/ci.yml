@@ -122,6 +122,30 @@ jobs:
 
       # perl ships with the runner, and this port needs only core modules.
 
+      # omni register 4.13: the conformance suite is a nested module
+      # (go/testutil), so the published module must build - and its
+      # tests resolve - naming no omni. GOWORK=off keeps the proof
+      # honest even with the omni checkout on disk: a leaked require
+      # would go to the module proxy and fail.
+      - name: Library builds without omni
+        if: matrix.lang == 'go'
+        working-directory: ./go
+        env:
+          GOWORK: off
+        run: |
+          go build ./...
+          go test -count=1 ./...
+
+      # omni register 4.13: the corpus runner is a separate package
+      # (rust/corpus) so omni stays out of the library's manifest.
+      # Cargo resolves dev-dependencies even for `cargo build`, so this
+      # must pass with no vendor link present - checked here, before
+      # the Test step's `make vendor` creates one.
+      - name: Library builds without omni
+        if: matrix.lang == 'rust'
+        working-directory: ./rust
+        run: cargo build --all-targets
+
       - name: Install dependencies
         if: matrix.lang == 'typescript'
         run: npm --prefix typescript install

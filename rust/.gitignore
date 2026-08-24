@@ -1,0 +1,5 @@
+# The corpus package builds in its own target dir, and its lockfile pins a
+# path dependency (the vendor/omni link), so neither is committed. Same as
+# voxgig/struct's rust/corpus entries.
+/corpus/target/
+/corpus/Cargo.lock
