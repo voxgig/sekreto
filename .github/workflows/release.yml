@@ -1,0 +1,129 @@
+# Publish a sekreto npm package, through npm TRUSTED PUBLISHING (OIDC).
+#
+# There is no NPM_TOKEN here, and there should never be one. npm mints a
+# short-lived credential from this workflow's GitHub OIDC identity, which
+# is why `id-token: write` below is load-bearing - without it the token
+# request fails and the publish cannot authenticate at all.
+#
+# The trust configuration is per PACKAGE and names this file. It was
+# created with:
+#
+#   npm trust github @voxgig/sekreto --repo voxgig/sekreto \
+#     --file release.yml --allow-publish --allow-stage-publish
+#
+# So RENAMING THIS FILE BREAKS PUBLISHING until the trust config is
+# updated to match. Each further package (@voxgig/sekreto-js, and
+# station's two) needs its own `npm trust` run; one configuration does
+# not cover a scope.
+#
+# Triggered by the tag the `repo-tag` script pushes - `typescript/v0.1.1`
+# or `javascript/v0.1.1` - so the port to publish is read from the tag
+# rather than passed in and kept in sync by hand.
+
+name: release
+
+on:
+  push:
+    tags:
+      - 'typescript/v*'
+      - 'javascript/v*'
+  workflow_dispatch:
+    inputs:
+      port:
+        description: 'Port to publish'
+        required: true
+        type: choice
+        options: [typescript, javascript]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      # The tests are omni tests, exactly as in ci.yml: the same
+      # spec/sekreto.json every port runs. A release that cannot pass
+      # them is not a release.
+      - name: Check out voxgig/omni
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: voxgig/omni
+          path: .omni
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Trusted publishing needs npm >= 11.5.1, and `npm stage publish`
+      # needs >= 11.15.0. The runner's bundled npm trails both, so pin
+      # forward rather than depend on whatever ships that month.
+      - name: Use an npm that knows about trusted publishing
+        run: |
+          npm install -g npm@latest
+          npm --version
+
+      - name: Which port
+        id: port
+        run: |
+          if [ -n "${{ inputs.port }}" ]; then
+            port='${{ inputs.port }}'
+          else
+            port="${GITHUB_REF_NAME%%/*}"
+          fi
+          case "$port" in
+            typescript|javascript) ;;
+            *) echo "::error::cannot derive a port from '${GITHUB_REF_NAME}'"; exit 1 ;;
+          esac
+          echo "port=$port" >> "$GITHUB_OUTPUT"
+          echo "publishing $port"
+
+      # The tag says which version this release claims to be. If
+      # package.json disagrees, the tag is lying and the wrong thing is
+      # about to go out under the right name - fail before publishing,
+      # not after.
+      - name: Tag and package.json agree
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: ${{ steps.port.outputs.port }}
+        run: |
+          tagged="${GITHUB_REF_NAME##*/v}"
+          declared="$(node -p "require('./package.json').version")"
+          echo "tag=$tagged package.json=$declared"
+          [ "$tagged" = "$declared" ] || {
+            echo "::error::tag $GITHUB_REF_NAME does not match package.json $declared"
+            exit 1
+          }
+
+      - name: Install
+        working-directory: ${{ steps.port.outputs.port }}
+        run: npm install
+
+      - name: Build
+        working-directory: ${{ steps.port.outputs.port }}
+        run: npm run build
+
+      - name: Test
+        working-directory: ${{ steps.port.outputs.port }}
+        env:
+          OMNI_HOME: ${{ github.workspace }}/.omni
+        run: npm test
+
+      # What is about to be published, named in the log, so a bad `files`
+      # list is visible in the run rather than discovered on npm.
+      - name: What will ship
+        working-directory: ${{ steps.port.outputs.port }}
+        run: npm pack --dry-run
+
+      # No --provenance flag: trusted publishing attaches provenance on
+      # its own. Swap for `npm stage publish` (the form the repo-publish
+      # scripts use) to route through the staging area and its 2FA
+      # approval instead of going straight live; the trust config allows
+      # both.
+      - name: Publish
+        working-directory: ${{ steps.port.outputs.port }}
+        run: npm publish --access public
