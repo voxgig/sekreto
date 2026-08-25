@@ -60,7 +60,9 @@ function dotenvprovider(file, prefix) {
         if ('ENOENT' === err.code || 'ENOTDIR' === err.code) {
           values = {}
         } else {
-          throw new SekretoError('sekreto: dotenv provider cannot read ' + file + ': ' + err.message)
+          throw new SekretoError(
+            'sekreto: dotenv provider cannot read ' + file + ': ' + err.message,
+          )
         }
       }
     }
@@ -137,7 +139,9 @@ function checkaddr(addr) {
     return
   }
 
-  throw new SekretoError('sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)')
+  throw new SekretoError(
+    'sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)',
+  )
 }
 
 /** One JSON round-trip. Network failure is always an error - an
@@ -383,7 +387,10 @@ function borumiss(why) {
 
 /** The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now. */
 function awsnow() {
-  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
+  return new Date()
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d+Z$/, 'Z')
 }
 
 /** Region and credentials, from config first and the standard AWS_*
@@ -831,16 +838,12 @@ function onepasswordprovider(options) {
 
       for (const field of fields) {
         if (field && 'PASSWORD' === field.purpose) {
-          return undefined === field.value || null === field.value
-            ? undefined
-            : String(field.value)
+          return undefined === field.value || null === field.value ? undefined : String(field.value)
         }
       }
       for (const field of fields) {
         if (field && 'value' === field.label) {
-          return undefined === field.value || null === field.value
-            ? undefined
-            : String(field.value)
+          return undefined === field.value || null === field.value ? undefined : String(field.value)
         }
       }
 

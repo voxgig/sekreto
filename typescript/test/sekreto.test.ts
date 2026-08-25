@@ -5,12 +5,22 @@
 
 import { before, describe, test } from 'node:test'
 
-import { Sekreto, awsparam, envkey, flatname, parsedotenv, redact, sigv4, validname, vaultref } from '../src'
+import {
+  Sekreto,
+  awsparam,
+  envkey,
+  flatname,
+  parsedotenv,
+  redact,
+  sigv4,
+  validname,
+  vaultref,
+} from '../src'
 import { omnihome, specfile } from '../src/omnihome'
 
 // omni is a sibling checkout, not a published package (yet), so it is
 // required by path. The TypeScript port consumes omni's compiled output.
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const omni = require(omnihome() + '/typescript/dist/src')
 
 // Build a Sekreto from the spec's declarative chain description.

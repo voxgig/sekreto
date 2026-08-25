@@ -1,21 +1,57 @@
 {
   "name": "@voxgig/sekreto",
   "version": "0.1.0",
-  "description": "sekreto: one interface for secrets (TypeScript, canonical)",
-  "license": "MIT",
+  "description": "One interface for secrets, wherever they live",
   "main": "dist/src/index.js",
+  "type": "commonjs",
   "types": "dist/src/index.d.ts",
+  "homepage": "https://github.com/voxgig/sekreto",
+  "keywords": [
+    "voxgig",
+    "secrets",
+    "credentials",
+    "vault"
+  ],
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/voxgig/sekreto.git"
+  },
+  "scripts": {
+    "test": "node --enable-source-maps --test dist/test/*.test.js",
+    "test-cov": "rm -rf ./coverage && mkdir -p ./coverage && node --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info --enable-source-maps --test dist/test/*.test.js",
+    "test-some": "node --enable-source-maps --test-name-pattern=\"$TEST_PATTERN\" --test dist/test/*.test.js",
+    "cli": "npm run build && node dist/cli/sekreto-cli.js",
+    "watch": "tsc -w",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src test cli",
+    "lint:fix": "eslint src test cli --fix",
+    "format": "prettier --write \"src/**/*.ts\" \"test/**/*.ts\" \"cli/**/*.ts\"",
+    "format:check": "prettier --check \"src/**/*.ts\" \"test/**/*.ts\" \"cli/**/*.ts\"",
+    "clean": "rm -rf dist coverage node_modules yarn.lock package-lock.json",
+    "reset": "npm run clean && npm i && npm run build && npm test",
+    "repo-tag": "REPO_VERSION=`node -e \"console.log(require('./package').version)\"` && echo TAG: typescript/v$REPO_VERSION && git commit -a -m typescript/v$REPO_VERSION && git push && git tag typescript/v$REPO_VERSION && git push --tags;",
+    "repo-publish": "npm run clean && npm i && npm run repo-publish-quick",
+    "repo-publish-quick": "npm run build && npm run test && npm run repo-tag && npm stage publish --access public --registry https://registry.npmjs.org",
+    "repo-publish-dry": "npm run clean && npm i && npm run repo-publish-dry-quick",
+    "repo-publish-dry-quick": "npm run build && npm run test && npm stage publish --dry-run --access public --registry https://registry.npmjs.org"
+  },
+  "license": "MIT",
   "files": [
+    "LICENSE",
+    "src",
+    "!src/omnihome.*",
     "dist/src",
     "!dist/src/omnihome.*"
   ],
-  "scripts": {
-    "build": "tsc",
-    "test": "npm run build && node --test \"dist/test/*.test.js\"",
-    "cli": "npm run build && node dist/cli/sekreto-cli.js"
-  },
   "devDependencies": {
-    "@types/node": "^22.0.0",
-    "typescript": "^5.5.0"
+    "@eslint/js": "^10.0.1",
+    "@types/node": "^25.9.2",
+    "eslint": "^10.4.1",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.60.1"
   }
 }

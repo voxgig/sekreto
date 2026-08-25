@@ -155,7 +155,9 @@ export function dotenvprovider(file: string, prefix?: string): Provider {
         if ('ENOENT' === err.code || 'ENOTDIR' === err.code) {
           values = {}
         } else {
-          throw new SekretoError('sekreto: dotenv provider cannot read ' + file + ': ' + err.message)
+          throw new SekretoError(
+            'sekreto: dotenv provider cannot read ' + file + ': ' + err.message,
+          )
         }
       }
     }
@@ -232,7 +234,9 @@ export function checkaddr(addr: string): void {
     return
   }
 
-  throw new SekretoError('sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)')
+  throw new SekretoError(
+    'sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)',
+  )
 }
 
 /** How long any single vault round-trip may take before it is treated as
@@ -515,7 +519,10 @@ function borumiss(why: string): boolean {
 
 /** The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now. */
 function awsnow(): string {
-  return new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d+Z$/, 'Z')
+  return new Date()
+    .toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.\d+Z$/, 'Z')
 }
 
 type Awsopts = {
@@ -1000,16 +1007,12 @@ export function onepasswordprovider(options?: {
 
       for (const field of fields) {
         if (field && 'PASSWORD' === field.purpose) {
-          return undefined === field.value || null === field.value
-            ? undefined
-            : String(field.value)
+          return undefined === field.value || null === field.value ? undefined : String(field.value)
         }
       }
       for (const field of fields) {
         if (field && 'value' === field.label) {
-          return undefined === field.value || null === field.value
-            ? undefined
-            : String(field.value)
+          return undefined === field.value || null === field.value ? undefined : String(field.value)
         }
       }
 

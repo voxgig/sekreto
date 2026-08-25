@@ -174,9 +174,7 @@ async function main(): Promise<number> {
     return 1
   }
 
-  console.log(
-    JSON.stringify({ ok: true, lang: 'typescript', source, store, caller: body.caller }),
-  )
+  console.log(JSON.stringify({ ok: true, lang: 'typescript', source, store, caller: body.caller }))
 
   return 0
 }

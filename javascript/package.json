@@ -1,13 +1,47 @@
 {
   "name": "@voxgig/sekreto-js",
   "version": "0.1.0",
-  "description": "sekreto: one interface for secrets, wherever they live",
+  "description": "One interface for secrets, wherever they live",
   "main": "src/index.js",
+  "type": "commonjs",
+  "homepage": "https://github.com/voxgig/sekreto",
+  "keywords": [
+    "voxgig",
+    "secrets",
+    "credentials",
+    "vault"
+  ],
+  "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git://github.com/voxgig/sekreto.git"
+  },
+  "scripts": {
+    "test": "node --enable-source-maps --test test/*.test.js",
+    "test-cov": "rm -rf ./coverage && mkdir -p ./coverage && node --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info --enable-source-maps --test test/*.test.js",
+    "test-some": "node --enable-source-maps --test-name-pattern=\"$npm_config_pattern\" --test test/*.test.js",
+    "build": "node -e \"console.log('No build step for JavaScript')\"",
+    "lint": "eslint src test cli",
+    "lint:fix": "eslint src test cli --fix",
+    "format": "prettier --write \"src/**/*.js\" \"test/**/*.js\" \"cli/**/*.js\"",
+    "format:check": "prettier --check \"src/**/*.js\" \"test/**/*.js\" \"cli/**/*.js\"",
+    "clean": "rm -rf coverage node_modules yarn.lock package-lock.json",
+    "reset": "npm run clean && npm i && npm test",
+    "repo-tag": "REPO_VERSION=`node -e \"console.log(require('./package').version)\"` && echo TAG: javascript/v$REPO_VERSION && git commit -a -m javascript/v$REPO_VERSION && git push && git tag javascript/v$REPO_VERSION && git push --tags;",
+    "repo-publish": "npm run clean && npm i && npm run repo-publish-quick",
+    "repo-publish-quick": "npm run test && npm run repo-tag && npm stage publish --access public --registry https://registry.npmjs.org",
+    "repo-publish-dry": "npm run clean && npm i && npm run repo-publish-dry-quick",
+    "repo-publish-dry-quick": "npm run test && npm stage publish --dry-run --access public --registry https://registry.npmjs.org"
+  },
   "license": "MIT",
   "files": [
+    "LICENSE",
     "src"
   ],
-  "scripts": {
-    "test": "node --test test/*.test.js"
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "eslint": "^10.4.1",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3"
   }
 }

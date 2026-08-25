@@ -8,11 +8,7 @@
 // This file is CANONICAL. Every other port is a translation of it, and
 // spec/sekreto.json is the behavioural contract they all run.
 
-import {
-  Provider,
-  ProviderSpec,
-  makeprovider,
-} from './Providers'
+import { Provider, ProviderSpec, makeprovider } from './Providers'
 
 /** A secret name: dot-separated lowercase segments, e.g. `api.token`. */
 export type Name = string
@@ -297,11 +293,7 @@ export class Sekreto {
     return this.resolve(store, name, matching)
   }
 
-  private async resolve(
-    store: string,
-    name: Name,
-    entries: Entry[],
-  ): Promise<string | undefined> {
+  private async resolve(store: string, name: Name, entries: Entry[]): Promise<string | undefined> {
     checkname(name)
 
     if (this.docache) {
