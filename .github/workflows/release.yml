@@ -99,19 +99,18 @@ jobs:
             exit 1
           }
 
-      - name: Install
-        working-directory: ${{ steps.port.outputs.port }}
-        run: npm install
-
-      - name: Build
-        working-directory: ${{ steps.port.outputs.port }}
-        run: npm run build
-
-      - name: Test
-        working-directory: ${{ steps.port.outputs.port }}
+      # `make test-<port>`, not a bare `npm test` in the port directory.
+      # The port Makefile's `test` target is `test: build` and then
+      # `$(MAKE) -C $(OMNI)/typescript build` - it BUILDS OMNI before
+      # running, because the conformance test requires omni's compiled
+      # output (`require(omnihome() + '/typescript/dist/src')`) and a
+      # fresh omni checkout has no dist/. Calling npm test directly skips
+      # that and dies with MODULE_NOT_FOUND on omni's dist, which is
+      # exactly what run 1 did. ci.yml goes through make for this reason.
+      - name: Build and test
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
-        run: npm test
+        run: make test-${{ steps.port.outputs.port }}
 
       # What is about to be published, named in the log, so a bad `files`
       # list is visible in the run rather than discovered on npm.
