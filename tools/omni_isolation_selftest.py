@@ -86,6 +86,11 @@ MANIFEST = [
 # spelling went unchecked.
 SOURCE_SPELLINGS = 'import voxgig_omni\nuse voxgig_omni::Runner;\n'
 
+# `#include "voxgig/omni.h"` is CODE. The comment skip classified every `#`
+# line as prose, which made it invisible in any port whose dependency appears
+# only as a preprocessor directive.
+PREPROCESSOR = '#include "voxgig/omni.h"\n'
+
 EXEMPT = [
     ('typescript', 'typescript/package.json', '"devDependencies": {',
      '"devDependencies": {\n    "@voxgig/omni": "^0.1.1",',
@@ -149,6 +154,9 @@ def main():
         results.append(mutate(rel, '', SOURCE_SPELLINGS,
                               f'{port}: shipped source names omni', True,
                               f'{port}:source-spelling'))
+        results.append(mutate(rel, '', PREPROCESSOR,
+                              f'{port}: shipped source names omni', True,
+                              f'{port}:source-include'))
 
     for status, tag, note in results:
         print(f'{status}  {tag:56} {note}')

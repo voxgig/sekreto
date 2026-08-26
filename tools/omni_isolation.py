@@ -251,8 +251,7 @@ SOURCES = {
     'rust':       dict(globs=['rust/src/**/*.rs'], skip=[], pattern=SOURCE),
     'csharp':     dict(globs=['csharp/src/**/*.cs', 'csharp/cli/**/*.cs'],
                        skip=[], pattern=SOURCE),
-    'java':       dict(globs=['java/src/**/*.java'], skip=['java/src/test/'],
-                       pattern=SOURCE),
+    'java':       dict(globs=['java/src/**/*.java'], skip=[], pattern=SOURCE),
     'perl':       dict(globs=['perl/lib/**/*.pm'], skip=[], pattern=SOURCE),
     'php':        dict(globs=['php/src/**/*.php'], skip=[], pattern=SOURCE),
     'python':     dict(globs=['python/**/*.py'],
@@ -260,8 +259,9 @@ SOURCES = {
     'ruby':       dict(globs=['ruby/lib/**/*.rb'], skip=[], pattern=SOURCE),
     'typescript': dict(globs=['typescript/src/**/*.ts'],
                        skip=['typescript/src/omnihome'], pattern=SOURCE),
-    'javascript': dict(globs=['javascript/src/**/*.js'],
-                       skip=['javascript/src/omnihome'], pattern=SOURCE),
+    # No skip: unlike typescript, this port has no omnihome resolver, so the
+    # entry copied alongside it matched nothing.
+    'javascript': dict(globs=['javascript/src/**/*.js'], skip=[], pattern=SOURCE),
 }
 
 
@@ -271,8 +271,22 @@ SOURCES = {
 # only a line whose FIRST non-space characters are a comment marker.
 COMMENT = re.compile(r'^\s*(//|#|--|\*|/\*|"""|\'\'\')')
 
+# `#` OPENS A COMMENT IN SOME LANGUAGES AND A PREPROCESSOR DIRECTIVE IN OTHERS.
+# Treating every `#` line as prose made `#include "voxgig/omni.h"` invisible -
+# in c and cpp, which have NO manifest, so the source scan is the only check
+# they get. A regression introduced by the comment skip itself.
+#
+# Listed rather than keyed on file type, and erring towards CODE: a prose line
+# that happens to start `# if you want to...` is scanned, which is the safe
+# direction. Missing a directive is not.
+DIRECTIVE = re.compile(
+    r'^\s*#\s*(include|import|define|pragma|if|ifdef|ifndef|elif|else|endif|'
+    r'undef|error|warning|line)\b', re.I)
+
 
 def is_comment(line):
+    if DIRECTIVE.match(line):
+        return False
     return bool(COMMENT.match(line))
 
 
@@ -338,6 +352,27 @@ def main():
         fails.append(f'{port}: has an entry here but is not a port directory - '
                      'stale, and its checks read nothing')
 
+    # An UNCOVERED port must still BE uncovered. `lib=[]` prints a reason
+    # forever, so a port that later gains a real manifest - a pom.xml, a
+    # gemspec - would keep printing it while an omni declaration in that new
+    # manifest sailed through. Discovery already counts the port as known, so
+    # nothing else would notice.
+    MANIFEST_NAMES = ('go.mod', 'Cargo.toml', 'pom.xml', 'build.gradle',
+                      'build.gradle.kts', 'deps.edn', 'pubspec.yaml', 'mix.exs',
+                      'composer.json', 'pyproject.toml', 'setup.py',
+                      'Package.swift', 'lakefile.toml', 'Makefile.PL',
+                      'package.json')
+    for port in sorted(PORTS):
+        if PORTS[port]['lib']:
+            continue
+        found = [n for n in MANIFEST_NAMES if (ROOT / port / n).exists()]
+        found += [q.name for q in (ROOT / port).glob('*.csproj')]
+        found += [q.name for q in (ROOT / port).glob('*.gemspec')]
+        if found:
+            fails.append(f'{port}: is declared UNCOVERED ("{PORTS[port].get("why")}") '
+                         f'but now has {", ".join(sorted(set(found)))} - give it a '
+                         'real PORTS entry')
+
     for port in sorted(PORTS):
         spec = PORTS[port]
         if not spec['lib']:
@@ -370,6 +405,39 @@ def main():
                          'nothing; fix the glob')
         for hit in hits:
             fails.append(f'{port}: shipped source names omni: {hit}')
+
+    # A SKIP MUST BE JUSTIFIED BY SOMETHING THIS FILE CHECKS, and derived
+    # rather than hard-coded, so it stays true per repo.
+    #
+    # A port keeps its OMNI_HOME resolver out of the package with a `files`
+    # negation, and SOURCES skips that path on that basis. Drop the negation
+    # and the resolver ships again while the scan still looks away - the skip
+    # would assert a fact nothing verified. python had exactly this shape and
+    # no exclusion at all, which is how omnihome.py reached PyPI.
+    #
+    # A skip matching NO file is reported too: it is the same
+    # silence-looks-like-success failure as a dead glob, and a skip copied
+    # between repos is how one arrives.
+    for port in sorted(SOURCES):
+        for prefix in SOURCES[port]['skip']:
+            matched = sorted(ROOT.glob(prefix + '*'))
+            if not matched:
+                fails.append(f'{port}: SOURCES skips {prefix!r} and nothing '
+                             'matches it - a dead skip; remove it')
+                continue
+            manifest = ROOT / port / 'package.json'
+            if not manifest.exists():
+                continue
+            files = json.loads(manifest.read_text(encoding='utf-8')).get('files')
+            if not files:
+                continue
+            rel = prefix.split('/', 1)[1] if '/' in prefix else prefix
+            if not any(f.startswith('!') and f.lstrip('!').startswith(rel.split('/')[0] + '/')
+                       and rel.rsplit('/', 1)[-1] in f
+                       for f in files):
+                fails.append(f'{port}: package.json `files` no longer excludes '
+                             f'{rel!r}, but SOURCES still skips it - the file '
+                             'would ship unscanned')
 
     print(f'omni register 4.13 - library manifests checked: {len(checked)}, '
           f'shipped source files scanned: {scanned}')
