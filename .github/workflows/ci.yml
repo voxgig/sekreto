@@ -28,6 +28,38 @@ permissions:
   contents: read
 
 jobs:
+  omni-isolation:
+    name: omni must not reach any shipped library
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # THE OMNI CHECKOUT IS PRESENT ON PURPOSE, and it is what makes this job
+      # mean anything. Omni register 4.13's rule is about DECLARATION - nothing
+      # a port's library manifest may name omni - but the proof it originally
+      # prescribed was about RESOLUTION: build with the checkout absent and see
+      # it fail. Those stopped being the same test. omni is a public repo, so
+      # `github.com/voxgig/omni/go` resolves from proxy.golang.org with no tags
+      # at all, and `go mod tidy` in a module with no checkout anywhere still
+      # writes the require line.
+      #
+      # So this makes omni as resolvable as it can be and then asserts the
+      # manifests still declare nothing - a check that cannot pass by accident
+      # of omni being missing.
+      - name: Check out voxgig/omni beside the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: voxgig/omni
+          path: .omni
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - name: Library manifests must not declare omni
+        env:
+          OMNI_HOME: ${{ github.workspace }}/.omni
+        run: python3 tools/omni_isolation.py
+      # A guard that has never failed is not a guard.
+      - name: The guard must catch what it claims to
+        run: python3 tools/omni_isolation_selftest.py
   # spec/sekreto.json is generated from spec/*.aontu and committed so that
   # no port needs a Node toolchain. Recompile it here and fail if the
   # committed copy differs — a spec edit cannot land with a stale artifact.

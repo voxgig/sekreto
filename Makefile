@@ -19,7 +19,7 @@
 # as `make -C <dir>`.
 LANGS = typescript javascript python ruby php perl go rust java csharp
 
-.PHONY: all test build integration inspect clean check spec spec-check
+.PHONY: all test build integration inspect clean check spec spec-check omni-isolation
 
 all: test integration
 
@@ -70,7 +70,13 @@ inspect:
 clean:
 	@for lang in $(LANGS); do $(MAKE) -s clean-$$lang; done
 
-check: test integration
+omni-isolation:
+	@echo "======== omni is declared by no shipped library (register 4.13) ========"
+	python3 tools/omni_isolation.py
+	@echo "-------- and the guard itself, mutation-tested --------"
+	python3 tools/omni_isolation_selftest.py
+
+check: test integration omni-isolation
 
 # spec/sekreto.json is a COMMITTED artifact compiled from spec/*.aontu (and
 # spec/def/*.aontu) by @voxgig/model. The aontu files are the source of
