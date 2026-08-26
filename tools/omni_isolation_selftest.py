@@ -61,7 +61,30 @@ MANIFEST = [
      '[project]\ndynamic = ["dependencies"]'),
     ('csharp', 'csharp/src/Sekreto.csproj', '</Project>',
      '<ItemGroup><PackageReference Include="Voxgig.Omni" Version="0.1.0" /></ItemGroup></Project>'),
+
+    # THE FIVE EVASIONS Codex found after the first version shipped. Each
+    # declares omni in a way that read clean, and each is here so it cannot
+    # read clean again.
+    # A block-form `replace` redirecting an innocuous module. The old parser
+    # recorded the literal `replace (` and ignored everything inside it.
+    ('go', 'go/go.mod', 'go 1.21',
+     'go 1.21\n\nrequire innocent/pkg v1.0.0\n\nreplace (\n\tinnocent/pkg => github.com/voxgig/omni/go v0.0.0\n)'),
+    # Single-quoted XML, which is valid and which a double-quote-only pattern
+    # read as no dependency at all.
+    ('csharp', 'csharp/src/Sekreto.csproj', '</Project>',
+     "<ItemGroup><PackageReference Include='Voxgig.Omni' Version='0.1.0' /></ItemGroup></Project>"),
+    # Cargo workspace inheritance: the real crate is named in
+    # [workspace.dependencies], and a package-level read never sees it.
+    ('rust', 'rust/Cargo.toml', '[lib]',
+     '[dependencies]\nrunner = { workspace = true }\n\n[workspace.dependencies]\nrunner = { package = "voxgig_omni", version = "0.1" }\n\n[lib]'),
 ]
+
+# The module spelling that actually appears in code. `\bomni\b` could not
+# match `voxgig_omni` - `_` is a word character, so there is no boundary - and
+# that is exactly what Python and Rust import. The old LEAK marker happened to
+# carry a standalone `omni`, so every source mutation passed while this
+# spelling went unchecked.
+SOURCE_SPELLINGS = 'import voxgig_omni\nuse voxgig_omni::Runner;\n'
 
 EXEMPT = [
     ('typescript', 'typescript/package.json', '"devDependencies": {',
@@ -121,6 +144,11 @@ def main():
         results.append(mutate(rel, '', LEAK,
                               f'{port}: shipped source names omni', True,
                               f'{port}:source'))
+        # And again with ONLY the ecosystem module spelling, no standalone
+        # `omni` anywhere in the marker.
+        results.append(mutate(rel, '', SOURCE_SPELLINGS,
+                              f'{port}: shipped source names omni', True,
+                              f'{port}:source-spelling'))
 
     for status, tag, note in results:
         print(f'{status}  {tag:56} {note}')

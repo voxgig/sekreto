@@ -45,44 +45,98 @@ def names_omni(text):
     return bool(OMNI.search(text or ''))
 
 
+# THE SPELLING THAT ACTUALLY APPEARS IN CODE.
+#
+# Every port's source pattern used to be hand-written, and most were
+# `\bomni\b` - which cannot match `voxgig_omni`, because `_` is a word
+# character so there is no boundary before `omni`. That is the exact module
+# name Python and Rust import. The guard would have read
+# `import voxgig_omni` in a shipped file and called it clean.
+#
+# The mutation suite did not catch it either, because the injected marker
+# happened to contain a standalone `omni` - mutation testing proves what you
+# thought to mutate, and this was not thought of.
+#
+# One matcher now, shared with the manifest side, so the two cannot drift.
+SOURCE = OMNI
+
+
+
+
 def read_go_mod(path):
-    """go.mod: every module path in a require, single or block form."""
-    deps, inblock = [], False
+    """go.mod: every module path in a require, replace or exclude.
+
+    ALL THREE HAVE A BLOCK FORM. Handling `require (` alone recorded the
+    literal `replace (` and ignored every entry inside it, so an innocuously
+    named module redirected to omni - `innocent/pkg => github.com/voxgig/omni/go`
+    - read clean.
+    """
+    deps, block = [], None
     for line in path.read_text(encoding='utf-8').splitlines():
         line = line.split('//')[0].strip()
-        if line.startswith('require ('):
-            inblock = True
-        elif inblock:
+        if not line:
+            continue
+        if block is not None:
             if line == ')':
-                inblock = False
-            elif line:
-                deps.append(line.split()[0])
-        elif line.startswith('require '):
-            deps.append(line[len('require '):].split()[0])
-        elif line.startswith(('replace ', 'exclude ')):
-            deps.append(line)
+                block = None
+            else:
+                # A replace line is `old => new`; both sides matter.
+                deps.append(line)
+            continue
+        for kw in ('require', 'replace', 'exclude'):
+            if line == f'{kw} (' or line.startswith(f'{kw} ('):
+                block = kw
+                break
+        else:
+            for kw in ('require ', 'replace ', 'exclude '):
+                if line.startswith(kw):
+                    deps.append(line[len(kw):])
+                    break
     return deps
 
 
 def read_cargo(path):
-    """Cargo.toml: dependencies AND dev-dependencies, keys AND `package`.
+    """Cargo.toml: dependencies AND dev-dependencies, keys, `package`, and
+    anything inherited from `[workspace.dependencies]`.
 
     dev-dependencies are not exempt the way npm devDependencies are: Cargo
-    resolves them even for a plain `cargo build`, which is exactly why the
-    conformance harness is a separate `corpus/` package.  The `package` value
-    matters because `runner = { package = "voxgig_omni" }` renames the crate,
-    and code then imports the alias.
+    resolves them even for a plain `cargo build`, which is why the conformance
+    harness is a separate package.
+
+    Three spellings hide the real crate. `runner = { package = "voxgig_omni" }`
+    renames it, so the key says `runner` and code imports `runner`.
+    `runner = { workspace = true }` moves the real declaration into
+    `[workspace.dependencies]`, which a package-level read never sees. And a
+    `[target.*]` block repeats both.
     """
+    data = tomllib.loads(path.read_text(encoding='utf-8'))
+    wsdeps = ((data.get('workspace') or {}).get('dependencies') or {})
+
     def entries(block):
         for name, spec in (block or {}).items():
             yield name
-            if isinstance(spec, dict) and spec.get('package'):
+            if not isinstance(spec, dict):
+                continue
+            if spec.get('package'):
                 yield spec['package']
+            if spec.get('workspace'):
+                inherited = wsdeps.get(name)
+                if isinstance(inherited, dict):
+                    yield inherited.get('package') or name
+                    if inherited.get('git'):
+                        yield str(inherited['git'])
+                    if inherited.get('path'):
+                        yield str(inherited['path'])
+                elif isinstance(inherited, str):
+                    yield inherited
+            for key in ('path', 'git'):
+                if spec.get(key):
+                    yield str(spec[key])
 
-    data = tomllib.loads(path.read_text(encoding='utf-8'))
     deps = []
     for block in ('dependencies', 'dev-dependencies', 'build-dependencies'):
         deps.extend(entries(data.get(block)))
+    deps.extend(entries(wsdeps))
     for tgt in (data.get('target') or {}).values():
         for block in ('dependencies', 'dev-dependencies', 'build-dependencies'):
             deps.extend(entries(tgt.get(block)))
@@ -139,13 +193,19 @@ def read_pyproject(path):
 def read_csproj(path):
     """A .csproj: the Include/Update of every Package/ProjectReference.
 
+    BOTH XML QUOTE STYLES. A double-quote-only pattern returned nothing at all
+    for `Include='Voxgig.Omni'`, which is valid XML, and a package reference
+    resolves whether or not any source file imports its namespace - so the
+    source scan does not close that hole.
+
     Text-scoped rather than parsed: semgrep blocks `xml.etree` repo-wide as an
     XXE risk, and `defusedxml` would be a new dependency for a threat that
     does not exist on committed repo content.
     """
     text = path.read_text(encoding='utf-8')
-    return [m.group(2) for m in re.finditer(
-        r'<(?:Package|Project)Reference\b[^>]*?\b(Include|Update)\s*=\s*"([^"]*)"',
+    return [m.group(1) or m.group(2) for m in re.finditer(
+        r'<(?:Package|Project)Reference\b[^>]*?\b(?:Include|Update)\s*='
+        r'\s*(?:"([^"]*)"|\'([^\']*)\')',
         text, re.I)]
 
 
@@ -187,21 +247,21 @@ PORTS = {
 # someone's `go mod tidy`.
 SOURCES = {
     'go':         dict(globs=['go/**/*.go'], skip=['go/testutil/'],
-                       pattern=r'voxgig/omni'),
-    'rust':       dict(globs=['rust/src/**/*.rs'], skip=[], pattern=r'\bomni\b'),
+                       pattern=SOURCE),
+    'rust':       dict(globs=['rust/src/**/*.rs'], skip=[], pattern=SOURCE),
     'csharp':     dict(globs=['csharp/src/**/*.cs', 'csharp/cli/**/*.cs'],
-                       skip=[], pattern=r'\bomni\b'),
+                       skip=[], pattern=SOURCE),
     'java':       dict(globs=['java/src/**/*.java'], skip=['java/src/test/'],
-                       pattern=r'\bomni\b'),
-    'perl':       dict(globs=['perl/lib/**/*.pm'], skip=[], pattern=r'\bomni\b'),
-    'php':        dict(globs=['php/src/**/*.php'], skip=[], pattern=r'\bomni\b'),
+                       pattern=SOURCE),
+    'perl':       dict(globs=['perl/lib/**/*.pm'], skip=[], pattern=SOURCE),
+    'php':        dict(globs=['php/src/**/*.php'], skip=[], pattern=SOURCE),
     'python':     dict(globs=['python/**/*.py'],
-                       skip=['python/test', 'python/tests'], pattern=r'\bomni\b'),
-    'ruby':       dict(globs=['ruby/lib/**/*.rb'], skip=[], pattern=r'\bomni\b'),
+                       skip=['python/test', 'python/tests'], pattern=SOURCE),
+    'ruby':       dict(globs=['ruby/lib/**/*.rb'], skip=[], pattern=SOURCE),
     'typescript': dict(globs=['typescript/src/**/*.ts'],
-                       skip=['typescript/src/omnihome'], pattern=r'voxgig/omni'),
+                       skip=['typescript/src/omnihome'], pattern=SOURCE),
     'javascript': dict(globs=['javascript/src/**/*.js'],
-                       skip=['javascript/src/omnihome'], pattern=r'voxgig/omni'),
+                       skip=['javascript/src/omnihome'], pattern=SOURCE),
 }
 
 
@@ -220,7 +280,7 @@ def scan_sources(port):
     spec = SOURCES.get(port)
     if not spec:
         return [], 0
-    rx = re.compile(spec['pattern'], re.I)
+    rx = spec['pattern']
     hits, seen = [], 0
     for glob in spec['globs']:
         for path in ROOT.glob(glob):
@@ -261,11 +321,20 @@ def discover_ports():
 def main():
     fails, uncovered, checked = [], [], []
 
-    known = set(PORTS) | set(SOURCES)
-    for port in sorted(discover_ports() - known):
-        fails.append(f'{port}: is a port directory but appears in neither PORTS '
-                     'nor SOURCES - nothing checks it; add an entry')
-    for port in sorted(known - discover_ports()):
+    # BOTH tables, not their union. A port listed in only one is still
+    # "known", so neither check fires while half its scanning is silently
+    # skipped - and the error for a wholly new port said only to add "an
+    # entry", which invites exactly that. A port with no manifest declares
+    # `lib=[]` explicitly; there is no opting out of SOURCES.
+    ports = discover_ports()
+    for port in sorted(ports - set(PORTS)):
+        fails.append(f'{port}: is a port directory with no PORTS entry - its '
+                     'manifests are unchecked; add one (lib=[] with a `why` if '
+                     'it has no manifest a consumer resolves)')
+    for port in sorted(ports - set(SOURCES)):
+        fails.append(f'{port}: is a port directory with no SOURCES entry - its '
+                     'shipped source is unscanned; add one')
+    for port in sorted((set(PORTS) | set(SOURCES)) - ports):
         fails.append(f'{port}: has an entry here but is not a port directory - '
                      'stale, and its checks read nothing')
 
