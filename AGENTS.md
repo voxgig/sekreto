@@ -148,6 +148,59 @@ tokens) and never `vault proxy` or `vault mcp` — those are a credential
 Read `design/VAULT-WIRE-PROTOCOL.0.md` in boru-lang/boru for the line
 between the two.
 
+## Release and publish
+
+Ten ports, **two of which publish a package**:
+
+| port | package | tag |
+| --- | --- | --- |
+| `typescript/` | npm `@voxgig/sekreto` | `typescript/v<version>` |
+| `javascript/` | npm `@voxgig/sekreto-js` | `javascript/v<version>` |
+
+The other eight (python, ruby, php, perl, go, rust, java, csharp) ship no
+package and have no publish flow yet — they are consumed from this repository.
+
+### Releasing
+
+**Actions → release → Run workflow**, on `main`, choosing the `port`. Or push
+a matching tag. The version comes from that port's own manifest, so **bump it
+first in a reviewed PR**, then dispatch.
+
+### `release.yml` is the only file that can publish, and it has three jobs
+
+npm registers a trusted publisher against one owner, one repo, and a single
+workflow **filename**, so the tag has to live in the same file as the publish.
+They cannot be split across two files: a ref pushed with `GITHUB_TOKEN` starts
+no further workflow run, so "tag in A, publish on the tag" publishes nothing,
+silently. An unregistered workflow's OIDC token is refused as **404, not
+403**, which reads as "the package does not exist".
+
+Within that one file the work is split three ways, and the split is the
+security shape of the file rather than tidiness:
+
+| job | holds | runs |
+| --- | --- | --- |
+| `build` | `contents: read` | install, build, tests, packaging checks — all project code and every dependency lifecycle script. Uploads the tarball. |
+| `publish` | `id-token: write` | downloads that tarball and publishes it. **No checkout at all.** |
+| `tag` | `contents: write` | git, and nothing else. |
+
+`id-token: write` is a **job-level** grant: it puts the OIDC request URL and
+token in the environment of every process in the job, so a compromised
+`postinstall` during `npm install` could mint a publish credential. Hence the
+publish job never checks out the repository and never runs project code.
+
+### Irreversible
+
+**npm never allows republishing a version.** If a run publishes and then fails
+before tagging, re-dispatch: the registry check skips the completed publish
+and retries the tag. Never publish locally over a token — that bypasses OIDC
+and its provenance attestation entirely.
+
+The fullest write-up of this design is `voxgig/apidef`'s
+`docs/how-to/release-and-tag.md`; the three-job shape here matches
+`voxgig/omni`'s.
+
+
 ## Style
 
 Match the surrounding code. Across ports that means: lowercase function
