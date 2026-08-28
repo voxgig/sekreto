@@ -198,7 +198,7 @@ runner. Every port runs the same file. A port that disagrees with the spec
 is the thing that is wrong.
 
 The spec is written in [aontu](https://github.com/voxgig/aontu):
-[`spec/sekreto.aontu`](spec/sekreto.aontu) plus the case files in
+[`spec/sekreto.aon`](spec/sekreto.aon) plus the case files in
 [`spec/def/`](spec/def) are the source of truth, and `sekreto.json` is
 compiled from them by **`make spec`** and committed, so that no port needs a
 Node toolchain to run its tests. Edit the aontu, never the JSON.

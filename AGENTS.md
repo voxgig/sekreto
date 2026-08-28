@@ -9,12 +9,12 @@ ten stay one.
    `typescript/src/Providers.ts` define the behaviour. Every other port is
    a translation of them. Change canonical first, then propagate.
 
-2. **`spec/sekreto.aontu` is the contract.** It runs against every port. A
+2. **`spec/sekreto.aon` is the contract.** It runs against every port. A
    port that disagrees with the spec is the thing that is wrong — not the
    spec. Changing the spec means changing ten ports, so change it
    deliberately.
 
-   The cases live in `spec/def/*.aontu`; `spec/sekreto.json` is **generated**
+   The cases live in `spec/def/*.aon`; `spec/sekreto.json` is **generated**
    from them by `make spec` and committed so that no port needs a Node
    toolchain to run its tests. Never hand-edit the JSON — edit the aontu,
    run `make spec`, commit both. CI's `spec-freshness` job rebuilds and

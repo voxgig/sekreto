@@ -529,7 +529,7 @@ JSON, run by every port through its own
 [voxgig/omni](https://github.com/voxgig/omni) runner.
 
 That JSON is **generated**: the source of truth is
-[`spec/sekreto.aontu`](spec/sekreto.aontu), which names the categories, and
+[`spec/sekreto.aon`](spec/sekreto.aon), which names the categories, and
 the case files under [`spec/def/`](spec/def), written in
 [aontu](https://github.com/voxgig/aontu). `make spec` compiles them, and the
 result is committed so that no port needs a Node toolchain to run its tests.
