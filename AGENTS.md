@@ -181,8 +181,14 @@ security shape of the file rather than tidiness:
 | job | holds | runs |
 | --- | --- | --- |
 | `build` | `contents: read` | install, build, tests, packaging checks — all project code and every dependency lifecycle script. Uploads the tarball. |
-| `publish` | `id-token: write` | downloads that tarball and publishes it. **No checkout at all.** |
+| `publish` | `id-token: write`, `contents: read` | downloads that tarball and publishes it. **No checkout at all.** |
 | `tag` | `contents: write` | git, and nothing else. |
+
+The `publish` job's `contents: read` is belt-and-braces: it never checks out,
+so nothing there reads the repository, and the grant could be dropped. It is
+listed because a permissions table that omits a grant is worse than no table —
+anyone auditing the OIDC isolation from it would conclude the job holds no
+repository credential at all.
 
 `id-token: write` is a **job-level** grant: it puts the OIDC request URL and
 token in the environment of every process in the job, so a compromised
