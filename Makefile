@@ -8,7 +8,7 @@
 #   make build        - build every port
 #   make inspect      - show toolchain versions
 #   make clean        - clean build artifacts
-#   make spec         - recompile spec/*.json from spec/*.aontu
+#   make spec         - recompile spec/*.json from spec/*.aon
 #   make spec-check   - fail if a committed spec/*.json is stale
 #
 # The conformance suite proves each port computes the same answers from
@@ -78,8 +78,8 @@ omni-isolation:
 
 check: test integration omni-isolation
 
-# spec/sekreto.json is a COMMITTED artifact compiled from spec/*.aontu (and
-# spec/def/*.aontu) by @voxgig/model. The aontu files are the source of
+# spec/sekreto.json is a COMMITTED artifact compiled from spec/*.aon (and
+# spec/def/*.aon) by @voxgig/model. The aontu files are the source of
 # truth; every port reads only the JSON, so no port needs a Node toolchain
 # to run its tests. After editing an aontu source, run `make spec` and
 # commit the regenerated JSON — CI's spec-freshness check fails on a stale

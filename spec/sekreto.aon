@@ -9,10 +9,10 @@
 # This file is the entry point: it names the categories. The cases live in
 # def/, one file per theme.
 
-primary: sekreto: @"def/names.aontu"
-primary: sekreto: @"def/dotenv.aontu"
-primary: sekreto: @"def/resolve.aontu"
-primary: sekreto: @"def/chain.aontu"
-primary: sekreto: @"def/store.aontu"
-primary: sekreto: @"def/redact.aontu"
-primary: sekreto: @"def/sigv4.aontu"
+primary: sekreto: @"def/names.aon"
+primary: sekreto: @"def/dotenv.aon"
+primary: sekreto: @"def/resolve.aon"
+primary: sekreto: @"def/chain.aon"
+primary: sekreto: @"def/store.aon"
+primary: sekreto: @"def/redact.aon"
+primary: sekreto: @"def/sigv4.aon"
