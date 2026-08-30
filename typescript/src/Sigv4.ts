@@ -11,7 +11,28 @@
 // carry known-answer cases that all ten ports must reproduce bit-for-bit,
 // and lets the integration mock recompute the signature server-side.
 
-import { createHash, createHmac } from 'node:crypto'
+// node:crypto is loaded ON FIRST USE, not at import time.
+//
+// Providers.ts imports sigv4 for the AWS providers, and Sekreto.ts imports
+// Providers — so a top-level `node:crypto` here put it in the module graph
+// of every sekreto consumer, including one that never signs anything.
+// Deferring keeps this module pure until an AWS provider actually runs.
+//
+// require(), not `await import()`: these helpers are synchronous and are
+// called from synchronous signing code. The package is CommonJS.
+function crypto(): typeof import('node:crypto') {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    return require('node:crypto')
+  } catch (err: any) {
+    throw new Error(
+      'sekreto: AWS request signing needs node:crypto, which this runtime ' +
+        'does not provide: ' +
+        err.message,
+      { cause: err },
+    )
+  }
+}
 
 export type Sigv4Input = {
   method: string
@@ -36,11 +57,11 @@ export type Sigv4Input = {
 export type Sigv4Output = Record<string, string>
 
 function sha256hex(text: string): string {
-  return createHash('sha256').update(text, 'utf8').digest('hex')
+  return crypto().createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
 function hmac(key: Buffer | string, text: string): Buffer {
-  return createHmac('sha256', key).update(text, 'utf8').digest()
+  return crypto().createHmac('sha256', key).update(text, 'utf8').digest()
 }
 
 /** RFC 3986 escaping, which is stricter than encodeURIComponent: AWS
@@ -125,7 +146,10 @@ export function sigv4(input: Sigv4Input): Sigv4Output {
   const kregion = hmac(kdate, input.region)
   const kservice = hmac(kregion, input.service)
   const ksigning = hmac(kservice, 'aws4_request')
-  const signature = createHmac('sha256', ksigning).update(stringtosign, 'utf8').digest('hex')
+  const signature = crypto()
+    .createHmac('sha256', ksigning)
+    .update(stringtosign, 'utf8')
+    .digest('hex')
 
   const out: Sigv4Output = {
     authorization:

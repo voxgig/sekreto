@@ -12,10 +12,6 @@
 // missing configuration - is an ERROR: falling through there would
 // quietly reach for a weaker store.
 
-import { spawnSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
-
 import {
   SekretoError,
   awsparam,
@@ -26,6 +22,50 @@ import {
   vaultref,
 } from './Sekreto'
 import { sigv4 } from './Sigv4'
+
+// NODE BUILTINS, LOADED ON FIRST USE.
+//
+// These were top-level imports, which made them a side effect of importing
+// sekreto AT ALL: `child_process`, `fs` and `path` entered the module graph
+// for a caller who only ever used a `memory` or `env` provider, and any
+// runtime lacking them failed at import time rather than at the point of
+// use. Sekreto.ts imports makeprovider from this module, so the chain
+// reached everything.
+//
+// A plain require(), not `await import()`: dotenvprovider, fileprovider and
+// boruprovider all have SYNCHRONOUS lookups, and making them async to
+// accommodate a dynamic import would change observable behaviour for anyone
+// calling a provider directly. The package is CommonJS ("type":
+// "commonjs"), so require is available and synchronous.
+//
+// What this buys and what it does not: the builtins are no longer evaluated
+// at import time, so importing sekreto is safe in a runtime that lacks them
+// and a bundler can drop an unreachable provider along with its edge. It is
+// NOT by itself a complete browser story — a bundler still resolves a
+// require it can see statically, so a browser build wants conditional
+// exports ("browser" field) as well. That is a packaging change, tracked
+// separately.
+const nodemods: Record<string, any> = {}
+
+function nodemod<T = any>(name: string): T {
+  let mod = nodemods[name]
+
+  if (undefined === mod) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      mod = nodemods[name] = require(name)
+    } catch (err: any) {
+      throw new SekretoError(
+        'sekreto: this provider needs ' +
+          name +
+          ', which this runtime does not provide: ' +
+          err.message,
+      )
+    }
+  }
+
+  return mod as T
+}
 
 export type Provider = {
   /** The value, or undefined if this provider does not have it. */
@@ -146,6 +186,7 @@ export function dotenvprovider(file: string, prefix?: string): Provider {
   const load = () => {
     if (undefined === values) {
       try {
+        const { readFileSync } = nodemod<typeof import('node:fs')>('node:fs')
         values = parsedotenv(readFileSync(file, 'utf8'))
       } catch (err: any) {
         // An absent file - or an absent directory - means "no secrets
@@ -190,10 +231,12 @@ export function memoryprovider(values: Record<string, string>, prefix?: string):
 export function fileprovider(dir: string, prefix?: string): Provider {
   return {
     lookup: (name: string) => {
+      const { join } = nodemod<typeof import('node:path')>('node:path')
       const file = join(dir, envkey(name, prefix))
 
       let text: string
       try {
+        const { readFileSync } = nodemod<typeof import('node:fs')>('node:fs')
         text = readFileSync(file, 'utf8')
       } catch (err: any) {
         // An absent file - or an absent directory - means "no secrets
@@ -242,8 +285,7 @@ export function checkaddr(addr: string): void {
   let host: string
   try {
     host = new URL(addr).hostname
-  }
-  catch (err: any) {
+  } catch (err: any) {
     throw new SekretoError('sekreto: not a valid http(s) address: ' + addr)
   }
 
@@ -366,6 +408,7 @@ export function hashicorpprovider(
       if (undefined === jwt) {
         const file = auth.jwtfile || '/var/run/secrets/kubernetes.io/serviceaccount/token'
         try {
+          const { readFileSync } = nodemod<typeof import('node:fs')>('node:fs')
           jwt = readFileSync(file, 'utf8').trim()
         } catch (err: any) {
           throw new SekretoError('sekreto: hashicorp: cannot read jwt file ' + file)
@@ -498,6 +541,7 @@ export function boruprovider(options?: {
       const alias = opts.namespace ? opts.namespace + ':' + name : name
       const env = opts.home ? { ...process.env, BORU_HOME: opts.home } : process.env
 
+      const { spawnSync } = nodemod<typeof import('node:child_process')>('node:child_process')
       const run = spawnSync(command, ['vault', 'get', '--reveal', alias], {
         encoding: 'utf8',
         env,

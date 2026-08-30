@@ -11,13 +11,10 @@ import assert from 'node:assert'
 
 import { checkaddr } from '../src'
 
-
 describe('checkaddr', () => {
-
   test('https is always allowed, whatever the host', () => {
     assert.doesNotThrow(() => checkaddr('https://vault.example.com:8200'))
   })
-
 
   // The bug this file was added for: splitting the authority on ':' yields
   // '[' for a bracketed IPv6 address, so these could never match and the
@@ -28,7 +25,6 @@ describe('checkaddr', () => {
     assert.doesNotThrow(() => checkaddr('http://[::1]'))
   })
 
-
   test('http to IPv4 loopback and localhost is allowed', () => {
     assert.doesNotThrow(() => checkaddr('http://127.0.0.1:8200'))
     assert.doesNotThrow(() => checkaddr('http://localhost:8200'))
@@ -38,12 +34,10 @@ describe('checkaddr', () => {
     assert.doesNotThrow(() => checkaddr('http://LOCALHOST:8200'))
   })
 
-
   test('http to anything else is refused', () => {
     assert.throws(() => checkaddr('http://vault.example.com:8200'), /plaintext/)
     assert.throws(() => checkaddr('http://10.0.0.5:8200'), /plaintext/)
   })
-
 
   // Userinfo is not the host. Parsing must not be fooled into reading
   // '127.0.0.1@evil.com' as loopback.
@@ -52,17 +46,14 @@ describe('checkaddr', () => {
     assert.throws(() => checkaddr('http://localhost@evil.com/'), /plaintext/)
   })
 
-
   test('a non-http scheme is refused', () => {
     assert.throws(() => checkaddr('ftp://127.0.0.1/'), /not an http/)
     assert.throws(() => checkaddr('127.0.0.1:8200'), /not an http/)
   })
 
-
   test('an unparseable address is refused rather than crashing', () => {
     assert.throws(() => checkaddr('http://[::1'), /not a valid http/)
   })
-
 
   // Deliberately still refused. Recognising the IPv4-mapped form as
   // loopback is a decision about the ALLOWLIST, separate from parsing the
