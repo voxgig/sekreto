@@ -109,7 +109,7 @@ waithttp() {
 # ------------------------------------------------------------------- ports
 
 # Every port, in the order the top-level Makefile lists them.
-ALL_LANGS="typescript javascript python ruby php perl go rust java csharp"
+ALL_LANGS="typescript javascript python ruby php perl go rust java csharp zig"
 
 # How to invoke each port's CLI.
 cli_cmd() {
@@ -124,6 +124,7 @@ cli_cmd() {
   rust) echo "$ROOT/rust/target/release/sekreto-cli" ;;
   java) echo "java -cp $ROOT/java/build/classes sekreto.Cli" ;;
   csharp) echo "dotnet $ROOT/csharp/cli/bin/Release/net8.0/SekretoCli.dll" ;;
+  zig) echo "$ROOT/zig/build/sekreto-cli" ;;
   *) echo "" ;;
   esac
 }
@@ -144,6 +145,7 @@ cli_ready() {
   rust) [ -x "$ROOT/rust/target/release/sekreto-cli" ] ;;
   java) [ -f "$ROOT/java/build/classes/sekreto/Cli.class" ] ;;
   csharp) [ -f "$ROOT/csharp/cli/bin/Release/net8.0/SekretoCli.dll" ] ;;
+  zig) [ -x "$ROOT/zig/build/sekreto-cli" ] ;;
   *) false ;;
   esac
 }

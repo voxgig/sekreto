@@ -1,0 +1,7 @@
+# Built binaries and the compiler's own cache. `make build` writes
+# build/sekreto-cli (the path test/integration.sh invokes) and `make test`
+# writes build/sekretotest beside it.
+build/
+.zig-cache/
+zig-cache/
+zig-out/

@@ -95,6 +95,14 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0'
+      - name: Setup Zig
+        run: |
+          python3 -m pip install --disable-pip-version-check --quiet \
+            --require-hashes -r "$GITHUB_WORKSPACE/.github/zig-requirements.txt"
+          bin="$RUNNER_TEMP/zigbin"; mkdir -p "$bin"
+          printf '#!/bin/sh\nexec python3 -m ziglang "$@"\n' > "$bin/zig"
+          chmod +x "$bin/zig"
+          echo "$bin" >> "$GITHUB_PATH"
 
       # The Perl port needs IO::Socket::SSL to speak https, and it is not
       # a core module. Without it the Azure check - the only https check
@@ -125,7 +133,7 @@ jobs:
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
         run: |
-          for lang in typescript javascript python ruby php perl go rust java csharp; do
+          for lang in typescript javascript python ruby php perl go rust java csharp zig; do
             echo "======== $lang ========"
             make -C "$lang" build
           done
