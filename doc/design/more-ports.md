@@ -82,14 +82,14 @@ order, easiest first:
    older OTP) JSON; each needs SHA-256 and HMAC hand-rolled, except
    Elixir, where OTP's `:crypto` has both.
 
-## Six that cannot, without a decision that is not mine to make
+## Six that need a TLS binding
 
 **c, cpp, ocaml, haskell, lua, lean.**
 
-For all six the blocker is the same and it is TLS. None has it in the
+For all six the obstacle is the same and it is TLS. None has it in the
 standard library, and there is no in-tree answer: TLS is the one thing
 this repository has already decided must not be hand-rolled. AGENTS.md
-is explicit —
+was explicit —
 
 > The exception is **TLS in the Rust port**: `rustls`, plus
 > `webpki-roots` … hand-rolling TLS in a secrets library would be far
@@ -118,58 +118,127 @@ refuse elsewhere. `test/integration.sh` is what would catch it — which is
 the argument for not letting a port into `LANGS` until it passes that
 too.
 
-Four ways forward, and the choice belongs to whoever owns the
-zero-dependency rule:
+## The decision: bind the system TLS library
 
-**A. One TLS dependency per port, as Rust already has.** OpenSSL for
-C and C++, `ocaml-tls` for OCaml, `HsOpenSSL` or `crypton-x509` for
-Haskell, `luasec` for Lua. Honest, conventional, and gives complete
-ports. It also turns "one deliberate exception" into seven, which is a
-different rule than the one written down.
+**Taken.** These six ports link the platform's audited TLS library
+through a binding, exactly as every one of their communities already
+does. The alternatives are recorded below, because a decision is worth
+less without the ones it beat.
 
-**B. Plaintext only.** The ports compile, the local providers work, and
-`checkaddr` already refuses plaintext to anything but loopback — so every
-network provider becomes loopback-only. It would pass the integration
-suite, which talks http to 127.0.0.1, while being unusable against a real
-vault. This is the worst option precisely because it *looks* like it
-works.
+### Why this, and not the rule as written
 
-**C. Delegate transport to a subprocess.** There is a precedent: the boru
-provider already shells out to the boru CLI. Extending it to "where a
-port has no TLS, transport goes through `curl`" is coherent, and it keeps
-the language's dependency manifest empty. Two costs: `curl` becomes a
-runtime requirement, and — the part that must not be got wrong — the
-vault token cannot go on the command line, where the process table would
-publish it to every user on the machine. `curl -K -` reads its
-configuration from stdin, so it is doable safely, but it is a design, not
-a shortcut.
+The rule's instinct — *"hand-rolling TLS in a secrets library would be
+far worse than depending on well-audited crates"* — is not sekreto's
+peculiar caution. It is the settled conclusion of every one of these
+communities:
 
-**D. Local providers only, and say so.** Ship `env`, `dotenv`, `file`,
-`memory` and boru-via-CLI, and have every network provider raise
-`sekreto: this port cannot reach a network vault` at construction. The
-rule holds, nothing pretends, and the port is genuinely useful for the
-configuration cases that do not need a vault. It is also, plainly, half a
-sekreto.
+| | what that community actually reaches for |
+|---|---|
+| C | OpenSSL, or libcurl above it; mbedTLS / BearSSL / wolfSSL in embedded work |
+| C++ | the same OpenSSL, usually via Boost.Asio's SSL stream or cpp-httplib |
+| Lua | [LuaSec](https://luarocks.org/modules/brunoos/luasec) on LuaSocket — an OpenSSL binding, effectively universal |
+| Lean | FFI to **libcurl** — that is what the community HTTP clients are |
+| OCaml | [`ocaml-tls`](https://github.com/mirleft/ocaml-tls) (pure OCaml) or [`ocaml-ssl`](https://github.com/savonet/ocaml-ssl) (OpenSSL); `conduit` defaults to OpenSSL |
+| Haskell | [`http-client-tls`](https://hackage.haskell.org/package/http-client-tls) → the pure `tls` package, or [`http-client-openssl`](https://www.stackage.org/package/http-client-openssl) → HsOpenSSL |
 
-**Recommendation: D as the default, A per language where someone
-actually wants that port in production.** D keeps the rule and keeps the
-honesty, and the failure is loud at the point of construction rather than
-silent at the point of a fallback. A is then a per-language decision with
-a named owner, taken because someone needs a C sekreto against a real
-Vault — not taken six times over by default.
+Not one of them hand-rolls it. So this is not sekreto abandoning its
+discipline; it is sekreto doing, in each language, the thing a program in
+that language normally does.
 
-What should not happen is B, and what should not happen quietly is A.
+**And "six more exceptions" overstates the cost.** For C, C++, Lua and
+Lean the dependency is *the same artifact* — OpenSSL, or the libcurl that
+links it. One well-audited C library reached four ways is a different
+proposition from four unrelated supply chains, and should be counted that
+way.
 
-## Lean is its own question
+For OCaml and Haskell a pure-language TLS exists and is respectable. It
+is not obviously the lighter choice: Haskell's `tls` pulls `crypton`,
+`memory` and the whole `asn1-*` / `x509-*` family — ten-odd packages
+against rustls's two. Either is defensible there; the OpenSSL binding
+keeps the six uniform, which is worth something in a repository whose
+whole premise is that the ports stay one library.
+
+### What the rule becomes
+
+`AGENTS.md` rule 3 lists one exception and says not to make a third. It
+should state the principle instead, because the list was never the point:
+
+> **Cryptographic transport is not hand-rolled.** Where a port's standard
+> library has TLS, it uses it. Where it does not, it binds the platform's
+> audited TLS library — the same one that language's own ecosystem binds.
+> Everything else a standard library lacks is still written in-tree:
+> JSON, HTTP framing, base64, PEM.
+
+That reads on the existing ports unchanged — Rust's rustls becomes an
+instance of the rule rather than an exception to it — and it settles the
+next six without a fresh argument each time.
+
+It also regularises something already true and undocumented: **the Perl
+port's HTTPS depends on `IO::Socket::SSL`, which is not a core module.**
+`HTTP::Tiny` is core and picks it up when present, so nothing declares
+it, but a machine without it has a Perl port that cannot reach any real
+vault. That is how `test/realstores.sh` found it. Under the rule above it
+stops being an anomaly.
+
+### What every binding must do, without exception
+
+A TLS binding that connects but does not *verify* is worse than no TLS,
+because it looks like it works. Each port must, and its integration
+check must prove it:
+
+- verify the chain against the system trust store —
+  `SSL_CTX_set_default_verify_paths` and `SSL_VERIFY_PEER` in OpenSSL terms;
+- verify the **hostname** — `SSL_set1_host`, which is separate from chain
+  verification and is the half people forget;
+- send SNI — `SSL_set_tlsext_host_name`;
+- honour **`SEKRETO_CA_BUNDLE`** for extra roots. The Rust port already
+  defines this variable; it should become the one cross-port way to add a
+  private CA. The Zig port needs it too and does not have it: its
+  `std.crypto.Certificate.Bundle` reads no environment variable, which is
+  why `test/realstores.sh` skips zig's TLS check today.
+
+`test/realstores.sh` already runs the proof: the Azure emulator is
+refused without its certificate and accepted with it. A new port is not
+finished until it passes both halves.
+
+### The alternatives, and why they lost
+
+**B. Plaintext only.** Compiles, passes the integration suite (which
+talks http to 127.0.0.1), unusable against a real vault. Rejected: it is
+the worst option precisely because it *looks* like it works.
+
+**C. Delegate transport to `curl`.** Coherent, with precedent — the boru
+and secretspec providers already run an external binary — and it is
+literally what the Lean community does. Rejected as the general answer
+because it makes `curl` a runtime requirement of a library and puts the
+transport a process away from the error handling; kept as the sensible
+shape for **Lean specifically**, where binding libcurl *is* the idiom.
+Whichever is used, the vault token must never reach the command line,
+where the process table publishes it: `curl -K -` reads its configuration
+from stdin.
+
+**D. Local providers only.** Ship `env`, `dotenv`, `file`, `memory` and
+boru-via-CLI, and raise on every network provider. Honest, and half a
+sekreto. Rejected as the destination, but it is the right *intermediate*
+state: a port can land with its local providers working and the network
+ones raising a clear "this build has no TLS backend", and gain them when
+the binding is written. What must never ship is a port that raises
+nothing and quietly reaches nowhere.
+
+## Lean is still its own question
 
 Lean 4 is in struct's list, and omni has a Lean runner
 (`omni/lean/Omni.lean`, built with `lake`). Lean has no sockets, no TLS
-and no HTTP, and reaching them means FFI to C. Before any of the above
-is applied to it, someone should say what a Lean sekreto is *for* —
-struct's Lean port makes sense as a data-structure library that Lean
-proofs can reason about; a secrets client that opens sockets is a
-different kind of thing. It may be that D is not a compromise there but
-the right answer.
+and no HTTP, and reaching any of them means FFI to C — which is why the
+decision above names libcurl for Lean rather than OpenSSL directly: that
+is what the Lean HTTP clients that exist already are.
+
+The open question is not how but whether. struct's Lean port makes sense
+as a data-structure library that Lean proofs can reason about; a secrets
+client that opens sockets is a different kind of thing, and worth someone
+saying what it is *for* before it is built. It is the one port where
+shipping local providers only might be the destination rather than a
+staging post.
 
 ## What a port has to have
 

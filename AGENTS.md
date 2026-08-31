@@ -20,23 +20,39 @@ ten stay one.
    run `make spec`, commit both. CI's `spec-freshness` job rebuilds and
    fails on any drift.
 
-3. **No third-party dependencies, with exactly one exception.** (`tools/` is
+3. **No third-party dependencies, with one narrow exception.** (`tools/` is
    build machinery, not a port — it depends on `@voxgig/model`, and nothing
    at test time ever reaches it.) Where a
    standard library is missing something, the port carries a small one of
    its own: JSON in Java and Rust (C# uses the BCL's), HTTP in Rust. That is
    the cost of the rule and it is worth paying.
 
-   The exception is **TLS in the Rust port**: `rustls`, plus `webpki-roots`
-   for the trust anchors, because rustls deliberately ships no root set and
-   something has to supply one. Two crates, one exception. That line is
-   drawn deliberately: hand-rolling TLS in a secrets library would be far
-   worse than depending on well-audited crates.
+   The exception is **cryptographic transport**, and it is a principle
+   rather than a list. Where a port's standard library has TLS, it uses it.
+   Where it does not, it binds the platform's audited TLS library — the
+   same one that language's own ecosystem binds. Hand-rolling TLS in a
+   secrets library would be far worse than depending on an audited
+   implementation, and no community these ports live in does otherwise.
 
-   Do not treat it as precedent for a third. If you think you need one, the
-   answer is almost certainly a small in-tree implementation, as it was for
-   JSON, HTTP, PEM and base64 — all of which this port carries rather than
-   pulling in a crate.
+   Rust is the instance you can already read: `rustls`, plus `webpki-roots`
+   for the trust anchors, because rustls deliberately ships no root set and
+   something has to supply one. (Perl is a quieter one: its HTTPS needs
+   `IO::Socket::SSL`, which is not core — `HTTP::Tiny` picks it up when
+   present, so nothing declares it, and a machine without it has a Perl
+   port that cannot reach a real vault.)
+
+   The exception is that narrow. Everything else a standard library lacks
+   is still written in-tree — JSON, HTTP framing, PEM, base64, all of which
+   these ports carry rather than taking a package. If you think you need a
+   dependency for one of those, the answer is a small in-tree
+   implementation.
+
+   A binding that connects without **verifying** is worse than no TLS,
+   because it looks like it works: verify the chain, verify the hostname
+   (a separate step, and the one people forget), send SNI, and honour
+   `SEKRETO_CA_BUNDLE` for extra roots. `test/realstores.sh` proves it both
+   ways — the Azure emulator must be refused without its certificate and
+   accepted with it. See `doc/design/more-ports.md`.
 
 4. **Two ways to read, and they are not interchangeable.** `get` is
    transparent — the chain answers and the caller never learns which store
