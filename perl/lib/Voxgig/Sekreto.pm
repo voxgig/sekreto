@@ -218,10 +218,12 @@ sub redact {
 
     my $out = defined $text && !ref($text) ? $text : '';
 
-    for my $value ( @{ $values || [] } ) {
-        next if !defined $value || ref($value);
-        next if 4 > length($value);
+    my @usable = grep { defined $_ && !ref($_) && 4 <= length($_) } @{ $values || [] };
 
+    # Longest first: a shorter secret that prefixes a longer one used to eat
+    # the prefix and leave the rest in the log. @usable is our own list, so
+    # sorting it does not reorder the caller's.
+    for my $value ( sort { length($b) <=> length($a) } @usable ) {
         $out = join( '[redacted]', split( /\Q$value\E/, $out, -1 ) );
     }
 

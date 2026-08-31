@@ -307,11 +307,19 @@ public final class Sekreto {
       return out;
     }
 
+    // Longest first: a shorter secret that prefixes a longer one used to eat
+    // the prefix and leave the rest in the log. Collected into our own list,
+    // so the caller's is not reordered.
+    List<String> usable = new ArrayList<>();
     for (Object value : values) {
-      if (!(value instanceof String) || 4 > ((String) value).length()) {
-        continue;
+      if (value instanceof String && 4 <= ((String) value).length()) {
+        usable.add((String) value);
       }
-      out = String.join("[redacted]", out.split(Pattern.quote((String) value), -1));
+    }
+    usable.sort((left, right) -> right.length() - left.length());
+
+    for (String value : usable) {
+      out = String.join("[redacted]", out.split(Pattern.quote(value), -1));
     }
 
     return out;

@@ -308,10 +308,28 @@ fn unescape(alloc: Allocator, text: []const u8) Allocator.Error![]const u8 {
 pub fn redact(alloc: Allocator, text: []const u8, values: []const []const u8) Allocator.Error![]const u8 {
     var out: []const u8 = text;
 
+    // Longest first: a shorter secret that prefixes a longer one used to eat
+    // the prefix and leave the rest in the log. Copied first, so the
+    // caller's slice is not reordered.
+    const usable = try alloc.alloc([]const u8, values.len);
+    defer alloc.free(usable);
+
+    var count: usize = 0;
     for (values) |value| {
-        if (4 > value.len) {
-            continue;
+        if (4 <= value.len) {
+            usable[count] = value;
+            count += 1;
         }
+    }
+
+    const longest = struct {
+        fn before(_: void, left: []const u8, right: []const u8) bool {
+            return left.len > right.len;
+        }
+    }.before;
+    std.mem.sort([]const u8, usable[0..count], {}, longest);
+
+    for (usable[0..count]) |value| {
         out = try replaceall(alloc, out, value, "[redacted]");
     }
 

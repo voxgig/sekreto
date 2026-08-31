@@ -213,10 +213,19 @@ function redact($text, $values): string
 {
     $out = is_string($text) ? $text : '';
 
+    $usable = [];
     foreach ($values ?? [] as $value) {
-        if (!is_string($value) || 4 > strlen($value)) {
-            continue;
+        if (is_string($value) && 4 <= strlen($value)) {
+            $usable[] = $value;
         }
+    }
+
+    // Longest first: a shorter secret that prefixes a longer one used to eat
+    // the prefix and leave the rest in the log. $usable is our own array, so
+    // sorting it does not reorder the caller's.
+    usort($usable, fn ($left, $right) => strlen($right) <=> strlen($left));
+
+    foreach ($usable as $value) {
         $out = implode('[redacted]', explode($value, $out));
     }
 

@@ -149,10 +149,12 @@ module VoxgigSekreto
   def redact(text, values)
     out = text.is_a?(String) ? text : ''
 
-    (values || []).each do |value|
-      next unless value.is_a?(String)
-      next if 4 > value.length
+    usable = (values || []).select { |value| value.is_a?(String) && 4 <= value.length }
 
+    # sort_by returns a new array: `values` belongs to the caller (it is
+    # @seen when called through Sekreto#redact), and sorting in place
+    # would reorder it.
+    usable.sort_by { |value| -value.length }.each do |value|
       out = out.split(value, -1).join('[redacted]')
     end
 

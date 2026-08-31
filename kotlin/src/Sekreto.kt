@@ -172,10 +172,15 @@ private fun unescape(text: String): String {
 fun redact(text: Any?, values: List<Any?>?): String {
     var out = if (text is String) text else ""
 
-    for (value in values ?: emptyList()) {
-        if (value !is String || 4 > value.length) {
-            continue
-        }
+    // sortedByDescending returns a new list: `values` belongs to the caller
+    // (it is `seen` when called through Sekreto.redact), and sorting in
+    // place would reorder it.
+    val usable = (values ?: emptyList())
+        .filterIsInstance<String>()
+        .filter { 4 <= it.length }
+        .sortedByDescending { it.length }
+
+    for (value in usable) {
         out = out.replace(value, "[redacted]")
     }
 

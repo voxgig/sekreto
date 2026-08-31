@@ -324,14 +324,22 @@ namespace Voxgig.Sekreto
                 return out_;
             }
 
+            // Longest first: a shorter secret that prefixes a longer one used
+            // to eat the prefix and leave the rest in the log. Collected into
+            // our own list, so the caller's is not reordered.
+            var usable = new List<string>();
             foreach (object value in values)
             {
-                if (!(value is string secret) || 4 > secret.Length)
+                if (value is string secret && 4 <= secret.Length)
                 {
-                    continue;
+                    usable.Add(secret);
                 }
+            }
+            usable.Sort((left, right) => right.Length - left.Length);
 
-                out_ = string.Join("[redacted]", out_.Split(new[] { secret }, StringSplitOptions.None));
+            foreach (string value in usable)
+            {
+                out_ = string.Join("[redacted]", out_.Split(new[] { value }, StringSplitOptions.None));
             }
 
             return out_;

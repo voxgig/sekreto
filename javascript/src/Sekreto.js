@@ -173,14 +173,26 @@ function unescape(text) {
  *
  * Only values of four characters or more are replaced: shorter ones are
  * too likely to appear in ordinary text, and redacting them would make
- * logs unreadable without making them safer. */
+ * logs unreadable without making them safer.
+ *
+ * Longest first, which is not a detail. Replacing in the order the values
+ * arrived meant a shorter secret that prefixes a longer one ate the prefix
+ * and left the rest in the log: with `db.pass` = `abcd` from the
+ * environment and `api.token` = `abcd1234` from the vault, and the
+ * environment resolved first, `token=abcd1234` came out as
+ * `token=[redacted]1234`. Longest first makes the longer secret match
+ * before anything can eat its head.
+ */
 function redact(text, values) {
   let out = 'string' === typeof text ? text : ''
 
-  for (const value of values || []) {
-    if ('string' !== typeof value || 4 > value.length) {
-      continue
-    }
+  const usable = (values || []).filter(
+    (value) => 'string' === typeof value && 4 <= value.length,
+  )
+
+  // A copy: `values` belongs to the caller (it is `seen` when called
+  // through Sekreto.redact), and sorting in place would reorder it.
+  for (const value of [...usable].sort((left, right) => right.length - left.length)) {
     out = out.split(value).join('[redacted]')
   }
 

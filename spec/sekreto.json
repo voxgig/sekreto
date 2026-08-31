@@ -645,6 +645,36 @@
               ]
             },
             "out": ""
+          },
+          {
+            "in": {
+              "text": "token=abcd1234",
+              "values": [
+                "abcd",
+                "abcd1234"
+              ]
+            },
+            "out": "token=[redacted]"
+          },
+          {
+            "in": {
+              "text": "token=abcd1234",
+              "values": [
+                "abcd1234",
+                "abcd"
+              ]
+            },
+            "out": "token=[redacted]"
+          },
+          {
+            "in": {
+              "text": "pass=abcd token=abcd1234",
+              "values": [
+                "abcd",
+                "abcd1234"
+              ]
+            },
+            "out": "pass=[redacted] token=[redacted]"
           }
         ]
       },

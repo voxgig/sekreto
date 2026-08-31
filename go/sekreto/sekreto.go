@@ -13,6 +13,7 @@ package sekreto
 
 import (
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -209,10 +210,19 @@ func unescape(text string) string {
 func Redact(text string, values []string) string {
 	out := text
 
+	// A copy: `values` belongs to the caller (it is `seen` when called
+	// through Sekreto.Redact), and sorting in place would reorder it.
+	usable := []string{}
 	for _, value := range values {
-		if 4 > len(value) {
-			continue
+		if 4 <= len(value) {
+			usable = append(usable, value)
 		}
+	}
+	sort.SliceStable(usable, func(left, right int) bool {
+		return len(usable[left]) > len(usable[right])
+	})
+
+	for _, value := range usable {
 		out = strings.Join(strings.Split(out, value), "[redacted]")
 	}
 
