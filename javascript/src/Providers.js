@@ -146,10 +146,26 @@ function checkaddr(addr) {
 
 /** One JSON round-trip. Network failure is always an error - an
  * unreachable store is a store that could not answer. */
+/** How long any single vault round-trip may take before it is treated as
+ * unreachable. Ports carry the same bound. */
+const HTTP_TIMEOUT_MS = 10000
+
 async function fetchjson(method, url, headers, body) {
   let res
   try {
-    res = await fetch(url, { method, headers, body })
+    res = await fetch(url, {
+      method,
+      headers,
+      body,
+      // A vault API never legitimately redirects, and a followed redirect
+      // carries X-Vault-Token to the redirect's host (and can downgrade
+      // https to http), which checkaddr - it only validates the configured
+      // address - cannot see. Refuse to follow one.
+      redirect: 'error',
+      // Bound the wait so an accepted-but-silent endpoint cannot hang the
+      // caller (and the app's startup) forever.
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    })
   } catch (err) {
     throw new SekretoError('sekreto: cannot reach ' + url.split('?')[0] + ': ' + err.message)
   }
