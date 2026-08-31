@@ -327,6 +327,129 @@
               "name": "api.token",
               "store": "hashicorp"
             }
+          },
+          {
+            "err": "sekreto: refusing an address with embedded credentials: http://localhost:8200@evil.example.com/",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://localhost:8200@evil.example.com/",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: refusing an address with embedded credentials: http://127.0.0.1@evil.example.com/",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://127.0.0.1@evil.example.com/",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: refusing an address with embedded credentials: http://a@127.0.0.1@evil.example.com/",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://a@127.0.0.1@evil.example.com/",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: refusing an address with embedded credentials: https://user:pass@vault.example.com",
+            "in": {
+              "chain": [
+                {
+                  "addr": "https://user:pass@vault.example.com",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "unsupported kv version",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://localhost:8200/a@b",
+                  "kind": "hashicorp",
+                  "kv": 3,
+                  "token": "t"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "unsupported kv version",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://[::1]:8200",
+                  "kind": "hashicorp",
+                  "kv": 3,
+                  "token": "t"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "unsupported kv version",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://LOCALHOST:8200",
+                  "kind": "hashicorp",
+                  "kv": 3,
+                  "token": "t"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: refusing to send a token in plaintext to http://[::ffff:127.0.0.1]:8200 (use https)",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://[::ffff:127.0.0.1]:8200",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: not a valid http(s) address: http://[::1",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://[::1",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
           }
         ]
       },

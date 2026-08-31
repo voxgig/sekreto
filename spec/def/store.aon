@@ -104,6 +104,123 @@ getfrom: set: [
     }
     err: 'sekreto: not an http(s) address: ftp://vault.example.com'
   }
+
+  # USERINFO, refused outright.
+  #
+  # `localhost:8200@evil.example.com` is a request to evil.example.com,
+  # but a port that finds the host by splitting the authority on ':'
+  # reads it as `localhost`, allows it, and sends the vault token in the
+  # clear to the attacker - defeating the one check that exists to
+  # prevent exactly that. Eight of the twelve ports did this.
+  #
+  # The fix is not to locate the userinfo more carefully but to refuse
+  # any address that has one. No store this library speaks authenticates
+  # by userinfo, so such an address is a mistake whatever the host; and
+  # "does the authority contain an '@'" is a question twelve ports answer
+  # identically, where "where does the userinfo end" is not.
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'http://localhost:8200@evil.example.com/' } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'sekreto: refusing an address with embedded credentials: http://localhost:8200@evil.example.com/'
+  }
+
+  # The same trick without a colon in the userinfo, which the splitting
+  # implementations happened to refuse. It must still refuse, and for the
+  # stated reason.
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'http://127.0.0.1@evil.example.com/' } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'sekreto: refusing an address with embedded credentials: http://127.0.0.1@evil.example.com/'
+  }
+
+  # Two @ signs. The URL parsers split this one four different ways
+  # across the twelve platforms; refusing the shape makes them agree.
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'http://a@127.0.0.1@evil.example.com/' } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'sekreto: refusing an address with embedded credentials: http://a@127.0.0.1@evil.example.com/'
+  }
+
+  # Refused on https too, where there is no plaintext argument for it -
+  # an address that carries credentials is simply not one this library
+  # accepts.
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'https://user:pass@vault.example.com' } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'sekreto: refusing an address with embedded credentials: https://user:pass@vault.example.com'
+  }
+
+  # An '@' after the authority is part of the path, and the path is not
+  # this check's business. Reaching 'unsupported kv version' is how a
+  # case proves the address was ALLOWED: that error comes from the
+  # provider, after the check let it through.
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'http://localhost:8200/a@b', token: 't', kv: 3 } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'unsupported kv version'
+  }
+
+  # And the converse: a bracketed IPv6 loopback is LEGITIMATE and must be
+  # allowed. Splitting on ':' yields '[' and refuses a real local vault,
+  # which is how this bug first showed itself.
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'http://[::1]:8200', token: 't', kv: 3 } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'unsupported kv version'
+  }
+
+  # Case is not part of a host's identity. Every URL parser folds it; the
+  # two ports that must parse by hand have to fold it themselves.
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'http://LOCALHOST:8200', token: 't', kv: 3 } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'unsupported kv version'
+  }
+
+  # An IPv4-mapped IPv6 loopback is deliberately NOT in the allowlist.
+  # Widening the set of addresses that count as local is a separate
+  # decision from parsing the host correctly, and it has not been made.
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'http://[::ffff:127.0.0.1]:8200' } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'sekreto: refusing to send a token in plaintext to http://[::ffff:127.0.0.1]:8200 (use https)'
+  }
+
+  # An address that is not an address. It is refused for being malformed
+  # rather than for being remote, because "this is not a URL" is the
+  # accurate thing to tell whoever wrote the config.
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'http://[::1' } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'sekreto: not a valid http(s) address: http://[::1'
+  }
 ]
 
 

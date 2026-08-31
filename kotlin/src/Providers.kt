@@ -18,7 +18,6 @@ package com.voxgig.sekreto
 
 import java.io.IOException
 import java.net.URI
-import java.net.URISyntaxException
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
@@ -161,28 +160,64 @@ object Providers {
      * anyone on the path, so sekreto will not do it. Loopback stays allowed:
      * that is `vault server -dev`, `boru vault serve`, and this repo's own
      * test harness.
+     *
+     * The address is read by hand, in the same handful of steps in every
+     * port, rather than by each platform's URL parser. That is deliberate.
+     * Twelve parsers disagree about malformed input - where userinfo ends,
+     * whether `0177.0.0.1` is loopback, what an unclosed bracket means - and
+     * a check that answers differently in different ports is not a check.
+     *
+     * The rule this parse obeys, and the reason it can be trusted: it is
+     * never more permissive than the HTTP client that will dial the address.
+     * It ends the authority at `/`, `?` or `#` only, so a client that also
+     * breaks on `\` (WHATWG does) can only ever see a SHORTER host than this
+     * does. It refuses userinfo outright rather than locating its end. It
+     * compares the host literally, so a numeric form no parser here agrees
+     * on is refused rather than guessed at.
      */
     fun checkaddr(addr: String) {
-        if (addr.startsWith("https://")) {
+        val scheme = when {
+            addr.startsWith("https://") -> "https://"
+            addr.startsWith("http://") -> "http://"
+            else -> throw SekretoError("sekreto: not an http(s) address: $addr")
+        }
+
+        val rest = addr.substring(scheme.length)
+        val end = rest.indexOfFirst { it in "/?#" }
+        val authority = if (-1 == end) rest else rest.substring(0, end)
+
+        // Userinfo is refused outright rather than parsed around, and on
+        // https as well as http. No store this library speaks authenticates
+        // by userinfo - they take a token or a signature - so an address
+        // carrying one is a mistake at best. At worst it is the attack this
+        // whole function exists to stop:
+        // `http://localhost:8200@evil.example.com/` is a request to
+        // evil.example.com that reads, to anything that splits the authority
+        // on ':', as loopback.
+        if (authority.contains("@")) {
+            throw SekretoError("sekreto: refusing an address with embedded credentials: $addr")
+        }
+
+        // An opening bracket with no closing one is not an address at all.
+        if (authority.startsWith("[") && !authority.contains("]")) {
+            throw SekretoError("sekreto: not a valid http(s) address: $addr")
+        }
+
+        if ("https://" == scheme) {
             return
         }
 
-        if (!addr.startsWith("http://")) {
-            throw SekretoError("sekreto: not an http(s) address: $addr")
-        }
-
-        // Parsed, not split on ':'. Splitting the authority on the first
-        // colon yields '[' for a bracketed IPv6 address, so `http://[::1]`
-        // could never match - which refused a legitimate local vault. Parsing
-        // only fixes what the host IS: userinfo is stripped, so
-        // `http://127.0.0.1@evil.com/` still reads as evil.com, as it must.
+        // A bracketed IPv6 literal keeps its brackets. Splitting the
+        // authority on the first colon yields '[', so `http://[::1]:8200`
+        // could never match - which made the '[::1]' entry below unreachable,
+        // and refused a legitimate local vault.
         val host = (
-            try {
-                URI(addr).host
-            } catch (err: URISyntaxException) {
-                null
+            if (authority.startsWith("[")) {
+                authority.substring(0, authority.indexOf("]") + 1)
+            } else {
+                authority.substringBefore(':')
             }
-            ) ?: throw SekretoError("sekreto: not a valid http(s) address: $addr")
+            ).lowercase()
 
         if ("localhost" == host || "127.0.0.1" == host || "::1" == host || "[::1]" == host) {
             return

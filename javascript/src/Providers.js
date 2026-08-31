@@ -123,17 +123,65 @@ function fileprovider(dir, prefix) {
  * machine puts both the token and the secret it fetches on the wire for
  * anyone on the path, so sekreto will not do it. Loopback stays allowed:
  * that is `vault server -dev`, `boru vault serve`, and this repo's own
- * test harness. */
+ * test harness.
+ *
+ * The address is read by hand, in the same handful of steps in every
+ * port, rather than by each platform's URL parser. That is deliberate.
+ * Twelve parsers disagree about malformed input - where userinfo ends,
+ * whether `0177.0.0.1` is loopback, what an unclosed bracket means - and
+ * a check that answers differently in different ports is not a check.
+ *
+ * The rule this parse obeys, and the reason it can be trusted: it is
+ * never more permissive than the HTTP client that will dial the address.
+ * It ends the authority at `/`, `?` or `#` only, so a client that also
+ * breaks on `\` (WHATWG does) can only ever see a SHORTER host than this
+ * does. It refuses userinfo outright rather than locating its end. It
+ * compares the host literally, so a numeric form no parser here agrees
+ * on is refused rather than guessed at. */
 function checkaddr(addr) {
-  if (addr.startsWith('https://')) {
-    return
-  }
+  const scheme = addr.startsWith('https://')
+    ? 'https://'
+    : addr.startsWith('http://')
+      ? 'http://'
+      : ''
 
-  if (!addr.startsWith('http://')) {
+  if ('' === scheme) {
     throw new SekretoError('sekreto: not an http(s) address: ' + addr)
   }
 
-  const host = addr.slice('http://'.length).split('/')[0].split(':')[0]
+  const rest = addr.slice(scheme.length)
+  const end = rest.search(/[/?#]/)
+  const authority = -1 === end ? rest : rest.slice(0, end)
+
+  // Userinfo is refused outright rather than parsed around, and on https
+  // as well as http. No store this library speaks authenticates by
+  // userinfo - they take a token or a signature - so an address carrying
+  // one is a mistake at best. At worst it is the attack this whole
+  // function exists to stop: `http://localhost:8200@evil.example.com/` is
+  // a request to evil.example.com that reads, to anything that splits the
+  // authority on ':', as loopback.
+  if (authority.includes('@')) {
+    throw new SekretoError('sekreto: refusing an address with embedded credentials: ' + addr)
+  }
+
+  // An opening bracket with no closing one is not an address at all.
+  if (authority.startsWith('[') && !authority.includes(']')) {
+    throw new SekretoError('sekreto: not a valid http(s) address: ' + addr)
+  }
+
+  if ('https://' === scheme) {
+    return
+  }
+
+  // A bracketed IPv6 literal keeps its brackets. Splitting the authority
+  // on the first colon yields '[', so `http://[::1]:8200` could never
+  // match - which made the '[::1]' entry below unreachable, and refused a
+  // legitimate local vault.
+  const host = (
+    authority.startsWith('[')
+      ? authority.slice(0, authority.indexOf(']') + 1)
+      : authority.split(':')[0]
+  ).toLowerCase()
 
   if ('localhost' === host || '127.0.0.1' === host || '::1' === host || '[::1]' === host) {
     return
