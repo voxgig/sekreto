@@ -146,7 +146,14 @@ module VoxgigSekreto
     request.body = body unless body.nil?
 
     response = begin
-      Net::HTTP.start(uri.hostname, uri.port, use_ssl: 'https' == uri.scheme) do |http|
+      # The two nils are the proxy address and port: a secrets client dials
+      # the address it was configured with and nowhere else. Left off, this
+      # defaults to :ENV and reads http_proxy. Ruby's resolver does exempt
+      # loopback, so the local dev vault was never exposed - but the GCP and
+      # Azure metadata endpoints are not loopback, and the tokens they return
+      # would have gone through the proxy.
+      Net::HTTP.start(uri.hostname, uri.port, nil, nil,
+                      use_ssl: 'https' == uri.scheme) do |http|
         http.request(request)
       end
     rescue StandardError => e

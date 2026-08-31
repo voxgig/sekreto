@@ -214,7 +214,22 @@ sub fetchjson {
     my $options = { headers => $headers || {} };
     $options->{content} = $body if defined $body;
 
-    my $response = HTTP::Tiny->new( timeout => 10, verify_SSL => 1, max_redirect => 0 )->request( $method, $url, $options );
+    # A secrets client dials the address it was configured with and nowhere
+    # else. HTTP::Tiny's constructor calls _set_proxies, which reads
+    # http_proxy WITHOUT exempting loopback - so with that variable set,
+    # `X-Vault-Token` for a local dev vault went, in the clear, to whatever
+    # it named. checkaddr permits plaintext to loopback precisely because
+    # nothing leaves the machine; an environment variable it cannot see must
+    # not be able to make that false. All three keys are needed: an explicit
+    # undef is what suppresses the lookup.
+    my $response = HTTP::Tiny->new(
+        timeout      => 10,
+        verify_SSL   => 1,
+        max_redirect => 0,
+        proxy        => undef,
+        http_proxy   => undef,
+        https_proxy  => undef,
+    )->request( $method, $url, $options );
 
     # HTTP::Tiny reports transport failures as a synthetic 599.
     if ( 599 == $response->{status} ) {

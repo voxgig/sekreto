@@ -287,6 +287,13 @@ var client = &http.Client{
 	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 		return http.ErrUseLastResponse
 	},
+	// A secrets client dials the address it was configured with and nowhere
+	// else. http.DefaultTransport reads HTTP_PROXY; its resolver exempts
+	// loopback, so the local dev vault was never exposed - but the GCP and
+	// Azure metadata endpoints are not loopback, and the access tokens they
+	// return would have gone through whatever the variable named, which can
+	// read them and substitute its own.
+	Transport: &http.Transport{Proxy: nil},
 }
 
 // httpjson makes one JSON round-trip, returning the status and decoded

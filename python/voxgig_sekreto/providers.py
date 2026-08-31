@@ -161,7 +161,15 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_opener = urllib.request.build_opener(_NoRedirect)
+# A secrets client dials the address it was configured with and nowhere
+# else. urllib installs a ProxyHandler from the environment by default, and
+# its proxy resolution does NOT exempt loopback - so with http_proxy set,
+# `X-Vault-Token` for a local dev vault went, in the clear, to whatever that
+# variable named. checkaddr permits plaintext to loopback precisely because
+# nothing leaves the machine; an environment variable it cannot see must not
+# be able to make that false. An empty ProxyHandler turns the whole
+# mechanism off.
+_opener = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
 
 
 def _fetchjson(method, url, headers, body=None):

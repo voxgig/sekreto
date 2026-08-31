@@ -450,7 +450,19 @@ namespace Voxgig.Sekreto
         // target host, which checkaddr - it validates only the configured
         // address - cannot see. A 3xx then surfaces as a store error.
         private static readonly HttpClient Client =
-            new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            new HttpClient(new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+
+                // A secrets client dials the address it was configured with
+                // and nowhere else. UseProxy defaults to true and resolves
+                // from the environment WITHOUT exempting loopback, so with
+                // HTTP_PROXY set the vault token for a local dev vault went,
+                // in the clear, to whatever that variable named. checkaddr
+                // permits plaintext to loopback precisely because nothing
+                // leaves the machine.
+                UseProxy = false,
+            })
             { Timeout = TimeSpan.FromSeconds(10) };
 
         /// <summary>
