@@ -27,6 +27,10 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # One place, because three jobs install it.
+  KOTLIN_VERSION: '2.1.20'
+
 jobs:
   omni-isolation:
     name: omni must not reach any shipped library
@@ -103,6 +107,7 @@ jobs:
           - java
           - csharp
           - zig
+          - kotlin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -159,10 +164,24 @@ jobs:
         if: matrix.lang == 'rust'
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        if: matrix.lang == 'java'
+        if: matrix.lang == 'java' || matrix.lang == 'kotlin'
         with:
           distribution: temurin
           java-version: '21'
+
+      # kotlinc from Maven Central, pinned. There is no kotlin package in
+      # Ubuntu's archives and the JetBrains release assets live on GitHub
+      # releases; the compiler distribution on Maven Central is the same
+      # artifact and is reachable the same way every other JVM dependency
+      # is.
+      - name: Setup Kotlin
+        if: matrix.lang == 'kotlin'
+        run: |
+          curl -sSLo /tmp/kotlinc.zip \
+            "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-compiler/${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+          unzip -q /tmp/kotlinc.zip -d /opt
+          echo /opt/kotlinc/bin >> "$GITHUB_PATH"
+
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         if: matrix.lang == 'csharp'
@@ -254,6 +273,12 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0'
+      - name: Setup Kotlin
+        run: |
+          curl -sSLo /tmp/kotlinc.zip \
+            "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-compiler/${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+          unzip -q /tmp/kotlinc.zip -d /opt
+          echo /opt/kotlinc/bin >> "$GITHUB_PATH"
       - name: Setup Zig
         run: |
           python3 -m pip install --disable-pip-version-check --quiet \
@@ -288,7 +313,7 @@ jobs:
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
         run: |
-          for lang in typescript javascript python ruby php perl go rust java csharp zig; do
+          for lang in typescript javascript python ruby php perl go rust java csharp zig kotlin; do
             echo "======== $lang ========"
             make -C "$lang" build
           done

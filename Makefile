@@ -25,7 +25,7 @@
 
 # Every port directory. Target names are the directory names, used verbatim
 # as `make -C <dir>`.
-LANGS = typescript javascript python ruby php perl go rust java csharp zig
+LANGS = typescript javascript python ruby php perl go rust java csharp zig kotlin
 
 .PHONY: all test build integration realstores inspect clean check spec spec-check omni-isolation
 

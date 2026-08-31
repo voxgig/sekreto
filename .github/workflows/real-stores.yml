@@ -92,6 +92,12 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - name: Setup Kotlin
+        run: |
+          curl -sSLo /tmp/kotlinc.zip \
+            "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-compiler/2.1.20/kotlin-compiler-2.1.20.zip"
+          unzip -q /tmp/kotlinc.zip -d /opt
+          echo /opt/kotlinc/bin >> "$GITHUB_PATH"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0'
@@ -133,7 +139,7 @@ jobs:
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
         run: |
-          for lang in typescript javascript python ruby php perl go rust java csharp zig; do
+          for lang in typescript javascript python ruby php perl go rust java csharp zig kotlin; do
             echo "======== $lang ========"
             make -C "$lang" build
           done

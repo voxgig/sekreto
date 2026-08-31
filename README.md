@@ -59,6 +59,7 @@ exist" without hiding a typo.
 | [java](java/) | ✅ | ✅ |
 | [csharp](csharp/) | ✅ | ✅ |
 | [zig](zig/) | ✅ | ✅ |
+| [kotlin](kotlin/) | ✅ | ✅ |
 
 Every port is tested three ways: the shared conformance spec, an
 integration run against mock servers, and — on demand and weekly — the
