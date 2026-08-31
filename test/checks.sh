@@ -159,6 +159,16 @@ port_ready() {
   local lang=$1
 
   if [ -z "$(cli_cmd "$lang")" ]; then
+    # A name nothing knows is a typo, and under REQUIRE_ALL it must fail
+    # rather than skip. The dispatch input is free text: ask for
+    # "go kotlni" and the kotlin checks never run, while go's make the
+    # tally green and nothing says a requested port was missed.
+    if [ -n "${REQUIRE_ALL:-}" ]; then
+      echo "== $lang == $(red "UNKNOWN LANGUAGE") (REQUIRE_ALL is set)"
+      fail=$((fail + 1))
+      FAILED+=("$lang/unknown-language")
+      return 1
+    fi
     echo "== $lang == unknown language, skipped"
     return 1
   fi

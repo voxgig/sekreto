@@ -17,8 +17,13 @@ ARG BORU_REF=main
 RUN apk add --no-cache git
 
 WORKDIR /src
-RUN git clone --depth 1 --branch "${BORU_REF}" https://github.com/boru-lang/boru . \
-  || git clone --depth 1 https://github.com/boru-lang/boru .
+# No fallback to the default branch. A BORU_REF that does not resolve is a
+# typo or a tag that moved, and quietly building main instead would make a
+# targeted compatibility run green against code nobody asked about.
+RUN git init -q . \
+  && git remote add origin https://github.com/boru-lang/boru \
+  && git fetch --depth 1 origin "${BORU_REF}" \
+  && git checkout -q FETCH_HEAD
 
 # The CLI is its own Go module under cmd/go; the repository root is not one.
 RUN go build -o /out/boru ./cmd/go/boru

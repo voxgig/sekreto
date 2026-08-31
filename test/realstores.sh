@@ -19,6 +19,9 @@
 #   test/realstores.sh [lang...]
 #
 #   SEKRETO_COMPOSE=0     do not touch docker; the stores are already up
+#   REAL_BORU_TOKEN       a capability token for a boru you already run
+#   REAL_INFISICAL_CLIENT_ID / _CLIENT_SECRET / _PROJECT
+#                         a machine identity on an Infisical already set up
 #   SEKRETO_KEEP=1        leave the stack running afterwards
 #   REQUIRE_STORES=1      a store that is not up fails the run (CI sets this)
 #   REQUIRE_ALL=1         a port that is not built fails the run
@@ -59,6 +62,9 @@ AWS_ENDPOINT=${REAL_AWS_ENDPOINT:-http://127.0.0.1:${SEKRETO_AWS_PORT:-8302}}
 AZURE_ADDR=${REAL_AZURE_ADDR:-https://127.0.0.1:8304}
 INFISICAL_ADDR=${REAL_INFISICAL_ADDR:-http://127.0.0.1:${SEKRETO_INFISICAL_PORT:-8307}}
 BORU_ADDR=${REAL_BORU_ADDR:-http://127.0.0.1:${SEKRETO_BORU_PORT:-8308}}
+# For a boru someone else is running: its capability token cannot be read
+# out of a container this suite did not start.
+BORU_TOKEN_GIVEN=${REAL_BORU_TOKEN:-}
 
 WORK=$(mktemp -d)
 APIPID=""
@@ -236,11 +242,27 @@ if [ $HAVE_AZURE = 1 ]; then
 fi
 
 if [ $HAVE_INFISICAL = 1 ]; then
-  if out=$(INFISICAL_ADDR="$INFISICAL_ADDR" SEKRETO_TOKEN="$TOKEN" \
+  # Credentials given outright skip the bootstrap entirely.
+  #
+  # The admin-signup endpoint only works on an instance with no admin, so
+  # a second run against a stack kept with SEKRETO_KEEP=1, or a real
+  # Infisical someone else administers, cannot bootstrap and would
+  # otherwise skip the store on every run after the first - in the two
+  # modes this script advertises for exactly that purpose.
+  if [ -n "${REAL_INFISICAL_CLIENT_ID:-}" ] &&
+    [ -n "${REAL_INFISICAL_CLIENT_SECRET:-}" ] &&
+    [ -n "${REAL_INFISICAL_PROJECT:-}" ]; then
+    INF_CLIENT=$REAL_INFISICAL_CLIENT_ID
+    INF_SECRET=$REAL_INFISICAL_CLIENT_SECRET
+    INF_PROJECT=$REAL_INFISICAL_PROJECT
+    echo "infisical: using the machine identity given in the environment" >&2
+  elif out=$(INFISICAL_ADDR="$INFISICAL_ADDR" SEKRETO_TOKEN="$TOKEN" \
     "$HERE/docker/bootstrap/infisical.sh" 2>"$WORK/infisical.err"); then
     eval "$out"
   else
     cat "$WORK/infisical.err" >&2
+    echo "realstores: to use an Infisical that is already set up, give" >&2
+    echo "realstores: REAL_INFISICAL_CLIENT_ID, _CLIENT_SECRET and _PROJECT." >&2
     HAVE_INFISICAL=0
   fi
 fi
@@ -269,7 +291,15 @@ if [ -n "${REQUIRE_STORES:-}" ]; then
 fi
 
 if [ $HAVE_BORU = 1 ]; then
-  if [ -n "$BORUPID" ]; then
+  # Three ways to hold the token, in the order they can be trusted: one
+  # given outright, one from a serve this run started, one out of the
+  # container this run built. Without the first, pointing REAL_BORU_ADDR
+  # at a boru someone else runs reached for `docker compose exec` on a
+  # stack that does not exist, got nothing, and skipped the store - so the
+  # no-Docker mode this script advertises could not exercise boru at all.
+  if [ -n "$BORU_TOKEN_GIVEN" ]; then
+    BORU_WIRE_TOKEN=$BORU_TOKEN_GIVEN
+  elif [ -n "$BORUPID" ]; then
     BORU_WIRE_TOKEN=$HOST_BORU_TOKEN
   else
     BORU_WIRE_TOKEN=$(docker compose -f "$COMPOSE_FILE" exec -T boru cat /work/token 2>/dev/null | tr -d '\r\n')
@@ -432,6 +462,18 @@ for lang in $LANGS; do
   if [ $HAVE_AZURE = 1 ]; then
     tlsenv "$lang" "$WORK/azure-ca.pem"
     if [ ${#TRUST[@]} -gt 0 ]; then
+      # FIRST, WITHOUT THE CERTIFICATE: it must be refused.
+      #
+      # The happy path alone cannot fail for the reason it exists. Every
+      # run hands the port the emulator's certificate, so a port that
+      # verifies nothing at all - no chain, no hostname - passes exactly
+      # like one that verifies properly, and this is the only TLS check
+      # in either suite. Refusing an untrusted self-signed certificate is
+      # the half that proves verification is switched on.
+      LABEL="$lang/azure-untrusted" STORE= check "$lang" azuresecrets deny \
+        AZURE_VAULT="$AZURE_ADDR" AZURE_TOKEN=lowkey-accepts-any-bearer
+
+      # THEN, WITH IT: the same request must succeed.
       LABEL="$lang/azure-tls" STORE= check "$lang" azuresecrets ok \
         "${TRUST[@]}" AZURE_VAULT="$AZURE_ADDR" AZURE_TOKEN=lowkey-accepts-any-bearer
     else
