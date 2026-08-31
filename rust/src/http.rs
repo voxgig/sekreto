@@ -16,7 +16,7 @@
 //! keep-alive, no client certificates.
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -59,6 +59,50 @@ struct Target {
 /// is needed because the read timeout is not one: it is per-read, so a server
 /// that keeps sending resets it forever.
 const MAXBODY: u64 = 8 * 1024 * 1024;
+
+/// How long reaching a vault may take before it is treated as unreachable.
+/// Ports carry the same bound.
+const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Connect, but give up after TIMEOUT.
+///
+/// `TcpStream::connect` takes a host and a port and has NO bound: against an
+/// address that swallows SYNs it blocks for however long the kernel retries,
+/// which on Linux is a little over two minutes. Measured: still blocked at
+/// 25s against 10.255.255.1 where ten of the twelve ports gave up at 10 -
+/// this port and Zig were the two that did not.
+///
+/// `connect_timeout` is the bounded one, and it takes a resolved SocketAddr
+/// rather than a name, so the resolution has to happen here. A name can
+/// resolve to several addresses (A and AAAA both, commonly) and the
+/// unbounded call walks them in turn; so does this, each with its own bound.
+///
+/// The bound does NOT cover the resolution itself, which std offers no way
+/// to bound - a DNS server that hangs still hangs. The connect is the part
+/// an attacker chooses.
+fn connect(host: &str, port: u16, url: &str) -> Result<TcpStream, String> {
+    let unreachable =
+        |why: String| format!("sekreto: cannot reach {}: {}", nakedurl(url), why);
+
+    let addrs = (host, port)
+        .to_socket_addrs()
+        .map_err(|err| unreachable(err.to_string()))?;
+
+    let mut last = None;
+    for addr in addrs {
+        match TcpStream::connect_timeout(&addr, TIMEOUT) {
+            Ok(stream) => return Ok(stream),
+            Err(err) => last = Some(err),
+        }
+    }
+
+    // No address at all is not the same failure as every address refusing,
+    // but both are "could not reach", which is what the caller acts on.
+    Err(unreachable(match last {
+        Some(err) => err.to_string(),
+        None => "no address".to_string(),
+    }))
+}
 
 /// A url without its query string, for messages.
 ///
@@ -219,11 +263,16 @@ pub fn request(
 ) -> Result<Response, String> {
     let target = split(url)?;
 
-    let mut stream = TcpStream::connect((target.host.as_str(), target.port))
-        .map_err(|err| format!("sekreto: cannot reach {}: {}", nakedurl(url), err))?;
+    let mut stream = connect(&target.host, target.port, url)?;
 
     stream
-        .set_read_timeout(Some(Duration::from_secs(10)))
+        .set_read_timeout(Some(TIMEOUT))
+        .map_err(|err| format!("sekreto: cannot reach {}: {}", nakedurl(url), err))?;
+
+    // A write blocks too, once the peer's receive window fills and it stops
+    // reading. Only the read side was bounded here.
+    stream
+        .set_write_timeout(Some(TIMEOUT))
         .map_err(|err| format!("sekreto: cannot reach {}: {}", nakedurl(url), err))?;
 
     if target.tls {

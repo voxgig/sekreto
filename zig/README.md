@@ -101,22 +101,38 @@ all, so the library and the CLI compile on a machine with no omni checkout
   global state cannot be tested.
 - **The cache is a list**, not a map, so redaction order is stable between
   runs — the same reason Go and Rust keep insertion order explicitly.
-- **The HTTP timeout is set on the socket, because `std` will not set it.**
-  `ConnectTcpOptions` has a `timeout` field and `connectTcpOptions` never
-  reads it — in 0.16 the whole of `std/http/Client.zig` mentions `timeout`
-  exactly once, at the field's own declaration. This README previously
-  claimed the connect was bounded at 10s on the strength of passing that
-  field; it was not, and the port had no bound at all. Measured: still
-  blocked at 35s against a server that accepted and went silent, where
-  every other port gave up at 10.
+- **The HTTP timeout is applied twice by hand, because `std` will not apply
+  it at all.** `ConnectTcpOptions` has a `timeout` field and
+  `connectTcpOptions` never reads it — in 0.16 the whole of
+  `std/http/Client.zig` mentions `timeout` exactly once, at the field's own
+  declaration. This README previously claimed the connect was bounded at
+  10s on the strength of passing that field; it was not, and the port had
+  no bound at all. Measured: still blocked at 35s against a server that
+  accepted and went silent, where every other port gave up at 10.
 
-  `src/http.zig` now sets `SO_RCVTIMEO` / `SO_SNDTIMEO` on the connection's
-  own socket, which does hold. Being a socket option it bounds each read
-  and each write rather than the request as a whole — the same shape as
-  every port here except Go, whose deadline is total. A server dribbling
-  one byte at a time can still outlast it; a server that says nothing
-  cannot. The request is still built by hand rather than through
-  `Client.fetch`, which gives no access to the connection at all.
+  The two halves of a request need different machinery, because until the
+  connect returns there is no socket to bound:
+
+  - **The connect** is raced against a 10s sleep, and the loser cancelled
+    (`dial` in `src/http.zig`). `Io.Threaded` signals a thread blocked in a
+    cancelable syscall, so the cancel genuinely unblocks a stuck connect.
+  - **Everything after it** is bounded by a watchdog thread that shuts the
+    socket down once 10s have passed.
+
+  Shutting the socket down is deliberate, and `SO_RCVTIMEO` is the obvious
+  move that is wrong here: it makes `recv` return `EAGAIN`, which
+  `Io.Threaded` treats as a programmer bug and **panics** on — turning a
+  hung vault into a crash. A shutdown ends the pending read the way a
+  closed connection does, which the reader already handles.
+
+  The watchdog's bound is **total**: wall-clock from the moment the
+  connection is up, not a per-read timer that a trickle of bytes resets.
+  That makes this port and Go the only two of the twelve that cut a server
+  which answers 200 and then dribbles its body one byte at a time —
+  measured at 10.05s here, against 30s-and-still-going for the other ten.
+
+  The request is still built by hand rather than through `Client.fetch`,
+  which gives no access to the connection at all.
 
 ## Testing
 
