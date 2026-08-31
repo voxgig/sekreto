@@ -89,7 +89,7 @@ that disagree about what passing means are worse than one.
 
 A port is complete when it has all four:
 
-- the library — the equivalent of `Sekreto` and all thirteen provider
+- the library — the equivalent of `Sekreto` and all fourteen provider
   kinds
 - a conformance suite running `spec/sekreto.json` through that language's
   voxgig/omni runner, covering all fourteen groups
@@ -167,6 +167,16 @@ already there — the mock dies in milliseconds while the squatter answers
 the probe instantly — so the port is claimed first. A developer's own
 `vault server -dev` on 8200 is exactly the case: without the guard every
 HashiCorp check silently tests the wrong server.
+
+**Neither is there a SecretSpec mock**, for the same reason and with the
+same consequence: `secretspec` is read through its own CLI, so the thing
+under test is whether a port reads what that program prints and tells its
+two failure shapes apart. SecretSpec words both of them as "not found" —
+`Secret 'API_TOKEN' not found` is a miss, `Provider backend 'keyring' not
+found` is a store that could not answer — so a port that matches loosely
+passes the easy check and silently falls through to a weaker store on the
+hard one. `test/integration.sh` checks both, against the real binary,
+found via `$SECRETSPEC` or `PATH`, and skips them when it is absent.
 
 **There is still no boru mock, and there should not be one.** boru's wire
 protocol ships inside the same binary the CLI does, so both boru paths are

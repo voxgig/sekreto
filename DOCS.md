@@ -183,10 +183,12 @@ provider, so a typo fails the same way whether or not a vault is reachable.
 | go | `Try` → `(value, found, err)` | `GetFrom` / `TryFrom` | `Redact` |
 | rust | `trysecret` → `Option` | `getfrom` / `tryfrom` | `redact` |
 | java | `tryget` | `getfrom` / `tryfrom` | `redact` |
+| kotlin | `tryget`, and `` `try` `` | `getfrom` / `tryfrom` | `redact` |
 | csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` |
 
-`try` is a keyword in Java and Python needs to avoid shadowing the
-statement, hence `tryget` and `try_`. Go and Rust have no exceptions, so
+`try` is a keyword in Java and Kotlin, and Python needs to avoid shadowing
+the statement, hence `tryget` and `try_`. Kotlin can escape a keyword with
+backticks, so it carries `` `try` `` as well. Go and Rust have no exceptions, so
 they answer with `(value, found, error)` and `Result<Option<..>>`
 respectively rather than throwing.
 
@@ -483,6 +485,35 @@ clientid/clientsecret. A 404 is a miss.
 
 `describe()` → `infisical:<project>/<environment>`
 
+### `secretspec` — SecretSpec
+
+```
+{ kind: 'secretspec', command?: string, file?: string, profile?: string,
+  backend?: string, reason?: string, prefix?: string }
+```
+
+[SecretSpec](https://secretspec.dev) is a declaration — a
+`secretspec.toml` naming the secrets a project needs — plus a chain of
+its own backends to satisfy them from. sekreto reads it through the
+`secretspec` CLI, as it reads boru through the `boru` CLI, because that
+is the interface SecretSpec offers a program in another language.
+
+`api.token` is the SecretSpec key `API_TOKEN` — the same mapping
+`envkey` makes, which is the convention SecretSpec's own examples use.
+
+`backend` chooses one of SecretSpec's backends (its `--provider` flag,
+e.g. `keyring` or `dotenv://.env`). It is called `backend` here only
+because `provider` already means a sekreto provider.
+
+`reason` is passed on every read, defaulting to `sekreto`: SecretSpec
+records accesses in an audit log and refuses to read without one.
+
+A secret SecretSpec does not hold — undeclared, or declared with no
+value — is a **miss**, so the chain carries on. A backend that does not
+exist, or a keyring that will not open, is an **error**.
+
+`describe()` → `secretspec`, or `secretspec:<backend>`
+
 ---
 
 ## Errors
@@ -512,6 +543,7 @@ every port:
 | `sekreto: onepassword: no vault named <vault>` | config names a Connect vault that is not there |
 | `sekreto: doppler error: <status>` | Doppler refused the download |
 | `sekreto: infisical login failed: <status>` / `sekreto: infisical error: <status>` | Infisical refused login or answered badly |
+| `sekreto: secretspec error: <why>` | the `secretspec` CLI failed for a reason that is not a missing secret |
 | `sekreto: file provider cannot read <file>: <why>` | a secret file that exists but cannot be read |
 | `sekreto: cannot reach <url>: <why>` | the store could not be contacted |
 | `sekreto: malformed response from <url>` | a store answered 200 with a body that is not JSON |

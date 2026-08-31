@@ -100,6 +100,7 @@ One name, one secret, whichever provider answers:
 | `onepassword` | `onepassword` | 1Password, through a Connect server |
 | `doppler` | `doppler` | Doppler, one bulk download per config |
 | `infisical` | `infisical` | Infisical, token or universal-auth machine identity |
+| `secretspec` | `secretspec` | [SecretSpec](https://secretspec.dev), through its CLI — whatever backend it is configured with |
 
 The store name is what `getfrom` addresses. It defaults to the kind and can
 be set with `name`, so two boru vaults can be `personal` and `team`.

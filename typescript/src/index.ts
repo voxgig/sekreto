@@ -28,6 +28,7 @@ export {
   gcpsecretsprovider,
   hashicorpprovider,
   infisicalprovider,
+  secretspecprovider,
   makeprovider,
   memoryprovider,
   onepasswordprovider,

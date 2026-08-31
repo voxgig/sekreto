@@ -74,6 +74,12 @@ INF_ENV=prod
 BORU=${BORU:-$(command -v boru || true)}
 BORU_PASSPHRASE=integration-passphrase
 
+# SecretSpec is read through its own CLI, like boru, so like boru it is
+# tested against the real binary or not at all. There is no mock and
+# there should not be one: the thing being tested is whether sekreto
+# reads what that program prints and tells its two failure shapes apart.
+SECRETSPEC=${SECRETSPEC:-$(command -v secretspec || true)}
+
 API_URL=http://127.0.0.1:$API_PORT/whoami
 
 WORK=$(mktemp -d)
@@ -238,6 +244,22 @@ printf '%s\n' "$TOKEN" >"$WORK/filedir/API_TOKEN"
 # The service-account JWT the kubernetes-auth login presents.
 printf '%s' "$SA_JWT" >"$WORK/jwt"
 
+# A SecretSpec project: the declaration, a backend holding the secret,
+# and an empty backend to miss against. Absolute paths throughout,
+# because every CLI runs from an empty directory and secretspec resolves
+# both its declaration and a dotenv:// backend relative to the cwd.
+mkdir -p "$WORK/ss"
+cat >"$WORK/ss/secretspec.toml" <<'EOF'
+[project]
+name = "sekreto-integration"
+revision = "1.0"
+
+[profiles.default]
+API_TOKEN = { description = "the token the api wants", required = true }
+EOF
+printf 'API_TOKEN=%s\n' "$TOKEN" >"$WORK/ss/.env"
+printf '\n' >"$WORK/ss/empty.env"
+
 # --------------------------------------------------------------- the runs
 
 LANGS=${*:-$ALL_LANGS}
@@ -386,13 +408,38 @@ for lang in $LANGS; do
     noted_skip "$lang/boruwire" "no boru vault serve"
   fi
 
-  # 18. A store that is not in the chain is a mistake, not a miss.
+  # 18. SecretSpec, through its own CLI. Three checks, because the
+  #     interesting part is not the happy read: a declared secret with no
+  #     value must be a MISS so the chain carries on, while a backend
+  #     that does not exist must RAISE. SecretSpec words both as "not
+  #     found", so a port that matches loosely passes the first and fails
+  #     the second - silently falling through to a weaker store.
+  if [ -n "$SECRETSPEC" ]; then
+    STORE= check "$lang" secretspec ok \
+      SECRETSPEC_COMMAND="$SECRETSPEC" \
+      SECRETSPEC_FILE="$WORK/ss/secretspec.toml" \
+      SECRETSPEC_PROVIDER="dotenv://$WORK/ss/.env"
+
+    LABEL="$lang/secretspec-miss" WHY='unknown secret' STORE= check "$lang" secretspec deny \
+      SECRETSPEC_COMMAND="$SECRETSPEC" \
+      SECRETSPEC_FILE="$WORK/ss/secretspec.toml" \
+      SECRETSPEC_PROVIDER="dotenv://$WORK/ss/empty.env"
+
+    LABEL="$lang/secretspec-raise" WHY='secretspec error' STORE= check "$lang" secretspec deny \
+      SECRETSPEC_COMMAND="$SECRETSPEC" \
+      SECRETSPEC_FILE="$WORK/ss/secretspec.toml" \
+      SECRETSPEC_PROVIDER=nosuchbackend
+  else
+    noted_skip "$lang/secretspec" "no secretspec binary"
+  fi
+
+  # 19. A store that is not in the chain is a mistake, not a miss.
   STORE=nosuchstore check "$lang" env deny API_TOKEN="$TOKEN"
 
-  # 19. No secret anywhere: the CLI must fail, not call the API unauthenticated.
+  # 20. No secret anywhere: the CLI must fail, not call the API unauthenticated.
   STORE= check "$lang" env deny SEKRETO_PREFIX=NOSUCH_
 
-  # 20. The wrong secret: the API must refuse it, and the CLI must not print
+  # 21. The wrong secret: the API must refuse it, and the CLI must not print
   #    the real token while complaining.
   STORE= check "$lang" dotenv deny SEKRETO_DOTENV="$WORK/wrong/.env"
 done

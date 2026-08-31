@@ -857,6 +857,10 @@
                 {
                   "addr": "http://127.0.0.1:8200",
                   "kind": "boru"
+                },
+                {
+                  "backend": "keyring",
+                  "kind": "secretspec"
                 }
               ]
             },
@@ -869,7 +873,8 @@
               "onepassword:dev",
               "doppler:app/prd",
               "infisical:w1/prod",
-              "boru:http://127.0.0.1:8200"
+              "boru:http://127.0.0.1:8200",
+              "secretspec:keyring"
             ]
           }
         ]
