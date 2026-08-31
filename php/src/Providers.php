@@ -280,6 +280,89 @@ function httpget(string $url, array $headers): array
 }
 
 /**
+ * Run a child to completion and collect both its streams.
+ *
+ * Given an ARGV ARRAY, not a command string. `proc_open` with a string runs
+ * `/bin/sh -c`, which put every value - the command, the alias, the key -
+ * one escaping function away from being interpreted. `escapeshellarg` was
+ * doing that job correctly, but it made this the only port whose safety
+ * rested on quoting rather than on `execve`, and it broke two things
+ * besides: the "cannot run" branch was unreachable, because `sh` always
+ * starts and absorbs the exec failure into its own message, and the
+ * `BORU_HOME=...` prefix is POSIX-sh syntax that does nothing on Windows,
+ * where `proc_open` goes through `cmd.exe`. The array form (PHP 7.4+) makes
+ * this port behave like the other eleven.
+ *
+ * Both pipes are drained TOGETHER. `stream_get_contents` on stdout to EOF
+ * and only then on stderr deadlocks the moment the child writes more than
+ * one pipe buffer (64 KiB on Linux) to stderr: this process is blocked
+ * waiting for stdout, the child is blocked waiting for room on stderr, and
+ * neither can move. Nothing in this library sets a timeout, so that hang is
+ * permanent. secretspec's diagnostics are box-drawn and reach that size
+ * easily.
+ *
+ * The child's stdin is closed rather than inherited, so a CLI that reads it
+ * - one prompting for a passphrase when its environment variable is absent -
+ * sees EOF and gives up instead of waiting forever.
+ *
+ * @param list<string>          $argv
+ * @param array<string, string> $env  extra variables for the child only
+ *
+ * @return array{0: string, 1: string, 2: int} stdout, trimmed stderr, status
+ */
+function runcmd(array $argv, array $env = []): array
+{
+    $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+
+    // null inherits the parent environment; a non-empty $env has to be the
+    // whole set, so it is merged rather than replacing it.
+    $childenv = [] === $env ? null : array_merge(getenv(), $env);
+
+    $process = @proc_open($argv, $descriptors, $pipes, null, $childenv);
+
+    if (!is_resource($process)) {
+        throw new SekretoError('sekreto: cannot run ' . $argv[0]);
+    }
+
+    fclose($pipes[0]);
+
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+
+    $text = [1 => '', 2 => ''];
+    $open = [1 => $pipes[1], 2 => $pipes[2]];
+
+    while ([] !== $open) {
+        $read = array_values($open);
+        $write = null;
+        $except = null;
+
+        if (false === @stream_select($read, $write, $except, 30)) {
+            break;
+        }
+
+        foreach ($read as $handle) {
+            $chunk = fread($handle, 65536);
+            $key = $handle === $pipes[1] ? 1 : 2;
+
+            if (false === $chunk || ('' === $chunk && feof($handle))) {
+                unset($open[$key]);
+                continue;
+            }
+
+            $text[$key] .= $chunk;
+        }
+    }
+
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    $status = proc_close($process);
+
+    return [$text[1], trim($text[2]), $status];
+}
+
+/**
  * Refuse to send a Vault token in the clear.
  *
  * Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -582,31 +665,15 @@ class BoruProvider implements Provider
 
         $alias = $this->namespace ? $this->namespace . ':' . $name : $name;
 
-        $cmd = escapeshellarg($this->command) . ' vault get --reveal ' . escapeshellarg($alias);
-
-        if ($this->home) {
-            $cmd = 'BORU_HOME=' . escapeshellarg($this->home) . ' ' . $cmd;
-        }
-
-        $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-        $process = @proc_open($cmd, $descriptors, $pipes);
-
-        if (!is_resource($process)) {
-            throw new SekretoError('sekreto: cannot run ' . $this->command);
-        }
-
-        $out = stream_get_contents($pipes[1]);
-        $err = stream_get_contents($pipes[2]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        $status = proc_close($process);
+        [$out, $why, $status] = runcmd(
+            [$this->command, 'vault', 'get', '--reveal', $alias],
+            $this->home ? ['BORU_HOME' => $this->home] : []
+        );
 
         if (0 === $status) {
             // boru prints the value and one newline, and nothing else.
-            return preg_replace('/\r?\n\z/', '', $out, 1);
+            return preg_replace('/\n\z/', '', $out, 1);
         }
-
-        $why = trim($err);
 
         // "no alias named" is boru saying it does not hold this secret, which
         // is a miss: the chain carries on to the next provider. A locked vault
@@ -685,38 +752,30 @@ class SecretspecProvider implements Provider
     {
         $key = Name::envkey($name, $this->prefix);
 
-        $cmd = escapeshellarg($this->command);
+        $argv = [$this->command];
         if ($this->file) {
-            $cmd .= ' --file ' . escapeshellarg($this->file);
+            $argv[] = '--file';
+            $argv[] = $this->file;
         }
-        $cmd .= ' get ' . escapeshellarg($key);
+        $argv[] = 'get';
+        $argv[] = $key;
         if ($this->backend) {
-            $cmd .= ' --provider ' . escapeshellarg($this->backend);
+            $argv[] = '--provider';
+            $argv[] = $this->backend;
         }
         if ($this->profile) {
-            $cmd .= ' --profile ' . escapeshellarg($this->profile);
+            $argv[] = '--profile';
+            $argv[] = $this->profile;
         }
-        $cmd .= ' --reason ' . escapeshellarg($this->reason ?: 'sekreto');
+        $argv[] = '--reason';
+        $argv[] = $this->reason ?: 'sekreto';
 
-        $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-        $process = @proc_open($cmd, $descriptors, $pipes);
-
-        if (!is_resource($process)) {
-            throw new SekretoError('sekreto: cannot run ' . $this->command);
-        }
-
-        $out = stream_get_contents($pipes[1]);
-        $err = stream_get_contents($pipes[2]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        $status = proc_close($process);
+        [$out, $why, $status] = runcmd($argv);
 
         if (0 === $status) {
             // The value and one newline, and nothing else.
             return preg_replace('/\n\z/', '', $out, 1);
         }
-
-        $why = trim($err);
 
         if (secretspecmiss($why, $key)) {
             return null;

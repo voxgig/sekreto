@@ -16,6 +16,7 @@
 
 package com.voxgig.sekreto
 
+import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.net.URI
 import java.net.http.HttpClient
@@ -24,6 +25,7 @@ import java.net.http.HttpResponse
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
+import java.nio.file.Path
 import java.nio.file.Paths
 import java.time.Duration
 import java.time.Instant
@@ -123,6 +125,77 @@ object Providers {
     /** How long any single vault round-trip may take before it is treated
      * as unreachable. Ports carry the same bound. */
     private val TIMEOUT: Duration = Duration.ofSeconds(10)
+
+    /**
+     * Does this read failure mean "no secrets here", rather than "I could not
+     * answer"?
+     *
+     * Absence is a MISS and the chain carries on; anything else - permission
+     * denied, an unreadable mount, a failing disk - is an ERROR, because
+     * returning a miss there falls silently through to a weaker store.
+     *
+     * Asked of the directory, not of the file. The obvious spelling,
+     * `!Files.exists(file)`, is wrong in exactly the case the rule exists
+     * for: `Files.exists` is "did checkAccess throw", so it answers *false*
+     * for an `AccessDeniedException` and turned a locked directory - the
+     * canonical "unreadable mount" - into a miss. A path whose parent is a
+     * plain file (ENOTDIR) really is "no secrets here", and that is what this
+     * asks. The reason string is not consulted: it comes from the C library's
+     * strerror and follows the machine's locale.
+     */
+    internal fun absent(file: Path): Boolean {
+        val dir = file.parent
+        return null != dir && !Files.isDirectory(dir)
+    }
+
+    /** What a finished child process left behind. */
+    internal data class Ran(val out: String, val why: String, val status: Int)
+
+    /**
+     * Run a child to completion and collect both its streams.
+     *
+     * The two streams are drained CONCURRENTLY. Reading stdout to EOF and
+     * only then reading stderr deadlocks the moment the child writes more
+     * than one pipe buffer (64 KiB on Linux) to stderr: the parent is blocked
+     * waiting for stdout, the child is blocked waiting for room on stderr,
+     * and neither can move. Nothing in this library sets a timeout, so that
+     * hang is permanent - `get()` simply never returns. secretspec's
+     * diagnostics are box-drawn and reach that size easily.
+     *
+     * The child's stdin is closed rather than left open on a pipe nobody
+     * writes to, so a CLI that reads it - one prompting for a passphrase when
+     * its environment variable is absent - sees EOF and gives up instead of
+     * waiting forever.
+     */
+    internal fun runcmd(builder: ProcessBuilder, command: String): Ran {
+        try {
+            val process = builder.start()
+
+            process.outputStream.close()
+
+            val errbuf = ByteArrayOutputStream()
+            val drain = Thread {
+                try {
+                    process.errorStream.transferTo(errbuf)
+                } catch (err: IOException) {
+                    // The child went away mid-write; waitFor reports how.
+                }
+            }
+            drain.isDaemon = true
+            drain.start()
+
+            val out = String(process.inputStream.readAllBytes(), StandardCharsets.UTF_8)
+            val status = process.waitFor()
+            drain.join()
+
+            return Ran(out, String(errbuf.toByteArray(), StandardCharsets.UTF_8).trim(), status)
+        } catch (err: IOException) {
+            throw SekretoError("sekreto: cannot run $command: ${err.message}")
+        } catch (err: InterruptedException) {
+            Thread.currentThread().interrupt()
+            throw SekretoError("sekreto: interrupted running $command")
+        }
+    }
 
     // HTTP/1.1, explicitly.
     //
@@ -339,12 +412,7 @@ object Providers {
                 // here", exactly like the file provider.
                 emptyMap()
             } catch (err: IOException) {
-                // A path component that is a plain file reads as "not a
-                // directory", which is still "no secrets here". Anything else
-                // (permission denied, an unreadable mount) is a store that
-                // could not answer, and swallowing it would fall through to a
-                // weaker store.
-                if (!Files.exists(path)) {
+                if (absent(path)) {
                     emptyMap()
                 } else {
                     throw SekretoError(
@@ -403,11 +471,7 @@ object Providers {
                 // here", exactly like a missing .env.
                 return null
             } catch (err: IOException) {
-                // A path component that is a plain file reads as "not a
-                // directory", which is still "no secrets here". Anything else
-                // (permission denied, an unreadable mount) is a store that
-                // could not answer.
-                if (!Files.exists(file)) {
+                if (absent(file)) {
                     return null
                 }
                 throw SekretoError("sekreto: file provider cannot read $file: ${err.message}")
@@ -607,21 +671,7 @@ object Providers {
                 builder.environment()["BORU_HOME"] = home
             }
 
-            val out: String
-            val why: String
-            val status: Int
-
-            try {
-                val process = builder.start()
-                out = String(process.inputStream.readAllBytes(), StandardCharsets.UTF_8)
-                why = String(process.errorStream.readAllBytes(), StandardCharsets.UTF_8).trim()
-                status = process.waitFor()
-            } catch (err: IOException) {
-                throw SekretoError("sekreto: cannot run $command: ${err.message}")
-            } catch (err: InterruptedException) {
-                Thread.currentThread().interrupt()
-                throw SekretoError("sekreto: interrupted running $command")
-            }
+            val (out, why, status) = runcmd(builder, command)
 
             if (0 == status) {
                 // boru prints the value and one newline, and nothing else.
@@ -734,21 +784,7 @@ object Providers {
             args.add("--reason")
             args.add(first(reason, "sekreto"))
 
-            val out: String
-            val why: String
-            val status: Int
-
-            try {
-                val process = ProcessBuilder(args).start()
-                out = String(process.inputStream.readAllBytes(), StandardCharsets.UTF_8)
-                why = String(process.errorStream.readAllBytes(), StandardCharsets.UTF_8).trim()
-                status = process.waitFor()
-            } catch (err: IOException) {
-                throw SekretoError("sekreto: cannot run $command: ${err.message}")
-            } catch (err: InterruptedException) {
-                Thread.currentThread().interrupt()
-                throw SekretoError("sekreto: interrupted running $command")
-            }
+            val (out, why, status) = runcmd(ProcessBuilder(args), command)
 
             if (0 == status) {
                 // The value and one newline, and nothing else.

@@ -471,6 +471,12 @@ class BoruProvider(Provider):
                 capture_output=True,
                 text=True,
                 env=env,
+                # Not inherited: a CLI that reads stdin - one prompting for a
+                # passphrase when its environment variable is absent - would
+                # otherwise block on the parent's own stdin forever, and
+                # nothing here sets a timeout. `capture_output` covers only
+                # the other two streams.
+                stdin=subprocess.DEVNULL,
             )
         except OSError as err:
             raise SekretoError('sekreto: cannot run ' + self.command + ': ' + str(err))
@@ -573,7 +579,14 @@ class SecretspecProvider(Provider):
         args += ['--reason', self.reason or 'sekreto']
 
         try:
-            run = subprocess.run(args, capture_output=True, text=True)
+            run = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                # See the boru provider: an inherited stdin lets a CLI that
+                # prompts block forever.
+                stdin=subprocess.DEVNULL,
+            )
         except OSError as err:
             raise SekretoError('sekreto: cannot run ' + self.command + ': ' + str(err))
 

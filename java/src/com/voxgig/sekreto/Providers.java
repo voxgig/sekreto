@@ -17,6 +17,7 @@
 package com.voxgig.sekreto;
 
 import com.voxgig.sekreto.Sekreto.SekretoError;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -40,6 +41,89 @@ import java.util.Map;
 public final class Providers {
 
   private Providers() {}
+
+  /**
+   * Does this read failure mean "no secrets here", rather than "I could not
+   * answer"?
+   *
+   * <p>Absence is a MISS and the chain carries on; anything else - permission
+   * denied, an unreadable mount, a failing disk - is an ERROR, because
+   * returning a miss there falls silently through to a weaker store.
+   *
+   * <p>Asked of the directory, not of the file. The obvious spelling,
+   * {@code !Files.exists(file)}, is wrong in exactly the case the rule exists
+   * for: {@code Files.exists} is "did checkAccess throw", so it answers
+   * <em>false</em> for an {@code AccessDeniedException} and turned a locked
+   * directory - the canonical "unreadable mount" - into a miss. A path whose
+   * parent is a plain file (ENOTDIR) really is "no secrets here", and that is
+   * what this asks. The reason string is not consulted: it comes from the C
+   * library's strerror and follows the machine's locale.
+   */
+  static boolean absent(Path file) {
+    Path dir = file.getParent();
+    return null != dir && !Files.isDirectory(dir);
+  }
+
+  /** What a finished child process left behind. */
+  static final class Ran {
+    final String out;
+    final String why;
+    final int status;
+
+    Ran(String out, String why, int status) {
+      this.out = out;
+      this.why = why;
+      this.status = status;
+    }
+  }
+
+  /**
+   * Run a child to completion and collect both its streams.
+   *
+   * <p>The two streams are drained CONCURRENTLY. Reading stdout to EOF and
+   * only then reading stderr deadlocks the moment the child writes more than
+   * one pipe buffer (64 KiB on Linux) to stderr: the parent is blocked
+   * waiting for stdout, the child is blocked waiting for room on stderr, and
+   * neither can move. Nothing in this library sets a timeout, so that hang is
+   * permanent - `get()` simply never returns. secretspec's diagnostics are
+   * box-drawn and reach that size easily.
+   *
+   * <p>The child's stdin is closed rather than left open on a pipe nobody
+   * writes to, so a CLI that reads it - one prompting for a passphrase when
+   * its environment variable is absent - sees EOF and gives up instead of
+   * waiting forever.
+   */
+  static Ran runcmd(ProcessBuilder builder, String command) {
+    try {
+      Process process = builder.start();
+
+      process.getOutputStream().close();
+
+      ByteArrayOutputStream errbuf = new ByteArrayOutputStream();
+      Thread drain =
+          new Thread(
+              () -> {
+                try {
+                  process.getErrorStream().transferTo(errbuf);
+                } catch (IOException err) {
+                  // The child went away mid-write; waitFor reports how.
+                }
+              });
+      drain.setDaemon(true);
+      drain.start();
+
+      String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+      int status = process.waitFor();
+      drain.join();
+
+      return new Ran(out, new String(errbuf.toByteArray(), StandardCharsets.UTF_8).trim(), status);
+    } catch (IOException err) {
+      throw new SekretoError("sekreto: cannot run " + command + ": " + err.getMessage());
+    } catch (InterruptedException err) {
+      Thread.currentThread().interrupt();
+      throw new SekretoError("sekreto: interrupted running " + command);
+    }
+  }
 
   /** Environment variables: `api.token` from `API_TOKEN`. */
   public static final class Env implements Provider {
@@ -90,11 +174,7 @@ public final class Providers {
           // here", exactly like the file provider.
           values = new LinkedHashMap<>();
         } catch (IOException err) {
-          // A path component that is a plain file reads as "not a directory",
-          // which is still "no secrets here". Anything else (permission
-          // denied, an unreadable mount) is a store that could not answer,
-          // and swallowing it would fall through to a weaker store.
-          if (!Files.exists(path)) {
+          if (absent(path)) {
             values = new LinkedHashMap<>();
           } else {
             throw new SekretoError(
@@ -173,10 +253,7 @@ public final class Providers {
         // here", exactly like a missing .env.
         return null;
       } catch (IOException err) {
-        // A path component that is a plain file reads as "not a directory",
-        // which is still "no secrets here". Anything else (permission
-        // denied, an unreadable mount) is a store that could not answer.
-        if (!Files.exists(file)) {
+        if (absent(file)) {
           return null;
         }
         throw new SekretoError(
@@ -619,21 +696,10 @@ public final class Providers {
         builder.environment().put("BORU_HOME", home);
       }
 
-      String out;
-      String why;
-      int status;
-
-      try {
-        Process process = builder.start();
-        out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        why = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-        status = process.waitFor();
-      } catch (IOException err) {
-        throw new SekretoError("sekreto: cannot run " + command + ": " + err.getMessage());
-      } catch (InterruptedException err) {
-        Thread.currentThread().interrupt();
-        throw new SekretoError("sekreto: interrupted running " + command);
-      }
+      Ran ran = runcmd(builder, command);
+      String out = ran.out;
+      String why = ran.why;
+      int status = ran.status;
 
       if (0 == status) {
         // boru prints the value and one newline, and nothing else.
@@ -757,21 +823,10 @@ public final class Providers {
       args.add("--reason");
       args.add(null == reason || reason.isEmpty() ? "sekreto" : reason);
 
-      String out;
-      String why;
-      int status;
-
-      try {
-        Process process = new ProcessBuilder(args).start();
-        out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        why = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-        status = process.waitFor();
-      } catch (IOException err) {
-        throw new SekretoError("sekreto: cannot run " + command + ": " + err.getMessage());
-      } catch (InterruptedException err) {
-        Thread.currentThread().interrupt();
-        throw new SekretoError("sekreto: interrupted running " + command);
-      }
+      Ran ran = runcmd(new ProcessBuilder(args), command);
+      String out = ran.out;
+      String why = ran.why;
+      int status = ran.status;
 
       if (0 == status) {
         // The value and one newline, and nothing else.
