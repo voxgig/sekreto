@@ -1,6 +1,6 @@
 # Testing against the real secret stores
 
-sekreto has ten ports and thirteen provider kinds, and until now every
+sekreto has twelve ports and fourteen provider kinds, and until now every
 network provider was tested against a mock: `test/mockhashicorp.js`,
 `test/mockaws.js` and their five siblings, each reimplementing a
 vendor's published wire protocol in a hundred lines of Node.

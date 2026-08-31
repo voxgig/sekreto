@@ -1,10 +1,10 @@
 # Bringing sekreto to the languages struct already has
 
 [voxgig/struct](https://github.com/voxgig/struct) has twenty-three ports.
-sekreto has ten. The missing thirteen are:
+sekreto now has twelve — **zig** and **kotlin** landed with this document.
+The remaining eleven are:
 
-> c, clojure, cpp, dart, elixir, haskell, kotlin, lean, lua, ocaml,
-> scala, swift, zig
+> c, clojure, cpp, dart, elixir, haskell, lean, lua, ocaml, scala, swift
 
 Every one of them already has a [voxgig/omni](https://github.com/voxgig/omni)
 runner, so the conformance half of a port has somewhere to plug in. The
@@ -15,11 +15,13 @@ language and nothing else. sekreto opens sockets, speaks seven vendors'
 HTTP APIs, signs AWS requests with HMAC-SHA256, parses JSON responses,
 decodes base64, and spawns the boru CLI. Against the rule that matters —
 **zero third-party dependencies** — that is a much higher bar, and it is
-a bar six of these thirteen languages cannot clear.
+a bar six of the thirteen cannot clear. The table below covers all
+thirteen, zig and kotlin included, because the reason those two were
+possible is the same reason the other six are not.
 
 ## What each language's standard library actually gives us
 
-Measured against what the thirteen provider kinds need. "Hand-roll" is
+Measured against what the fourteen provider kinds need. "Hand-roll" is
 the house answer and is not a problem in itself: the Java and Rust ports
 already carry their own JSON, and Rust its own HTTP.
 
@@ -47,11 +49,15 @@ that Ubuntu 24.04 packages, neither exists, so the port hand-rolls one.
 table, math, io, os, debug. There are no sockets of any kind. `io.popen`
 is the only way out of the process, and it is unidirectional.
 
-So the thirteen split cleanly in two.
+So the thirteen split cleanly in two, and the split was checked twice:
+once per language against its standard library, and once adversarially
+against that answer. Nothing in the second pass moved a language across
+the line.
 
 ## Seven that can be complete ports today
 
-**zig, kotlin, scala, clojure, dart, swift, elixir.**
+**zig, kotlin, scala, clojure, dart, swift, elixir** — of which **zig and
+kotlin are done**.
 
 Each has HTTP with TLS in its standard library or platform library, and
 everything else is either there or is the kind of small in-tree piece
@@ -59,19 +65,19 @@ this repository already writes by hand. No rule has to bend. These are
 ordinary work — large, but ordinary — and they should be done in that
 order, easiest first:
 
-1. **zig** — the only one needing no hand-rolling at all. `std` has the
-   HTTP client, TLS, JSON, SHA-256, HMAC, base64 and subprocess. It is
-   also the best proof that the port shape survives a language with
-   manual memory management and no exceptions. *(Being done now.)*
-2. **kotlin, scala, clojure** — one platform, three languages. The JVM
-   gives HTTP, TLS, HMAC and base64; only JSON is hand-rolled, and
-   `java/src/com/voxgig/sekreto/Json.java` is the model at 299 lines.
-   Doing them together means writing that parser three times in three
-   idioms, which is the point of the exercise rather than a waste of it.
-   Note the HTTP/2 trap the Java port just hit: `java.net.http` defaults
-   to `HTTP_2` and its h2c upgrade sends a `Content-Length` with an empty
-   body, which strict servers reject. All three inherit that default and
-   must pin HTTP/1.1.
+1. ~~**zig**~~ — **done.** The only one needing no hand-rolling at all:
+   `std` has the HTTP client, TLS, JSON, SHA-256, HMAC, base64 and
+   subprocess. It was also the best proof that the port shape survives a
+   language with manual memory management and no exceptions.
+2. **kotlin** (**done**)**, scala, clojure** — one platform, three
+   languages. The JVM gives HTTP, TLS, HMAC and base64; only JSON is
+   hand-rolled, and `java/src/com/voxgig/sekreto/Json.java` is the model
+   at 299 lines. Writing that parser three times in three idioms is the
+   point of the exercise rather than a waste of it.
+   Note the HTTP/2 trap the Java port hit: `java.net.http` defaults to
+   `HTTP_2` and its h2c upgrade sends a `Content-Length` with an empty
+   body, which strict servers reject. Scala and Clojure inherit that
+   default and must pin HTTP/1.1, as java and kotlin now do.
 3. **dart, swift, elixir** — each has HTTP, TLS and (except Elixir on
    older OTP) JSON; each needs SHA-256 and HMAC hand-rolled, except
    Elixir, where OTP's `:crypto` has both.
@@ -94,12 +100,23 @@ Haskell, Lua and Lean have a second problem underneath the first: no
 sockets either, so even plaintext HTTP has nothing to build on. (Lua's
 `io.popen` and Lean's `IO.Process` are process spawning, not networking.)
 
-It is worth being precise about what this does *not* block. The
-conformance spec is pure functions and the `memory` provider, so a
-Haskell or Lua port could pass `spec/sekreto.json` in full while being
-unable to reach a single vault. **A port that passes the spec is not a
-port**, and counting one would be exactly the kind of vacuous green this
-repository goes out of its way to refuse elsewhere.
+It is worth being precise about what this does *not* block, because the
+precise version is stronger than the loose one.
+
+**No case in `spec/sekreto.json` opens a socket.** Checked, not assumed:
+the network kinds appear in four cases, and every one is rejected before
+the transport is reached — `kv: 3` fails on the version, and
+`http://vault.example.com` and `ftp://…` fail in `checkaddr`. The only
+real I/O anywhere in the suite is the `file` provider reading a directory
+that does not exist. So a Haskell or Lua port with no sockets at all
+could pass all fourteen groups in full, having implemented `describe()`
+and the validation and nothing else.
+
+**A port that passes the spec is not a port**, and counting one would be
+exactly the kind of vacuous green this repository goes out of its way to
+refuse elsewhere. `test/integration.sh` is what would catch it — which is
+the argument for not letting a port into `LANGS` until it passes that
+too.
 
 Four ways forward, and the choice belongs to whoever owns the
 zero-dependency rule:
@@ -139,7 +156,7 @@ actually wants that port in production.** D keeps the rule and keeps the
 honesty, and the failure is loud at the point of construction rather than
 silent at the point of a fallback. A is then a per-language decision with
 a named owner, taken because someone needs a C sekreto against a real
-Vault — not taken thirteen times over by default.
+Vault — not taken six times over by default.
 
 What should not happen is B, and what should not happen quietly is A.
 
@@ -159,7 +176,8 @@ the right answer.
 Unchanged from AGENTS.md, and worth repeating because the six-language
 decision above is precisely about the first bullet:
 
-- the library — `Sekreto` and all thirteen provider kinds
+- the library — `Sekreto` and all **fourteen** provider kinds
+  (`secretspec` is the fourteenth)
 - a conformance suite running `spec/sekreto.json` through that
   language's omni runner, covering every group
 - a CLI at the path `test/checks.sh` expects, printing exactly
@@ -179,8 +197,10 @@ language, use the same one rather than inventing a second way.
 | | how |
 |---|---|
 | zig | `pip install ziglang` (no apt package; struct's CI does this too) |
-| lua, ocaml, elixir, clojure, haskell, c, cpp | `apt-get install` |
-| kotlin, scala | JVM plus a compiler from Maven Central |
+| lua, ocaml, elixir, haskell, c, cpp | `apt-get install` |
+| clojure | the official Clojure CLI installer — **not** Ubuntu's `clojure` package, which is the old wrapper and does not understand `-M`, so omni's runner cannot start under it |
+| kotlin | the JetBrains release zip. Maven Central carries the compiler JAR but not the standalone distribution |
+| scala | JVM plus `scala-cli` or a Scala 3 compiler |
 | swift | `download.swift.org` tarball |
 | dart | `storage.googleapis.com/dart-archive` |
 | lean | `elan` |
