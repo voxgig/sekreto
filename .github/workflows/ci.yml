@@ -177,8 +177,13 @@ jobs:
       - name: Setup Kotlin
         if: matrix.lang == 'kotlin'
         run: |
-          curl -sSLo /tmp/kotlinc.zip \
-            "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-compiler/${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+          # --fail, so a wrong URL is an error here rather than a
+          # not-a-zipfile three lines later: Maven Central carries the
+          # kotlin-compiler JAR but not the standalone distribution, and
+          # fetching the jar's name with a .zip suffix returns a 404 page
+          # that curl will happily save.
+          curl -sSLf --retry 3 -o /tmp/kotlinc.zip \
+            "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
           unzip -q /tmp/kotlinc.zip -d /opt
           echo /opt/kotlinc/bin >> "$GITHUB_PATH"
 
@@ -275,8 +280,8 @@ jobs:
           dotnet-version: '8.0'
       - name: Setup Kotlin
         run: |
-          curl -sSLo /tmp/kotlinc.zip \
-            "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-compiler/${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+          curl -sSLf --retry 3 -o /tmp/kotlinc.zip \
+            "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
           unzip -q /tmp/kotlinc.zip -d /opt
           echo /opt/kotlinc/bin >> "$GITHUB_PATH"
       - name: Setup Zig

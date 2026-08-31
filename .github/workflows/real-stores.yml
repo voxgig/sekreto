@@ -43,6 +43,9 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  KOTLIN_VERSION: '2.1.20'
+
 jobs:
   real-stores:
     name: every port against the real stores
@@ -94,8 +97,8 @@ jobs:
           java-version: '21'
       - name: Setup Kotlin
         run: |
-          curl -sSLo /tmp/kotlinc.zip \
-            "https://repo1.maven.org/maven2/org/jetbrains/kotlin/kotlin-compiler/2.1.20/kotlin-compiler-2.1.20.zip"
+          curl -sSLf --retry 3 -o /tmp/kotlinc.zip \
+            "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
           unzip -q /tmp/kotlinc.zip -d /opt
           echo /opt/kotlinc/bin >> "$GITHUB_PATH"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6

@@ -235,6 +235,13 @@ PORTS = {
 
     # No manifest a consumer resolves - reported, never silently passed.
     'java':       dict(lib=[], why='no manifest a consumer resolves'),
+    # zig: the library is two modules named on the compiler's command line
+    # (see zig/Makefile); there is no build.zig.zon, so nothing a consumer
+    # resolves. The source scan below is this port's only check.
+    'zig':        dict(lib=[], why='no manifest a consumer resolves'),
+    # kotlin: kotlinc is handed a file list, exactly as javac is for the
+    # java port, so the same applies.
+    'kotlin':     dict(lib=[], why='no manifest a consumer resolves'),
     'perl':       dict(lib=[], why='no manifest a consumer resolves'),
     'php':        dict(lib=[], why='no manifest a consumer resolves'),
     'ruby':       dict(lib=[], why='no manifest a consumer resolves'),
@@ -257,6 +264,13 @@ SOURCES = {
     'python':     dict(globs=['python/**/*.py'],
                        skip=['python/test', 'python/tests'], pattern=SOURCE),
     'ruby':       dict(globs=['ruby/lib/**/*.rb'], skip=[], pattern=SOURCE),
+    # The harness trees - zig/test, kotlin/test - are where omni legitimately
+    # appears, and they are excluded here exactly as go/testutil and
+    # rust/corpus are by living outside the globs.
+    'zig':        dict(globs=['zig/src/**/*.zig', 'zig/cli/**/*.zig'],
+                       skip=[], pattern=SOURCE),
+    'kotlin':     dict(globs=['kotlin/src/**/*.kt', 'kotlin/cli/**/*.kt'],
+                       skip=[], pattern=SOURCE),
     'typescript': dict(globs=['typescript/src/**/*.ts'],
                        skip=['typescript/src/omnihome'], pattern=SOURCE),
     # No skip: unlike typescript, this port has no omnihome resolver, so the
