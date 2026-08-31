@@ -151,11 +151,25 @@ this is **the only place any port's TLS stack is exercised at all** —
 certificate verification included, against a certificate the port must
 be told to trust.
 
-That immediately found something: the Perl port needs `IO::Socket::SSL`
-for HTTPS and it is not a core module, so on a machine without it the
-Perl port cannot reach any real vault. The check skips there by name
-rather than failing, because it is the environment's gap and not the
-port's — but it is a gap worth seeing.
+That immediately found two things.
+
+The **Perl** port needs `IO::Socket::SSL` for HTTPS and it is not a core
+module, so on a machine without it the Perl port cannot reach any real
+vault. That is the environment's gap rather than the port's, so the check
+skips by name.
+
+The **Zig** port cannot be told about a private CA at all.
+`std.crypto.Certificate.Bundle` scans a fixed list of system paths —
+`/etc/ssl/certs/ca-certificates.crt` and its equivalents — and reads no
+environment variable, so short of installing the certificate system-wide
+there is no way in. The Rust port hit the same wall, its root set being
+compiled into the binary, and answered it with `SEKRETO_CA_BUNDLE`; the
+Zig port wants the same and does not have it yet. Until then the check
+skips, which is the honest reading: an internal Vault behind a corporate
+CA is not reachable from the Zig port today.
+
+Neither of these is visible from the mock suite, because nothing in it
+speaks TLS.
 
 Each language is told about the certificate in the way it accepts one,
 and there is no arrangement that satisfies all of them at once:
@@ -166,7 +180,9 @@ and there is no arrangement that satisfies all of them at once:
 | python, ruby, php, go, csharp | `SSL_CERT_FILE` |
 | rust | `SEKRETO_CA_BUNDLE` — rustls carries a compiled-in root set, so this is the port's own documented way in |
 | java | a keystore via `-Djavax.net.ssl.trustStore` |
-| perl | `PERL_LWP_SSL_CA_FILE`, if `IO::Socket::SSL` is installed |
+| kotlin | the same keystore as java — one JVM, one mechanism |
+| perl | `SSL_CERT_FILE`, if `IO::Socket::SSL` is installed |
+| **zig** | **nothing** — see below |
 
 ### Infisical — the real server, and a bootstrap worth reading
 

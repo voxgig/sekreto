@@ -312,7 +312,8 @@ tlsenv() {
   # may have refused the certificate; handing the JVM a trustStore path
   # that is not there fails the handshake and records a JAVA failure for
   # something the port did not do.
-  java)
+  # kotlin runs on the same JVM as java and takes the same keystore.
+  java | kotlin)
     if [ -s "$WORK/azure-ca.jks" ]; then
       TRUST=("JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=$WORK/azure-ca.jks -Djavax.net.ssl.trustStorePassword=changeit")
     fi
@@ -320,6 +321,14 @@ tlsenv() {
   # The Perl port needs IO::Socket::SSL for https, and it is not a core
   # module. Where it is missing, the check is skipped rather than failed:
   # that is the environment's gap, not the port's.
+  # zig has no entry, and that is a real finding rather than an
+  # oversight: std.crypto.Certificate.Bundle scans a fixed list of system
+  # paths (/etc/ssl/certs/ca-certificates.crt and friends) and reads no
+  # environment variable at all, so the port cannot be told about a
+  # private CA without installing it system-wide. The Rust port faced the
+  # same wall - a compiled-in root set - and answered it with
+  # SEKRETO_CA_BUNDLE; the Zig port wants the same, and until it has one
+  # this check skips by name rather than pretending.
   perl)
     if perl -MIO::Socket::SSL -e1 >/dev/null 2>&1; then
       # SSL_CERT_FILE, which is what HTTP::Tiny (via IO::Socket::SSL)
