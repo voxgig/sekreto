@@ -59,6 +59,11 @@ exist" without hiding a typo.
 | [java](java/) | ✅ | ✅ |
 | [csharp](csharp/) | ✅ | ✅ |
 
+Every port is tested three ways: the shared conformance spec, an
+integration run against mock servers, and — on demand and weekly — the
+same CLIs against the **real** stores in Docker
+(`doc/design/real-stores.md`).
+
 Every port has **zero third-party dependencies, with one deliberate
 exception**: the Rust port takes `rustls` (with `webpki-roots` for the
 trust anchors, which rustls deliberately does not ship) for TLS. Everywhere else, where a

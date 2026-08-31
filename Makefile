@@ -4,7 +4,8 @@
 #   make test         - conformance suite for every port
 #   make test-go      - conformance suite for one port
 #   make integration  - every port's CLI against a real token-protected API
-#   make all          - both
+#   make realstores   - the same, against the REAL vaults in docker
+#   make all          - test + integration
 #   make build        - build every port
 #   make inspect      - show toolchain versions
 #   make clean        - clean build artifacts
@@ -14,12 +15,19 @@
 # The conformance suite proves each port computes the same answers from
 # spec/sekreto.json. The integration run proves each port can actually fetch
 # a secret and use it. Neither alone is enough.
+#
+# `realstores` is the third: the same CLIs against HashiCorp Vault,
+# LocalStack, Infisical, a Key Vault emulator and a real boru, in
+# containers. The mocks integration.sh uses are a claim about what those
+# servers do; this checks the claim. It needs docker, takes minutes, and
+# so is not part of `all` - CI runs it on a schedule.
+# See doc/design/real-stores.md.
 
 # Every port directory. Target names are the directory names, used verbatim
 # as `make -C <dir>`.
 LANGS = typescript javascript python ruby php perl go rust java csharp
 
-.PHONY: all test build integration inspect clean check spec spec-check omni-isolation
+.PHONY: all test build integration realstores inspect clean check spec spec-check omni-isolation
 
 all: test integration
 
@@ -63,6 +71,11 @@ build:
 # and a skipped port proves nothing.
 integration: build
 	@./test/integration.sh
+
+# The same CLIs against the real servers, in docker. Needs docker; brings
+# the stack up and tears it down again. Deliberately not part of `all`.
+realstores: build
+	@./test/realstores.sh
 
 inspect:
 	@for lang in $(LANGS); do $(MAKE) -s inspect-$$lang; done

@@ -59,6 +59,32 @@ what proves that, and it is the suite most likely to catch a real bug.
 Run one port with `make test-go`, or one group with the `RUN-SOME:` line
 at the top of each port's test file.
 
+### And a third, when you have docker
+
+```sh
+make realstores   # the same CLIs against the REAL vaults, in containers
+```
+
+`test/integration.sh` runs against mocks, and a mock is a *claim* — "this
+is what the real server does" — written by the same people who wrote the
+client. `test/realstores.sh` checks the claim against HashiCorp Vault,
+LocalStack, self-hosted Infisical, a Key Vault emulator and a real boru.
+
+It is not part of `make all`: it needs docker, pulls images, and takes
+minutes. CI runs it weekly and on demand
+(`.github/workflows/real-stores.yml`), and a failure there means either a
+port has a bug the mocks do not model or a mock has drifted from the
+server it imitates.
+
+It has already found both kinds. Read `doc/design/real-stores.md` before
+changing it — in particular for which services are the vendor's own
+server, which are emulators, and why AWS signing is still guarded by the
+mock rather than by LocalStack.
+
+Both suites share `test/checks.sh`: what a check is, how a port's CLI is
+invoked, and what counts as a leak are defined once, because two suites
+that disagree about what passing means are worse than one.
+
 ## Adding a port
 
 A port is complete when it has all four:
@@ -134,6 +160,13 @@ never do.
   `boru vault add` against the actual binary, found via `$BORU` or `PATH`
   — read through the CLI, and also over `boru vault serve` (its provision
   wire protocol) with a capability token from `vault grant`.
+
+Neither suite will start a server on a port something else already holds.
+`waitport` alone cannot tell a mock that bound from a squatter that was
+already there — the mock dies in milliseconds while the squatter answers
+the probe instantly — so the port is claimed first. A developer's own
+`vault server -dev` on 8200 is exactly the case: without the guard every
+HashiCorp check silently tests the wrong server.
 
 **There is still no boru mock, and there should not be one.** boru's wire
 protocol ships inside the same binary the CLI does, so both boru paths are
