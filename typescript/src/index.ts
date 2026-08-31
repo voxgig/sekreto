@@ -15,7 +15,7 @@ export {
 
 export type { Name, SekretoOptions } from './Sekreto'
 
-// THE CORE SURFACE. Deliberately does NOT re-export the eleven provider
+// THE CORE SURFACE. Deliberately does NOT re-export the twelve provider
 // kinds that need something of their runtime: pulling one through this
 // file would make all of them reachable and put AWS request signing in
 // every build, which is the thing the split removes.

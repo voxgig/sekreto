@@ -4,7 +4,7 @@
 // carried them.
 //
 // It exists for compatibility and for the callers that genuinely want
-// all thirteen: importing it registers the lot, exactly as the old
+// all fourteen: importing it registers the lot, exactly as the old
 // `makeprovider` switch made them all reachable. Nothing that used
 // `from './Providers'` has to change.
 //

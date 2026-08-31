@@ -56,13 +56,13 @@ ten stay one.
 
 4. **Core carries no platform dependency; providers are modules.**
    `env` and `memory` live in the core because they import nothing. The
-   other eleven each live in their own module under `provider/` and
+   other twelve each live in their own module under `provider/` and
    REGISTER THEMSELVES at import, so a kind nobody imports is not in the
    build. `makeprovider` is a registry lookup, not a switch.
 
    The rule that keeps it true: **nothing in the core may import the
    full-set barrel.** `Sekreto.ts` importing `./Providers` for
-   `makeprovider` is exactly what made all thirteen kinds reachable
+   `makeprovider` is exactly what made all fourteen kinds reachable
    before — one edge, and every consumer carried AWS request signing.
    Import `./provider/Registry`.
 
