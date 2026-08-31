@@ -227,6 +227,19 @@ function checkaddr(addr) {
  * unreachable. Ports carry the same bound. */
 const HTTP_TIMEOUT_MS = 10000
 
+/**
+ * How much of a response body will be read before the store is treated as
+ * having answered incoherently. Ports carry the same bound.
+ *
+ * Far above anything real - the largest legitimate payload this library
+ * fetches is Doppler's whole-config download, measured in kilobytes. A bound
+ * is needed because the TIMEOUT is not one: ten seconds on a loopback or
+ * datacentre link is gigabytes, and the body is accumulated in memory before
+ * it is parsed. This runs on an application's startup path, so the failure is
+ * the application never starting.
+ */
+const HTTP_MAXBODY = 8 * 1024 * 1024
+
 async function fetchjson(method, url, headers, body) {
   let res
   try {
@@ -247,9 +260,33 @@ async function fetchjson(method, url, headers, body) {
     throw new SekretoError('sekreto: cannot reach ' + url.split('?')[0] + ': ' + err.message)
   }
 
+  // Read in chunks against HTTP_MAXBODY rather than `res.json()`, which
+  // buffers whatever arrives. Over the bound the store has failed: an
+  // endless body is a store that could not answer, and returning a miss
+  // there would fall through to a weaker store on an attacker's cue.
+  let text = ''
+  try {
+    const decoder = new TextDecoder()
+    let size = 0
+
+    for await (const chunk of res.body ?? []) {
+      size += chunk.length
+      if (HTTP_MAXBODY < size) {
+        throw new SekretoError('sekreto: oversized response from ' + url.split('?')[0])
+      }
+      text += decoder.decode(chunk, { stream: true })
+    }
+    text += decoder.decode()
+  } catch (err) {
+    if (err instanceof SekretoError) {
+      throw err
+    }
+    throw new SekretoError('sekreto: cannot reach ' + url.split('?')[0] + ': ' + err.message)
+  }
+
   let parsed = undefined
   try {
-    parsed = await res.json()
+    parsed = JSON.parse(text)
   } catch (err) {
     // A success status promised JSON; a body that does not parse means
     // the store could not answer coherently, and treating it as a miss

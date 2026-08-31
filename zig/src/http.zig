@@ -45,6 +45,19 @@ pub const Header = std.http.Header;
 /// byte at a time can still outlast it; a server that says nothing cannot.
 pub const CONNECT_TIMEOUT_MS = 10_000;
 
+/// How much of a response body will be read before the store is treated as
+/// having answered incoherently. Ports carry the same bound.
+///
+/// Far above anything real - the largest legitimate payload this library
+/// fetches is Doppler's whole-config download, measured in kilobytes.
+///
+/// This port needs the bound most. It advertises gzip and deflate and
+/// decompresses transparently (see readerDecompressing below), so a hostile
+/// endpoint does not have to SEND gigabytes: a few hundred kilobytes of
+/// zeros expands to gigabytes in this process's heap, and the watchdog only
+/// bounds the time, not the allocation.
+const MAXBODY: u64 = 8 * 1024 * 1024;
+
 /// Bounds one request by shutting its socket down if it outlasts
 /// CONNECT_TIMEOUT_MS.
 ///
@@ -118,6 +131,17 @@ pub fn fetchjson(
     var text: std.Io.Writer.Allocating = .init(alloc);
 
     const status = roundtrip(&client, io, method, uri, headers, body, &text) catch |err| {
+        // An endless body has its own message: "cannot reach" would be
+        // wrong, since the store was reached and answered - just not with
+        // anything this library will hold in memory.
+        if (error.OversizedResponse == err) {
+            return .{ .err = try std.fmt.allocPrint(
+                alloc,
+                "sekreto: oversized response from {s}",
+                .{nakedurl(url)},
+            ) };
+        }
+
         return .{ .err = try std.fmt.allocPrint(
             alloc,
             "sekreto: cannot reach {s}: {s}",
@@ -230,10 +254,23 @@ fn roundtrip(
     // use them; decoding is not optional.
     const reader = response.readerDecompressing(&transfer, &decompress, &window);
 
-    _ = reader.streamRemaining(&text.writer) catch |err| switch (err) {
-        error.ReadFailed => return response.bodyErr().?,
-        else => |rest| return rest,
-    };
+    // Bounded, not streamRemaining: an endless body would otherwise be
+    // accumulated until the watchdog fires, and a decompressing reader turns
+    // a small one into a large one. An endless body is a store that could
+    // not answer, so this is an error, never a miss.
+    var total: u64 = 0;
+    while (true) {
+        const got = reader.stream(&text.writer, .limited(64 * 1024)) catch |err| switch (err) {
+            error.EndOfStream => break,
+            error.ReadFailed => return response.bodyErr().?,
+            else => |rest| return rest,
+        };
+
+        total += got;
+        if (MAXBODY < total) {
+            return error.OversizedResponse;
+        }
+    }
 
     return @intFromEnum(response.head.status);
 }

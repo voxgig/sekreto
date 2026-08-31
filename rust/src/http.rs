@@ -51,12 +51,35 @@ struct Target {
     tls: bool,
 }
 
+/// How much of a response body will be read before the store is treated as
+/// having answered incoherently. Ports carry the same bound.
+///
+/// Far above anything real - the largest legitimate payload this library
+/// fetches is Doppler's whole-config download, measured in kilobytes. A bound
+/// is needed because the read timeout is not one: it is per-read, so a server
+/// that keeps sending resets it forever.
+const MAXBODY: u64 = 8 * 1024 * 1024;
+
+/// A url without its query string, for messages.
+///
+/// A query here carries the vault path, the secret name or a filter -
+/// `secretPath=/prod/payments/stripe` - which does not belong in a log or a
+/// stack trace. `providers.rs` strips it at every message it raises; this
+/// file did not, at nine sites, including the two most likely in production
+/// (an unreachable vault and a TLS failure).
+fn nakedurl(url: &str) -> &str {
+    match url.find('?') {
+        Some(at) => &url[..at],
+        None => url,
+    }
+}
+
 fn split(url: &str) -> Result<Target, String> {
     let (rest, tls, defaultport) = match url.strip_prefix("http://") {
         Some(rest) => (rest, false, 80u16),
         None => match url.strip_prefix("https://") {
             Some(rest) => (rest, true, 443u16),
-            None => return Err(format!("sekreto: not an http url: {}", url)),
+            None => return Err(format!("sekreto: not an http url: {}", nakedurl(url))),
         },
     };
 
@@ -72,7 +95,7 @@ fn split(url: &str) -> Result<Target, String> {
             &authority[..at],
             authority[at + 1..]
                 .parse::<u16>()
-                .map_err(|_| format!("sekreto: bad port: {}", url))?,
+                .map_err(|_| format!("sekreto: bad port: {}", nakedurl(url)))?,
         ),
         _ => (authority, defaultport),
     };
@@ -197,11 +220,11 @@ pub fn request(
     let target = split(url)?;
 
     let mut stream = TcpStream::connect((target.host.as_str(), target.port))
-        .map_err(|err| format!("sekreto: cannot reach {}: {}", url, err))?;
+        .map_err(|err| format!("sekreto: cannot reach {}: {}", nakedurl(url), err))?;
 
     stream
         .set_read_timeout(Some(Duration::from_secs(10)))
-        .map_err(|err| format!("sekreto: cannot reach {}: {}", url, err))?;
+        .map_err(|err| format!("sekreto: cannot reach {}: {}", nakedurl(url), err))?;
 
     if target.tls {
         let config = ClientConfig::builder()
@@ -212,7 +235,7 @@ pub fn request(
             .map_err(|_| format!("sekreto: bad host name: {}", target.host))?;
 
         let connection = ClientConnection::new(Arc::new(config), servername)
-            .map_err(|err| format!("sekreto: tls setup failed for {}: {}", url, err))?;
+            .map_err(|err| format!("sekreto: tls setup failed for {}: {}", nakedurl(url), err))?;
 
         // A handshake failure is a refusal to trust the server, so it must
         // surface as an error rather than as a missing secret.
@@ -268,15 +291,25 @@ fn exchange(
 
     stream
         .write_all(request.as_bytes())
-        .map_err(|err| format!("sekreto: cannot reach {}: {}", url, err))?;
+        .map_err(|err| format!("sekreto: cannot reach {}: {}", nakedurl(url), err))?;
 
+    // Bounded, not read_to_end: an endless body would otherwise be
+    // accumulated in memory until the read timeout, which on a loopback or
+    // datacentre link is gigabytes. One byte over the bound is enough to
+    // know it was exceeded, and an endless body is a store that could not
+    // answer - so this is an error, never a miss.
     let mut raw = Vec::new();
-    stream
+    Read::by_ref(stream)
+        .take(MAXBODY + 1)
         .read_to_end(&mut raw)
-        .map_err(|err| format!("sekreto: cannot read {}: {}", url, err))?;
+        .map_err(|err| format!("sekreto: cannot read {}: {}", nakedurl(url), err))?;
+
+    if MAXBODY < raw.len() as u64 {
+        return Err(format!("sekreto: oversized response from {}", nakedurl(url)));
+    }
 
     let split_at = findbytes(&raw, b"\r\n\r\n")
-        .ok_or_else(|| format!("sekreto: malformed response from {}", url))?;
+        .ok_or_else(|| format!("sekreto: malformed response from {}", nakedurl(url)))?;
 
     // Headers are ASCII; the body is not necessarily, so it stays bytes
     // until every length-counted slice has been taken.
@@ -289,7 +322,7 @@ fn exchange(
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
         .and_then(|code| code.parse::<u16>().ok())
-        .ok_or_else(|| format!("sekreto: no status from {}", url))?;
+        .ok_or_else(|| format!("sekreto: no status from {}", nakedurl(url)))?;
 
     // A server that does not know the body length up front sends it in
     // chunks - which is what a vault answering from a store usually does.
@@ -303,7 +336,7 @@ fn exchange(
         });
 
     let bodybytes = if chunked {
-        dechunk(rawbody).ok_or_else(|| format!("sekreto: malformed chunks from {}", url))?
+        dechunk(rawbody).ok_or_else(|| format!("sekreto: malformed chunks from {}", nakedurl(url)))?
     } else {
         rawbody.to_vec()
     };

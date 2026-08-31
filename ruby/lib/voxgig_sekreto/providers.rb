@@ -138,6 +138,17 @@ module VoxgigSekreto
   # as unreachable. Ports carry the same bound.
   HTTP_TIMEOUT = 10
 
+  # How much of a response body will be read before the store is treated as
+  # having answered incoherently. Ports carry the same bound.
+  #
+  # Far above anything real - the largest legitimate payload this library
+  # fetches is Doppler's whole-config download, measured in kilobytes. A
+  # bound is needed because the TIMEOUT is not one: ten seconds on a
+  # loopback or datacentre link is gigabytes, and the body is accumulated in
+  # memory before it is parsed. This runs on an application's startup path,
+  # so the failure is the application never starting.
+  HTTP_MAXBODY = 8 * 1024 * 1024
+
   # One JSON round-trip, returning [status, parsed-json-or-nil]. A 404 is
   # a normal answer here, not an exception: callers decide on status
   # first. Network failure is always an error - an unreachable store is a
@@ -148,6 +159,10 @@ module VoxgigSekreto
     request = 'POST' == method ? Net::HTTP::Post.new(uri) : Net::HTTP::Get.new(uri)
     headers.each { |key, value| request[key] = value }
     request.body = body unless body.nil?
+
+    # Declared out here: the streaming block below fills it, and a variable
+    # first assigned inside the block would not survive it.
+    text = +''
 
     response = begin
       # The two nils are the proxy address and port: a secrets client dials
@@ -173,14 +188,32 @@ module VoxgigSekreto
                       read_timeout: HTTP_TIMEOUT,
                       write_timeout: HTTP_TIMEOUT,
                       max_retries: 0) do |http|
-        http.request(request)
+        # Streamed against HTTP_MAXBODY rather than taking response.body,
+        # which buffers whatever arrives. An endless body would otherwise be
+        # accumulated in memory until the deadline, which on a loopback or
+        # datacentre link is gigabytes.
+        http.request(request) do |res|
+          res.read_body do |chunk|
+            text << chunk
+            if HTTP_MAXBODY < text.bytesize
+              raise SekretoError,
+                    'sekreto: oversized response from ' + url.split('?')[0]
+            end
+          end
+          res
+        end
       end
+    rescue SekretoError
+      # An endless body is a store that could not answer, so this propagates
+      # rather than becoming a miss - the latter would fall through to a
+      # weaker store on an attacker's cue.
+      raise
     rescue StandardError => e
       raise SekretoError, 'sekreto: cannot reach ' + url.split('?')[0] + ': ' + e.message
     end
 
     parsed = begin
-      JSON.parse(response.body)
+      JSON.parse(text)
     rescue JSON::ParserError, TypeError
       # A success status promised JSON; a body that does not parse means
       # the store could not answer coherently, and treating it as a miss

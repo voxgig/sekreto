@@ -304,6 +304,32 @@ var client = &http.Client{
 	Transport: &http.Transport{Proxy: nil},
 }
 
+// maxbody is how much of a response body will be read before the store is
+// treated as having answered incoherently. Ports carry the same bound.
+//
+// Far above anything real - the largest legitimate payload this library
+// fetches is Doppler's whole-config download, measured in kilobytes. A bound
+// is needed because the TIMEOUT is not one: ten seconds on a loopback or
+// datacentre link is gigabytes, and the body is accumulated in memory before
+// it is parsed. This runs on an application's startup path, so the failure is
+// the application never starting.
+const maxbody = 8 * 1024 * 1024
+
+// safeurl is a url with its query string removed, for messages.
+//
+// A query here carries the vault path, the secret name or a filter -
+// `secretPath=/prod/payments/stripe` - which does not belong in a log or a
+// stack trace. Every message in this file goes through it.
+//
+// It exists because the obvious spelling was silently defeated: the messages
+// used to strip the query themselves and then append err.Error(), and a
+// *url.Error prints as `Get "<full url>": <reason>` - putting the query
+// straight back. Stripping in one place, and using it on the wrapped error
+// too, is what makes the intent hold.
+func safeurl(target string) string {
+	return strings.SplitN(target, "?", 2)[0]
+}
+
 // httpjson makes one JSON round-trip, returning the status and decoded
 // body. Network failure is always an error - an unreachable store is a
 // store that could not answer.
@@ -315,7 +341,7 @@ func httpjson(method string, target string, headers map[string]string, payload s
 
 	request, err := http.NewRequest(method, target, reader)
 	if nil != err {
-		return 0, nil, fail("sekreto: bad url: " + target)
+		return 0, nil, fail("sekreto: bad url: " + safeurl(target))
 	}
 
 	for key, value := range headers {
@@ -324,14 +350,24 @@ func httpjson(method string, target string, headers map[string]string, payload s
 
 	response, err := client.Do(request)
 	if nil != err {
-		return 0, nil, fail("sekreto: cannot reach " +
-			strings.SplitN(target, "?", 2)[0] + ": " + err.Error())
+		// The error is scrubbed too, not just the prefix: *url.Error prints
+		// as `Get "<full url>": <reason>`, so appending it verbatim undid
+		// the stripping on the line above.
+		return 0, nil, fail("sekreto: cannot reach " + safeurl(target) + ": " +
+			strings.ReplaceAll(err.Error(), target, safeurl(target)))
 	}
 	defer response.Body.Close()
 
-	text, err := io.ReadAll(response.Body)
+	// LimitReader, not ReadAll: an endless body would otherwise be
+	// accumulated in memory until the deadline, which on a loopback or
+	// datacentre link is gigabytes. One byte over the bound is enough to
+	// know it was exceeded.
+	text, err := io.ReadAll(io.LimitReader(response.Body, maxbody+1))
 	if nil != err {
-		return response.StatusCode, nil, fail("sekreto: cannot read " + target)
+		return response.StatusCode, nil, fail("sekreto: cannot read " + safeurl(target))
+	}
+	if maxbody < int64(len(text)) {
+		return response.StatusCode, nil, fail("sekreto: oversized response from " + safeurl(target))
 	}
 
 	var body any
@@ -342,7 +378,7 @@ func httpjson(method string, target string, headers map[string]string, payload s
 		// any body - they are decided on status alone.
 		if http.StatusOK == response.StatusCode {
 			return response.StatusCode, nil, fail("sekreto: malformed response from " +
-				strings.SplitN(target, "?", 2)[0])
+				safeurl(target))
 		}
 		body = nil
 	}
@@ -1471,7 +1507,7 @@ func (provider *AzureSecretsProvider) Lookup(name string) (string, bool, error) 
 
 	if http.StatusOK != status {
 		return "", false, fail("sekreto: azure error: " + strconv.Itoa(status) + ": " +
-			strings.SplitN(target, "?", 2)[0])
+			safeurl(target))
 	}
 
 	value := dig(body, "value")

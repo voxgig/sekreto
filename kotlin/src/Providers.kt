@@ -153,6 +153,19 @@ object Providers {
     private val TIMEOUT: Duration = Duration.ofSeconds(10)
 
     /**
+     * How much of a response body will be read before the store is treated
+     * as having answered incoherently. Ports carry the same bound.
+     *
+     * Far above anything real - the largest legitimate payload this library
+     * fetches is Doppler's whole-config download, measured in kilobytes. A
+     * bound is needed because the TIMEOUT is not one: ten seconds on a
+     * loopback or datacentre link is gigabytes, and the body is accumulated
+     * in memory before it is parsed. This runs on an application's startup
+     * path, so the failure is the application never starting.
+     */
+    private const val MAXBODY = 8 * 1024 * 1024
+
+    /**
      * Does this read failure mean "no secrets here", rather than "I could not
      * answer"?
      *
@@ -382,8 +395,11 @@ object Providers {
             builder.header(key, value)
         }
 
-        val response: HttpResponse<String> = try {
-            CLIENT.send(builder.build(), HttpResponse.BodyHandlers.ofString())
+        // ofInputStream, not ofString: ofString buffers whatever arrives, so
+        // an endless body would be accumulated in memory until the deadline -
+        // which on a loopback or datacentre link is gigabytes.
+        val response: HttpResponse<java.io.InputStream> = try {
+            CLIENT.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream())
         } catch (err: IOException) {
             // A refused connection arrives with a null message, so the class
             // name stands in - "cannot reach ...: null" says nothing at all.
@@ -399,7 +415,25 @@ object Providers {
         // the store could not answer coherently, and treating it as a miss
         // would fall through to a weaker store. Error statuses may carry any
         // body - they are decided on status alone.
-        val parsed = Json.parse(response.body())
+        // One byte over the bound is enough to know it was exceeded. An
+        // endless body is a store that could not answer, so this raises
+        // rather than returning a miss - the latter would fall through to a
+        // weaker store on an attacker's cue.
+        val text = try {
+            response.body().use { stream ->
+                val raw = stream.readNBytes(MAXBODY + 1)
+                if (MAXBODY < raw.size) {
+                    throw SekretoError("sekreto: oversized response from ${bare(url)}")
+                }
+                String(raw, StandardCharsets.UTF_8)
+            }
+        } catch (err: IOException) {
+            throw SekretoError(
+                "sekreto: cannot reach ${bare(url)}: ${err.message ?: err.toString()}",
+            )
+        }
+
+        val parsed = Json.parse(text)
         if (200 == response.statusCode() && null == parsed) {
             throw SekretoError("sekreto: malformed response from ${bare(url)}")
         }

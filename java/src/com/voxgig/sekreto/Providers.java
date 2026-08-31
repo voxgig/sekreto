@@ -64,6 +64,19 @@ public final class Providers {
     return null != dir && !Files.isDirectory(dir);
   }
 
+  /**
+   * How much of a response body will be read before the store is treated as
+   * having answered incoherently. Ports carry the same bound.
+   *
+   * <p>Far above anything real - the largest legitimate payload this library
+   * fetches is Doppler's whole-config download, measured in kilobytes. A
+   * bound is needed because the TIMEOUT is not one: ten seconds on a loopback
+   * or datacentre link is gigabytes, and the body is accumulated in memory
+   * before it is parsed. This runs on an application's startup path, so the
+   * failure is the application never starting.
+   */
+  private static final int MAXBODY = 8 * 1024 * 1024;
+
   /** What a finished child process left behind. */
   static final class Ran {
     final String out;
@@ -445,9 +458,12 @@ public final class Providers {
       }
     }
 
-    HttpResponse<String> response;
+    // ofInputStream, not ofString: ofString buffers whatever arrives, so an
+    // endless body would be accumulated in memory until the deadline - which
+    // on a loopback or datacentre link is gigabytes.
+    HttpResponse<java.io.InputStream> response;
     try {
-      response = CLIENT.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+      response = CLIENT.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
     } catch (IOException err) {
       throw new SekretoError(
           "sekreto: cannot reach " + url.split("\\?")[0] + ": " + err.getMessage());
@@ -456,16 +472,30 @@ public final class Providers {
       throw new SekretoError("sekreto: cannot reach " + url.split("\\?")[0] + ": interrupted");
     }
 
+    String text;
+    try (java.io.InputStream stream = response.body()) {
+      // One byte over the bound is enough to know it was exceeded. An
+      // endless body is a store that could not answer, so this raises
+      // rather than returning a miss - the latter would fall through to a
+      // weaker store on an attacker's cue.
+      byte[] raw = stream.readNBytes(MAXBODY + 1);
+      if (MAXBODY < raw.length) {
+        throw new SekretoError("sekreto: oversized response from " + url.split("\\?")[0]);
+      }
+      text = new String(raw, StandardCharsets.UTF_8);
+    } catch (IOException err) {
+      throw new SekretoError(
+          "sekreto: cannot reach " + url.split("\\?")[0] + ": " + err.getMessage());
+    }
+
     // A success status promised JSON; a body that does not parse means
     // the store could not answer coherently, and treating it as a miss
     // would fall through to a weaker store. Error statuses may carry
     // any body - they are decided on status alone. (Json.parse answers
     // null for anything unreadable, and only a literal `null` body is a
     // genuine JSON null.)
-    Object parsed = Json.parse(response.body());
-    if (200 == response.statusCode()
-        && null == parsed
-        && !"null".equals(response.body().trim())) {
+    Object parsed = Json.parse(text);
+    if (200 == response.statusCode() && null == parsed && !"null".equals(text.trim())) {
       throw new SekretoError("sekreto: malformed response from " + url.split("\\?")[0]);
     }
 

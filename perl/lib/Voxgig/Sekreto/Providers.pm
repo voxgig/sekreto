@@ -222,14 +222,32 @@ sub fetchjson {
     # nothing leaves the machine; an environment variable it cannot see must
     # not be able to make that false. All three keys are needed: an explicit
     # undef is what suppresses the lookup.
+    # max_size is the response-body bound every port carries. HTTP::Tiny
+    # accepts it and this port was not passing it, so an endless body was
+    # accumulated in memory until the deadline - which on a loopback or
+    # datacentre link is gigabytes. Far above anything real: the largest
+    # legitimate payload here is Doppler's whole-config download, measured
+    # in kilobytes.
     my $response = HTTP::Tiny->new(
         timeout      => 10,
         verify_SSL   => 1,
         max_redirect => 0,
+        max_size     => 8 * 1024 * 1024,
         proxy        => undef,
         http_proxy   => undef,
         https_proxy  => undef,
     )->request( $method, $url, $options );
+
+    # HTTP::Tiny reports an over-size body as a 599 with this text. An
+    # endless body is a store that could not answer, so it must raise
+    # rather than become a miss - the latter would fall through to a
+    # weaker store on an attacker's cue.
+    if ( 599 == $response->{status}
+        && -1 != index( $response->{content} || '', 'Size of response body exceeds' ) )
+    {
+        ( my $plain = $url ) =~ s/\?.*//s;
+        fail( 'sekreto: oversized response from ' . $plain );
+    }
 
     # HTTP::Tiny reports transport failures as a synthetic 599.
     if ( 599 == $response->{status} ) {

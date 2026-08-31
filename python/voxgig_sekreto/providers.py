@@ -151,6 +151,17 @@ class FileProvider(Provider):
 
 _HTTP_TIMEOUT = 10  # seconds; the same bound every port carries
 
+# How much of a response body will be read before the store is treated as
+# having answered incoherently. Ports carry the same bound.
+#
+# Far above anything real - the largest legitimate payload this library
+# fetches is Doppler's whole-config download, measured in kilobytes. A bound
+# is needed because the TIMEOUT is not one: ten seconds on a loopback or
+# datacentre link is gigabytes, and the body is accumulated in memory before
+# it is parsed. This runs on an application's startup path, so the failure is
+# the application never starting.
+_HTTP_MAXBODY = 8 * 1024 * 1024
+
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """A redirect handler that refuses to follow: a vault API never
@@ -189,14 +200,23 @@ def _fetchjson(method, url, headers, body=None):
         # as an HTTPError below and is treated as a store error.
         with _opener.open(request, timeout=_HTTP_TIMEOUT) as response:
             status = response.status
-            text = response.read().decode('utf8')
+            raw = response.read(_HTTP_MAXBODY + 1)
     except urllib.error.HTTPError as err:
         status = err.code
-        text = err.read().decode('utf8')
+        raw = err.read(_HTTP_MAXBODY + 1)
     except urllib.error.URLError as err:
         raise SekretoError(
             'sekreto: cannot reach ' + url.split('?')[0] + ': ' + str(err.reason)
         )
+
+    # One byte over the bound is enough to know it was exceeded. An endless
+    # body is a store that could not answer, so this raises rather than
+    # returning a miss - the latter would fall through to a weaker store on
+    # an attacker's cue.
+    if _HTTP_MAXBODY < len(raw):
+        raise SekretoError('sekreto: oversized response from ' + url.split('?')[0])
+
+    text = raw.decode('utf8', 'replace')
 
     try:
         return status, json.loads(text)

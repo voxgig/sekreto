@@ -239,10 +239,20 @@ function fetchjson(string $method, string $url, array $headers, ?string $body = 
 
     $context = stream_context_create(['http' => $options]);
 
-    $text = @file_get_contents($url, false, $context);
+    // maxlen + 1: an endless body would otherwise be accumulated in memory
+    // until the deadline, which on a loopback or datacentre link is
+    // gigabytes. One byte over the bound is enough to know it was exceeded.
+    $text = @file_get_contents($url, false, $context, 0, HTTP_MAXBODY + 1);
 
     if (false === $text) {
         throw new SekretoError('sekreto: cannot reach ' . explode('?', $url)[0]);
+    }
+
+    // An endless body is a store that could not answer, so this raises
+    // rather than returning a miss - the latter would fall through to a
+    // weaker store on an attacker's cue.
+    if (HTTP_MAXBODY < strlen($text)) {
+        throw new SekretoError('sekreto: oversized response from ' . explode('?', $url)[0]);
     }
 
     $status = 0;
@@ -278,6 +288,19 @@ function httpget(string $url, array $headers): array
 {
     return fetchjson('GET', $url, $headers);
 }
+
+/**
+ * How much of a response body will be read before the store is treated as
+ * having answered incoherently. Ports carry the same bound.
+ *
+ * Far above anything real - the largest legitimate payload this library
+ * fetches is Doppler's whole-config download, measured in kilobytes. A bound
+ * is needed because the TIMEOUT is not one: ten seconds on a loopback or
+ * datacentre link is gigabytes, and the body is accumulated in memory before
+ * it is parsed. This runs on an application's startup path, so the failure is
+ * the application never starting.
+ */
+const HTTP_MAXBODY = 8 * 1024 * 1024;
 
 /**
  * Run a child to completion and collect both its streams.

@@ -445,6 +445,20 @@ namespace Voxgig.Sekreto
 
     internal static class Http
     {
+        /// <summary>
+        /// How much of a response body will be read before the store is treated
+        /// as having answered incoherently. Ports carry the same bound.
+        ///
+        /// <para>Far above anything real - the largest legitimate payload this
+        /// library fetches is Doppler's whole-config download, measured in
+        /// kilobytes. A bound is needed because the TIMEOUT is not one: ten
+        /// seconds on a loopback or datacentre link is gigabytes, and the body is
+        /// accumulated in memory before it is parsed. This runs on an
+        /// application's startup path, so the failure is the application never
+        /// starting.</para>
+        /// </summary>
+        internal const long MaxBody = 8 * 1024 * 1024;
+
         // AllowAutoRedirect = false: a vault API never legitimately
         // redirects, and a followed redirect carries X-Vault-Token to the
         // target host, which checkaddr - it validates only the configured
@@ -501,9 +515,34 @@ namespace Voxgig.Sekreto
             string text;
             try
             {
-                using HttpResponseMessage response = Client.Send(request);
+                using HttpResponseMessage response = Client.Send(
+                    request, HttpCompletionOption.ResponseHeadersRead);
                 status = (int)response.StatusCode;
-                text = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+                // Read against MaxBody rather than ReadAsStringAsync, which
+                // buffers whatever arrives: an endless body would otherwise be
+                // accumulated in memory until the deadline, which on a
+                // loopback or datacentre link is gigabytes.
+                using Stream stream = response.Content.ReadAsStream();
+                var buffer = new byte[64 * 1024];
+                using var collected = new MemoryStream();
+                int got;
+                while (0 < (got = stream.Read(buffer, 0, buffer.Length)))
+                {
+                    if (MaxBody < collected.Length + got)
+                    {
+                        // An endless body is a store that could not answer, so
+                        // this raises rather than returning a miss.
+                        throw new SekretoError(
+                            "sekreto: oversized response from " + url.Split('?')[0]);
+                    }
+                    collected.Write(buffer, 0, got);
+                }
+                text = Encoding.UTF8.GetString(collected.ToArray());
+            }
+            catch (SekretoError)
+            {
+                throw;
             }
             catch (Exception err)
             {
