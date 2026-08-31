@@ -50,7 +50,11 @@ API_URL=http://127.0.0.1:$API_PORT/whoami
 TOKEN=${SEKRETO_TOKEN:-s3cr3t-realstores-token}
 
 VAULT_ADDR=${REAL_VAULT_ADDR:-http://127.0.0.1:${SEKRETO_VAULT_PORT:-8300}}
-VAULT_ROOT=${REAL_VAULT_TOKEN:-sekreto-root-token}
+# Both names, because compose.yaml reads SEKRETO_VAULT_TOKEN: honouring
+# only one of them starts Vault with one root token and authenticates
+# with another, and the seed then fails in a way that reads as a store
+# problem rather than a configuration one.
+VAULT_ROOT=${REAL_VAULT_TOKEN:-${SEKRETO_VAULT_TOKEN:-sekreto-root-token}}
 AWS_ENDPOINT=${REAL_AWS_ENDPOINT:-http://127.0.0.1:${SEKRETO_AWS_PORT:-8302}}
 AZURE_ADDR=${REAL_AZURE_ADDR:-https://127.0.0.1:8304}
 INFISICAL_ADDR=${REAL_INFISICAL_ADDR:-http://127.0.0.1:${SEKRETO_INFISICAL_PORT:-8307}}
@@ -81,6 +85,21 @@ if [ "${SEKRETO_COMPOSE:-1}" = 1 ]; then
 
   echo '== bringing up the real stores =='
 
+  # Claimed BEFORE compose binds them. test/integration.sh refuses to
+  # start a mock on a busy port for a reason - a squatter answers the
+  # readiness probe and the suite tests the wrong server - and the same
+  # reasoning applies here with a sharper edge: the bootstrap WRITES.
+  # Seeding someone else's Vault creates mounts, a policy and an AppRole
+  # in it, and `docker compose down -v` undoes none of that.
+  for claim in \
+    "${SEKRETO_VAULT_PORT:-8300} hashicorp" \
+    "${SEKRETO_AWS_PORT:-8302} aws" \
+    "8304 azure" \
+    "${SEKRETO_INFISICAL_PORT:-8307} infisical"; do
+    # shellcheck disable=SC2086
+    portfree $claim || exit 1
+  done
+
   # In two steps, and the split is deliberate.
   #
   # --wait blocks on every healthcheck, so when this returns each server
@@ -92,11 +111,18 @@ if [ "${SEKRETO_COMPOSE:-1}" = 1 ]; then
   # together, a boru whose build fails takes the whole stack with it and
   # the run proves nothing. Brought up separately, it becomes one skipped
   # check on a run that still tests everything else.
-  if ! docker compose -f "$COMPOSE_FILE" up -d --wait vault aws azure infisical 2>&1 | tail -5; then
+  # Not piped into `tail`: without `set -o pipefail` a pipeline reports
+  # the LAST command's status, so `if ! compose ... | tail` tests tail,
+  # which never fails. The branch below was unreachable, and a compose
+  # failure - a port already allocated, most of all - fell through to the
+  # probes, which then adopted whatever was squatting the port.
+  if ! docker compose -f "$COMPOSE_FILE" up -d --wait vault aws azure infisical >"$WORK/up.log" 2>&1; then
     echo "realstores: the stack did not come up" >&2
-    docker compose -f "$COMPOSE_FILE" ps
+    tail -20 "$WORK/up.log" >&2
+    docker compose -f "$COMPOSE_FILE" ps >&2
     exit 1
   fi
+  tail -5 "$WORK/up.log"
 
   docker compose -f "$COMPOSE_FILE" up -d --wait boru >/dev/null 2>&1 ||
     echo "   (the boru service did not build or start)" >&2
@@ -132,7 +158,14 @@ if ! curl -s -o /dev/null --max-time 2 "$BORU_ADDR/" 2>/dev/null && [ -n "$BORU"
       BORU_HOME="$BORU_HOME_DIR" BORU_VAULT_PASSPHRASE=realstores-passphrase \
         "$BORU" vault serve --listen=127.0.0.1:"$boruport" >"$WORK/boruserve.log" 2>&1 &
       BORUPID=$!
-      waitport "$boruport" boru 2>/dev/null || BORUPID=""
+      if ! waitport "$boruport" boru 2>/dev/null; then
+        # Killed, not merely forgotten: a serve that is slow rather than
+        # dead keeps the port bound after this run, its vault directory
+        # is deleted from under it by the cleanup, and the NEXT run's
+        # probe finds it and calls it a working store.
+        kill "$BORUPID" 2>/dev/null
+        BORUPID=""
+      fi
     fi
   fi
 fi
@@ -144,16 +177,21 @@ fi
 # checks do not run, and the tally says so.
 HAVE_VAULT=0 HAVE_AWS=0 HAVE_AZURE=0 HAVE_INFISICAL=0 HAVE_BORU=0
 
+# A store is present when it ANSWERS LIKE ITSELF, not merely when
+# something accepts a connection on its port. "Anything replied" would
+# let a holding page, a 404 from an unrelated service, or a half-started
+# server count as the store - and the bootstrap would then write into it.
 probe() {
-  local url=$1
-  curl -sk -o /dev/null --max-time 5 "$url" 2>/dev/null
+  local url=$1 want=$2
+  curl -sk --max-time 5 "$url" 2>/dev/null | grep -q "$want"
 }
 
-probe "$VAULT_ADDR/v1/sys/health" && HAVE_VAULT=1
-probe "$AWS_ENDPOINT/_localstack/health" && HAVE_AWS=1
-probe "$AZURE_ADDR/ping" && HAVE_AZURE=1
-probe "$INFISICAL_ADDR/api/status" && HAVE_INFISICAL=1
-probe "$BORU_ADDR/" && HAVE_BORU=1
+probe "$VAULT_ADDR/v1/sys/health" '"sealed"' && HAVE_VAULT=1
+probe "$AWS_ENDPOINT/_localstack/health" '"services"' && HAVE_AWS=1
+probe "$AZURE_ADDR/ping" 'pong' && HAVE_AZURE=1
+probe "$INFISICAL_ADDR/api/status" '"message"' && HAVE_INFISICAL=1
+# boru refuses an unauthenticated read, and the refusal is boru's own.
+probe "$BORU_ADDR/v1/secret/data/api.token" '.' && HAVE_BORU=1
 
 say() { printf '   %-12s %s\n' "$1" "$2"; }
 say hashicorp "$([ $HAVE_VAULT = 1 ] && echo "$VAULT_ADDR" || echo 'not running')"
@@ -162,18 +200,6 @@ say azure "$([ $HAVE_AZURE = 1 ] && echo "$AZURE_ADDR (lowkey-vault)" || echo 'n
 say infisical "$([ $HAVE_INFISICAL = 1 ] && echo "$INFISICAL_ADDR" || echo 'not running')"
 say boru "$([ $HAVE_BORU = 1 ] && echo "$BORU_ADDR (vault serve${BORUPID:+, host binary})" || echo 'not running')"
 echo
-
-if [ -n "${REQUIRE_STORES:-}" ]; then
-  missing=""
-  [ $HAVE_VAULT = 1 ] || missing="$missing hashicorp"
-  [ $HAVE_AWS = 1 ] || missing="$missing aws"
-  [ $HAVE_AZURE = 1 ] || missing="$missing azure"
-  [ $HAVE_INFISICAL = 1 ] || missing="$missing infisical"
-  if [ -n "$missing" ]; then
-    echo "realstores: REQUIRE_STORES is set and these did not come up:$missing" >&2
-    exit 1
-  fi
-fi
 
 # ------------------------------------------------------------- the seeding
 
@@ -219,6 +245,29 @@ if [ $HAVE_INFISICAL = 1 ]; then
   fi
 fi
 
+# Checked HERE, after the seeding, and not before it.
+#
+# Coming up and being usable are different things: a store can answer its
+# health endpoint and still fail to seed - an Infisical that already has
+# an admin, a Vault whose root token does not match, a certificate curl
+# will not verify. Each of those turns HAVE_* back off above, and a gate
+# that ran earlier would have already waved the run through. Every check
+# for that store then becomes a skip, and since skips do not fail a run,
+# CI reports PASS having tested that store not at all - which is the
+# exact failure this suite exists to prevent elsewhere.
+if [ -n "${REQUIRE_STORES:-}" ]; then
+  missing=""
+  [ $HAVE_VAULT = 1 ] || missing="$missing hashicorp"
+  [ $HAVE_AWS = 1 ] || missing="$missing aws"
+  [ $HAVE_AZURE = 1 ] || missing="$missing azure"
+  [ $HAVE_INFISICAL = 1 ] || missing="$missing infisical"
+  if [ -n "$missing" ]; then
+    echo "realstores: REQUIRE_STORES is set and these are not usable:$missing" >&2
+    echo "realstores: they either did not start or could not be seeded." >&2
+    exit 1
+  fi
+fi
+
 if [ $HAVE_BORU = 1 ]; then
   if [ -n "$BORUPID" ]; then
     BORU_WIRE_TOKEN=$HOST_BORU_TOKEN
@@ -259,13 +308,23 @@ tlsenv() {
   typescript | javascript) TRUST=("NODE_EXTRA_CA_CERTS=$ca") ;;
   python | ruby | php | go | csharp) TRUST=("SSL_CERT_FILE=$ca") ;;
   rust) TRUST=("SEKRETO_CA_BUNDLE=$ca") ;;
-  java) TRUST=("JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=$WORK/azure-ca.jks -Djavax.net.ssl.trustStorePassword=changeit") ;;
+  # Only if the keystore was actually built. keytool may be absent, or
+  # may have refused the certificate; handing the JVM a trustStore path
+  # that is not there fails the handshake and records a JAVA failure for
+  # something the port did not do.
+  java)
+    if [ -s "$WORK/azure-ca.jks" ]; then
+      TRUST=("JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=$WORK/azure-ca.jks -Djavax.net.ssl.trustStorePassword=changeit")
+    fi
+    ;;
   # The Perl port needs IO::Socket::SSL for https, and it is not a core
   # module. Where it is missing, the check is skipped rather than failed:
   # that is the environment's gap, not the port's.
   perl)
     if perl -MIO::Socket::SSL -e1 >/dev/null 2>&1; then
-      TRUST=("PERL_LWP_SSL_CA_FILE=$ca" "SSL_CERT_FILE=$ca")
+      # SSL_CERT_FILE, which is what HTTP::Tiny (via IO::Socket::SSL)
+      # reads. The port uses HTTP::Tiny, not LWP.
+      TRUST=("SSL_CERT_FILE=$ca")
     fi
     ;;
   esac
@@ -313,7 +372,9 @@ for lang in $LANGS; do
       VAULT_ROLE_ID="$REAL_VAULT_ROLE_ID" VAULT_SECRET_ID="$REAL_VAULT_SECRET_ID"
 
     # A wrong token must be refused, and must not print the secret.
-    LABEL="$lang/vault-badtoken" STORE= check "$lang" hashicorp deny \
+    # The opposite assertion to vault-miss: a bad token is a store that
+    # COULD NOT ANSWER, so it must raise rather than read as a miss.
+    LABEL="$lang/vault-badtoken" WHY='hashicorp' STORE= check "$lang" hashicorp deny \
       VAULT_ADDR="$VAULT_ADDR" VAULT_TOKEN=not-the-root-token
 
     # A secret the vault does not hold is a MISS, not a failure: the read
@@ -321,7 +382,13 @@ for lang in $LANGS; do
     # rather than raising, and the CLI must then fail for want of a
     # secret. Getting this backwards is the worst bug the library can
     # have - a chain that silently falls through to a weaker store.
-    LABEL="$lang/vault-miss" STORE= check "$lang" hashicorp deny \
+    #
+    # WHY matters more than the exit status here. A provider that raises
+    # on a 404 and one that correctly reports a miss BOTH exit non-zero,
+    # so without it this check passes either way and tests nothing. The
+    # CLI only says "unknown secret" when it walked the chain and no
+    # provider had it; a store that raised says something else.
+    LABEL="$lang/vault-miss" WHY='unknown secret' STORE= check "$lang" hashicorp deny \
       VAULT_ADDR="$VAULT_ADDR" VAULT_TOKEN="$VAULT_ROOT" VAULT_MOUNT=empty
   else
     noted_skip "$lang/vault" "no hashicorp vault"
@@ -344,7 +411,7 @@ for lang in $LANGS; do
     # A parameter that is not there must read as a miss - which means the
     # port recognised ParameterNotFound in the error body rather than
     # treating the 400 that carries it as a broken store.
-    LABEL="$lang/aws-miss" STORE= check "$lang" awsparams deny \
+    LABEL="$lang/aws-miss" WHY='unknown secret' STORE= check "$lang" awsparams deny \
       AWS_ENDPOINT="$AWS_ENDPOINT" AWS_REGION=us-east-1 \
       AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
       AWS_PARAM_PREFIX=/nosuch
@@ -394,6 +461,20 @@ for lang in $LANGS; do
       SEKRETO_DOTENV="$WORK/nonexistent/.env" \
       VAULT_ADDR="$VAULT_ADDR" VAULT_TOKEN="$VAULT_ROOT" \
       BORU_COMMAND=/nonexistent/boru
+
+    # A miss must let the chain CARRY ON, and only a chain can show it.
+    # The vault is pointed at an empty mount and boru holds the secret,
+    # so this passes only if the 404 was a miss: a provider that raises
+    # breaks the chain before boru is ever asked.
+    if [ $HAVE_BORU = 1 ]; then
+      LABEL="$lang/chain-past-miss" STORE= check "$lang" chain ok \
+        SEKRETO_DOTENV="$WORK/nonexistent/.env" \
+        VAULT_ADDR="$VAULT_ADDR" VAULT_TOKEN="$VAULT_ROOT" VAULT_MOUNT=empty \
+        BORU_COMMAND="$BORU" BORU_HOME="$WORK/boruhome" \
+        BORU_VAULT_PASSPHRASE=realstores-passphrase
+    else
+      noted_skip "$lang/chain-past-miss" "needs boru as the store after the vault"
+    fi
 
     # Directed: everything holds it, but one store is named.
     LABEL="$lang/chain->vault" STORE=hashicorp check "$lang" chain ok \

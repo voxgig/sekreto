@@ -58,12 +58,15 @@ fi
 #
 # --cacert, not -k: seeding is also the first check that the certificate
 # just written is actually usable to verify this server.
-code=$(curl -sS --cacert "$CA_OUT" --resolve "localhost:${HOSTPORT##*:}:127.0.0.1" \
+code=$(curl -sS --cacert "$CA_OUT" \
   -o /dev/null -w '%{http_code}' \
   -X PUT "$ADDR/secrets/api-token?api-version=$APIVERSION" \
   -H 'authorization: Bearer bootstrap' \
   -H 'content-type: application/json' \
-  -d "{\"value\":\"$SECRET\"}")
+  --data @- <<EOF
+{"value":"$SECRET"}
+EOF
+)
 
 case $code in
 200 | 201) ;;

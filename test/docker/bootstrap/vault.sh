@@ -34,16 +34,35 @@ ADDR=${ADDR%/}
 # Vault answers 204 to a write and 200 to a read; a mount that already
 # exists answers 400 with "path is already in use", which is a fine
 # outcome for a script that may run twice against a long-lived dev vault.
+#
+# THE STATUS IS CHECKED, and it has to be: curl exits 0 on a 403 as
+# happily as on a 200, so `set -e` catches nothing here. A seed that
+# silently did not happen leaves a store that looks ready and answers
+# every read with a miss, and every port then fails for a reason that
+# has nothing to do with the port.
 api() {
   local method=$1 path=$2 body=${3:-}
+  local out code
   if [ -n "$body" ]; then
-    curl -sS -X "$method" -H "X-Vault-Token: $TOKEN" \
-      -H 'content-type: application/json' -d "$body" "$ADDR$path"
+    out=$(curl -sS -X "$method" -H "X-Vault-Token: $TOKEN" \
+      -H 'content-type: application/json' -d "$body" \
+      -w '\n%{http_code}' "$ADDR$path")
   else
-    curl -sS -X "$method" -H "X-Vault-Token: $TOKEN" "$ADDR$path"
+    out=$(curl -sS -X "$method" -H "X-Vault-Token: $TOKEN" \
+      -w '\n%{http_code}' "$ADDR$path")
   fi
+  code=${out##*$'\n'}
+  case $code in
+  2*) printf '%s' "${out%$'\n'*}" ;;
+  *)
+    echo "vault: $method $path answered $code" >&2
+    return 1
+    ;;
+  esac
 }
 
+# For calls whose failure is expected and harmless - a mount that is
+# already there on a second run.
 quiet() { api "$@" >/dev/null 2>&1 || true; }
 
 echo "vault: seeding $ADDR" >&2
@@ -88,5 +107,6 @@ fi
 
 echo "vault: seeded secret/api, kv1/api, and an approle scoped to sekreto-read" >&2
 
-echo "REAL_VAULT_ROLE_ID=$ROLEID"
-echo "REAL_VAULT_SECRET_ID=$SECRETID"
+# Quoted, because the caller evals these.
+printf 'REAL_VAULT_ROLE_ID=%q\n' "$ROLEID"
+printf 'REAL_VAULT_SECRET_ID=%q\n' "$SECRETID"

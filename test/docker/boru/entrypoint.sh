@@ -52,4 +52,13 @@ while [ "$tries" -lt 60 ]; do
   sleep 1
 done
 
+if [ ! -f /work/ready ]; then
+  # Exit rather than wait. A container that serves nothing but never
+  # stops is reported as "unhealthy" for the whole run and gives no
+  # reason; exiting puts the reason in `docker compose logs`.
+  echo "boru: vault serve did not answer on 8308" >&2
+  kill "$SERVE" 2>/dev/null
+  exit 1
+fi
+
 wait "$SERVE"

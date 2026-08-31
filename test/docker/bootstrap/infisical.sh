@@ -60,27 +60,48 @@ field() {
   ' "$1"
 }
 
+# The body goes in on STDIN, not the command line: this script is also
+# how someone points the suite at a real Infisical, and there the secret
+# is real. /proc/*/cmdline is world-readable.
+#
+# The status is checked, because curl exits 0 on a 4xx as happily as on a
+# 200 - so `set -e` catches nothing, and a membership or a secret that
+# silently did not get written leaves an instance that logs in fine and
+# then reads nothing.
 post() {
   local path=$1 body=$2 auth=${3:-}
+  local out code
   if [ -n "$auth" ]; then
-    curl -sS -X POST "$ADDR$path" -H "authorization: Bearer $auth" \
-      -H 'content-type: application/json' -d "$body"
+    out=$(printf '%s' "$body" | curl -sS -X POST "$ADDR$path" \
+      -H "authorization: Bearer $auth" -H 'content-type: application/json' \
+      --data @- -w '\n%{http_code}')
   else
-    curl -sS -X POST "$ADDR$path" -H 'content-type: application/json' -d "$body"
+    out=$(printf '%s' "$body" | curl -sS -X POST "$ADDR$path" \
+      -H 'content-type: application/json' --data @- -w '\n%{http_code}')
   fi
+  code=${out##*$'\n'}
+  case $code in
+  2*) printf '%s' "${out%$'\n'*}" ;;
+  *)
+    echo "infisical: POST $path answered $code" >&2
+    return 1
+    ;;
+  esac
 }
 
 echo "infisical: bootstrapping $ADDR" >&2
 
 signup=$(post /api/v1/admin/signup \
-  "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"firstName\":\"Sek\",\"lastName\":\"Reto\"}")
+  "{\"email\":\"$EMAIL\",\"password\":\"$PASSWORD\",\"firstName\":\"Sek\",\"lastName\":\"Reto\"}" || true)
 
 jwt=$(printf '%s' "$signup" | field token)
 org=$(printf '%s' "$signup" | field organization.id)
 
 if [ -z "$jwt" ] || [ -z "$org" ]; then
+  # The message only. The body of a signup response carries the admin
+  # JWT, and this goes straight into a CI log.
   echo "infisical: admin signup failed - is this instance already set up?" >&2
-  echo "infisical: $(printf '%s' "$signup" | head -c 300)" >&2
+  echo "infisical: $(printf '%s' "$signup" | field message | head -c 200)" >&2
   exit 1
 fi
 
@@ -107,16 +128,19 @@ clientsecret=$(post "/api/v1/auth/universal-auth/identities/$identity/client-sec
 [ -n "$clientsecret" ] || { echo "infisical: could not mint a client secret" >&2; exit 1; }
 
 # Without this the identity logs in and then reads nothing.
-post "/api/v2/workspace/$project/identity-memberships/$identity" '{"role":"admin"}' "$orgjwt" >/dev/null
+post "/api/v2/workspace/$project/identity-memberships/$identity" '{"role":"admin"}' "$orgjwt" >/dev/null ||
+  { echo "infisical: could not add the identity to the project" >&2; exit 1; }
 
 # Infisical keys secrets the way the environment does, so `api.token` is
 # the entry `API_TOKEN` - envkey's answer, which every port computes.
 post /api/v3/secrets/raw/API_TOKEN \
   "{\"workspaceId\":\"$project\",\"environment\":\"prod\",\"secretPath\":\"/\",\"secretValue\":\"$SECRET\",\"type\":\"shared\"}" \
-  "$orgjwt" >/dev/null
+  "$orgjwt" >/dev/null ||
+  { echo "infisical: could not write the secret" >&2; exit 1; }
 
 echo "infisical: project $project seeded, machine identity ready" >&2
 
-echo "INF_PROJECT=$project"
-echo "INF_CLIENT=$clientid"
-echo "INF_SECRET=$clientsecret"
+# Quoted, because the caller evals these and a client secret is opaque.
+printf 'INF_PROJECT=%q\n' "$project"
+printf 'INF_CLIENT=%q\n' "$clientid"
+printf 'INF_SECRET=%q\n' "$clientsecret"

@@ -219,7 +219,17 @@ public final class Cli {
 
     HttpResponse<String> response;
     try {
-      response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+      // HTTP/1.1, for the same reason the library pins it (see CLIENT in
+      // Providers.java): java.net.http defaults to HTTP_2, and over
+      // cleartext that means an h2c upgrade a strict server rejects.
+      // This request is a GET with no body, so the Content-Length
+      // mismatch that breaks POSTs cannot bite here - but that is luck,
+      // not design, and this is the request that carries the bearer
+      // token to a URL the caller supplied.
+      HttpClient client = HttpClient.newBuilder()
+          .version(HttpClient.Version.HTTP_1_1)
+          .build();
+      response = client.send(request, HttpResponse.BodyHandlers.ofString());
     } catch (Exception err) {
       System.err.println("sekreto-cli: " + secrets.redact(String.valueOf(err.getMessage())));
       return 1;

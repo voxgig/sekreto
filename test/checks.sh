@@ -187,6 +187,14 @@ port_ready() {
 #
 # LABEL, when set, replaces the printed label - a real-store run wants
 # to say which server answered, since several sources share one.
+#
+# WHY, when set on a `deny` check, is a substring the output must
+# contain. Without it a deny check passes on ANY non-zero exit, which
+# leaves it blind to the distinction that matters most in this library: a
+# provider that correctly reports a MISS and one that wrongly RAISES both
+# exit non-zero, and only one of them is a bug. `WHY='unknown secret'`
+# says the CLI ran out of providers - what a miss looks like from
+# outside - where a store error says something else entirely.
 check() {
   local lang=$1 source=$2 expect=$3
   shift 3
@@ -209,8 +217,10 @@ check() {
   # stream that turns a correct run into a failure over a notice the port
   # never emitted.
   #
-  # The leak check still reads BOTH, and must: a secret printed while
-  # complaining is a leak wherever it was printed.
+  # The leak check reads BOTH, on BOTH paths, and must. A secret printed
+  # while succeeding is every bit as leaked as one printed while
+  # complaining, and it was the merged capture that used to catch it: the
+  # exact-match on stdout no longer sees stderr at all.
   local out err rc
   local errfile="$RUNDIR/.stderr"
   out=$(cd "$RUNDIR" && env -i \
@@ -225,10 +235,21 @@ check() {
   local label="${LABEL:-$lang/$source}"
   [ -n "${STORE:-}" ] && [ -z "${LABEL:-}" ] && label="$lang/$source->${STORE}"
 
+  # Printing the secret is a failure whatever else the run did. Checked
+  # before the outcome, so neither branch can forget it.
+  local leaked=0
+  if printf '%s\n%s\n' "$out" "$err" | grep -qF "$TOKEN"; then
+    leaked=1
+  fi
+
   if [ "$expect" = ok ]; then
     # The API echoes the caller back, so a pass means the whole path
     # worked: secret read -> bearer token accepted -> response parsed.
-    if [ $rc -eq 0 ] && [ "$out" = "{\"ok\":true,\"lang\":\"$lang\",\"source\":\"$source\",\"store\":\"${STORE:-}\",\"caller\":\"$lang\"}" ]; then
+    #
+    # The CLI prints the token to the API, never to its own output, so
+    # even a successful run must not have it anywhere.
+    if [ $rc -eq 0 ] && [ 0 -eq $leaked ] &&
+      [ "$out" = "{\"ok\":true,\"lang\":\"$lang\",\"source\":\"$source\",\"store\":\"${STORE:-}\",\"caller\":\"$lang\"}" ]; then
       pass=$((pass + 1))
       printf '   %s %-34s\n' "$(green ok)" "$label"
       return 0
@@ -236,7 +257,11 @@ check() {
   else
     # A wrong or absent secret must be refused, and the output must not
     # leak the real token even so.
-    if [ $rc -ne 0 ] && ! printf '%s\n%s\n' "$out" "$err" | grep -qF "$TOKEN"; then
+    local why=0
+    if [ -z "${WHY:-}" ] || printf '%s\n%s\n' "$out" "$err" | grep -qF "${WHY}"; then
+      why=1
+    fi
+    if [ $rc -ne 0 ] && [ 0 -eq $leaked ] && [ 1 -eq $why ]; then
       pass=$((pass + 1))
       printf '   %s %-34s (denied, as expected)\n' "$(green ok)" "$label"
       return 0
@@ -245,8 +270,14 @@ check() {
 
   fail=$((fail + 1))
   FAILED+=("$label")
-  printf '   %s %-34s rc=%s\n' "$(red FAIL)" "$label" "$rc"
-  printf '%s\n%s\n' "$out" "$err" | grep -v '^$' | head -5 | sed 's/^/        /'
+  if [ 1 -eq $leaked ]; then
+    printf '   %s %-34s rc=%s LEAKED THE SECRET\n' "$(red FAIL)" "$label" "$rc"
+  else
+    printf '   %s %-34s rc=%s\n' "$(red FAIL)" "$label" "$rc"
+  fi
+  # Redacted, because this output goes to a CI log.
+  printf '%s\n%s\n' "$out" "$err" | grep -v '^$' | head -5 |
+    sed "s|$TOKEN|[redacted]|g" | sed 's/^/        /'
   return 1
 }
 
@@ -270,7 +301,10 @@ noted_skip() {
 # nothing, and a vacuous green is worse than a red.
 tally() {
   echo
-  if [ ${#SKIPPED[@]} -gt 0 ]; then
+  # The counter, not ${#SKIPPED[@]}: expanding an empty array under
+  # `set -u` aborts on bash before 4.4, which is still what stock macOS
+  # ships. Inside the branch the array is known non-empty.
+  if [ "$skip" -gt 0 ]; then
     echo "$(yellow SKIPPED) $skip:"
     for name in "${SKIPPED[@]}"; do
       echo "   $name"

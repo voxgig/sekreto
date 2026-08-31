@@ -292,6 +292,8 @@ for lang in $LANGS; do
       BORU_COMMAND="$BORU" \
       BORU_HOME="$BORU_HOME_DIR" \
       BORU_VAULT_PASSPHRASE="$BORU_PASSPHRASE"
+  else
+    noted_skip "$lang/chain->boru" "no boru binary"
   fi
 
   # 7. The secret in a mounted-secret directory (a Kubernetes/Docker
@@ -380,6 +382,8 @@ for lang in $LANGS; do
     STORE= check "$lang" boruwire ok \
       BORU_ADDR="http://127.0.0.1:$BORU_SERVE_PORT" \
       BORU_TOKEN="$BORU_WIRE_TOKEN"
+  else
+    noted_skip "$lang/boruwire" "no boru vault serve"
   fi
 
   # 18. A store that is not in the chain is a mistake, not a miss.

@@ -13,9 +13,17 @@
 # what is an emulator, and what cannot be done locally at all - read it
 # before adding a service here.
 #
-#   docker compose -f test/docker/compose.yaml up -d
-#   test/realstores.sh
+#   make realstores                      # up, run, down - all of it
+#
+# or, keeping the stack across runs:
+#
+#   docker compose -f test/docker/compose.yaml up -d --wait
+#   SEKRETO_COMPOSE=0 test/realstores.sh
 #   docker compose -f test/docker/compose.yaml down -v
+#
+# SEKRETO_COMPOSE=0 is load-bearing in the second form: without it the
+# harness tears the stack down on its way out and the last line is a
+# no-op on something already gone.
 #
 # Every port is published on LOOPBACK ONLY. These containers hold the test
 # secret in the clear and their credentials are fixed and public; none of
@@ -79,7 +87,11 @@ services:
     ports:
       - "127.0.0.1:${SEKRETO_AWS_PORT:-8302}:4566"
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:4566/_localstack/health | grep -q '\"secretsmanager\": \"available\\|running\"'"]
+      # -E and a grouped alternation. As a basic regex the alternation
+      # spanned the whole pattern, so `"secretsmanager": "disabled"` with
+      # any other service `running"` matched and the container reported
+      # healthy with Secrets Manager unavailable.
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:4566/_localstack/health | grep -qE '\"secretsmanager\": \"(available|running)\"'"]
       interval: 3s
       timeout: 5s
       retries: 40
@@ -156,11 +168,17 @@ services:
     ports:
       - "127.0.0.1:${SEKRETO_INFISICAL_PORT:-8307}:8080"
     healthcheck:
+      # Generous, and it has to be. A cold Infisical runs its whole
+      # migration set before it answers - table partitioning included -
+      # and on a loaded machine that has taken over three minutes. Too
+      # tight a budget here does not read as "slow": `--wait` gives up,
+      # compose reports the container as failed, and the run looks like
+      # a broken store rather than a busy one.
       test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/api/status || exit 1"]
-      interval: 3s
+      interval: 5s
       timeout: 5s
-      retries: 60
-      start_period: 20s
+      retries: 90
+      start_period: 60s
 
   # ----------------------------------------------------------------- boru
   #
@@ -179,7 +197,9 @@ services:
     ports:
       - "127.0.0.1:${SEKRETO_BORU_PORT:-8308}:8308"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8308/ >/dev/null 2>&1 || true; test -f /work/ready"]
+      # Both: the marker says the entrypoint got as far as granting a
+      # token, and the request says the server is answering now.
+      test: ["CMD-SHELL", "test -f /work/ready && wget -q -S -O /dev/null http://127.0.0.1:8308/ 2>&1 | grep -q 'HTTP/'"]
       interval: 2s
       timeout: 3s
       retries: 30
