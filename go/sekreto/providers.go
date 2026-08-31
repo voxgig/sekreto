@@ -27,10 +27,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"sync"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -165,10 +165,18 @@ func (provider *EnvProvider) Describe() string {
 type DotenvProvider struct {
 	File   string
 	Prefix string
+	// Guards the memoised state below: a Sekreto may resolve from several
+	// goroutines, and a racy map read is either a crash or a zero value - a
+	// MISS where the store does hold the secret, which falls through to a
+	// weaker store.
+	mu     sync.Mutex
 	values map[string]string
 }
 
 func (provider *DotenvProvider) load() (map[string]string, error) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	if nil == provider.values {
 		text, err := os.ReadFile(provider.File)
 		if nil != err {
@@ -1485,9 +1493,14 @@ func (provider *AzureSecretsProvider) Describe() string {
 // `value`. A vault that cannot be found is an error - config names it, so
 // its absence is a broken store, not a missing secret.
 type OnePasswordProvider struct {
-	Addr      string
-	Token     string
-	Vault     string
+	Addr  string
+	Token string
+	Vault string
+	// Guards the memoised state below: a Sekreto may resolve from several
+	// goroutines, and a racy map read is either a crash or a zero value - a
+	// MISS where the store does hold the secret, which falls through to a
+	// weaker store.
+	mu        sync.Mutex
 	vaultid   string
 	havevault bool
 }
@@ -1534,18 +1547,22 @@ func (provider *OnePasswordProvider) Lookup(name string) (string, bool, error) {
 		return "", false, err
 	}
 
+	provider.mu.Lock()
 	if !provider.havevault {
 		vaultid, err := provider.resolvevault(addr)
 		if nil != err {
+			provider.mu.Unlock()
 			return "", false, err
 		}
 		provider.vaultid = vaultid
 		provider.havevault = true
 	}
+	vaultid := provider.vaultid
+	provider.mu.Unlock()
 
 	filter := uriescape(`title eq "` + name + `"`)
 	status, body, err := httpget(
-		addr+"/v1/vaults/"+provider.vaultid+"/items?filter="+filter, provider.auth())
+		addr+"/v1/vaults/"+vaultid+"/items?filter="+filter, provider.auth())
 	if nil != err {
 		return "", false, err
 	}
@@ -1562,7 +1579,7 @@ func (provider *OnePasswordProvider) Lookup(name string) (string, bool, error) {
 
 	itemid := digtext(found[0], "id")
 	status, body, err = httpget(
-		addr+"/v1/vaults/"+provider.vaultid+"/items/"+itemid, provider.auth())
+		addr+"/v1/vaults/"+vaultid+"/items/"+itemid, provider.auth())
 	if nil != err {
 		return "", false, err
 	}
@@ -1611,10 +1628,18 @@ type DopplerProvider struct {
 	Project string
 	Config  string
 	Addr    string
-	values  map[string]string
+	// Guards the memoised state below: a Sekreto may resolve from several
+	// goroutines, and a racy map read is either a crash or a zero value - a
+	// MISS where the store does hold the secret, which falls through to a
+	// weaker store.
+	mu     sync.Mutex
+	values map[string]string
 }
 
 func (provider *DopplerProvider) load() (map[string]string, error) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	if nil != provider.values {
 		return provider.values, nil
 	}

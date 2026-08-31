@@ -20,6 +20,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Locale;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -172,7 +173,9 @@ public final class Sigv4 {
     if (rawheaders instanceof Map) {
       for (Map.Entry<String, Object> entry : ((Map<String, Object>) rawheaders).entrySet()) {
         headers.put(
-            entry.getKey().toLowerCase(),
+            // Locale.ROOT: a Turkish JVM lowercases 'I' to a dotless 'i',
+            // which changes the signed header names and breaks the signature.
+            entry.getKey().toLowerCase(Locale.ROOT),
             String.valueOf(entry.getValue()).trim().replaceAll("\\s+", " "));
       }
     }
@@ -193,7 +196,7 @@ public final class Sigv4 {
     String query = null == url.getRawQuery() ? "" : url.getRawQuery();
 
     String canonicalrequest = String.join("\n",
-        String.valueOf(input.get("method")).toUpperCase(),
+        String.valueOf(input.get("method")).toUpperCase(Locale.ROOT),
         path,
         canonicalquery(query),
         canonicalheaders.toString(),

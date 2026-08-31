@@ -12,6 +12,7 @@ package com.voxgig.sekreto;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -137,8 +138,14 @@ public final class Sekreto {
   public static String envkey(Object name, String prefix) {
     checkname(name);
 
+    // Locale.ROOT, not the machine's locale. `toUpperCase()` with no locale
+    // uppercases `i` to `İ` (U+0130) on a Turkish or Azeri JVM, so
+    // `api.token` would look for `APİ_TOKEN` - in the environment, in a
+    // .env, in a secrets directory, everywhere this key is used. Every
+    // lookup of every name containing an `i` would miss, silently, and the
+    // chain would report the secret simply absent.
     return (null == prefix ? "" : prefix)
-        + String.join("_", ((String) name).split("\\.", -1)).toUpperCase();
+        + String.join("_", ((String) name).split("\\.", -1)).toUpperCase(Locale.ROOT);
   }
 
   /**
