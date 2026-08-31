@@ -27,12 +27,53 @@ pub const Header = std.http.Header;
 /// How long connecting to a vault may take before it is treated as
 /// unreachable. Ports carry the same bound.
 ///
-/// It bounds the CONNECT only. std.http.Client in Zig 0.16 exposes a
-/// timeout on `connectTcpOptions` and nowhere else, so a host that accepts
-/// the connection and then says nothing is not bounded here - which is why
-/// the request is built by hand rather than through `Client.fetch`, whose
-/// connection is opened without any timeout at all.
+/// Applied to the SOCKET, because std will not apply it for us.
+///
+/// `ConnectTcpOptions` has a `timeout` field and `connectTcpOptions` never
+/// reads it: in Zig 0.16 the whole of `std/http/Client.zig` mentions
+/// `timeout` exactly once, at the field's own declaration, and the body
+/// calls `host.connect(io, port, .{ .mode = .stream })` without it. Passing
+/// it did nothing. This port therefore had NO bound of any kind while its
+/// code and its README both said it had one - measured: still blocked at
+/// 35s against a server that accepted and went silent, where every other
+/// port gave up at 10.
+///
+/// So the bound is set with SO_RCVTIMEO / SO_SNDTIMEO on the connection's
+/// own socket, which does hold. Being a socket option it bounds each read
+/// and each write, not the request as a whole - the same shape as every
+/// port here except Go, whose deadline is total. A server dribbling one
+/// byte at a time can still outlast it; a server that says nothing cannot.
 pub const CONNECT_TIMEOUT_MS = 10_000;
+
+/// Bounds one request by shutting its socket down if it outlasts
+/// CONNECT_TIMEOUT_MS.
+///
+/// A thread per request is a real cost, and it buys the only bound this
+/// port can have: see CONNECT_TIMEOUT_MS for why the socket option and the
+/// std timeout field are both unavailable. The wait is in short steps so a
+/// request that finishes early is not held up by its own watchdog.
+const Watchdog = struct {
+    stream: std.Io.net.Stream,
+    io: std.Io,
+    done: std.atomic.Value(bool) = .init(false),
+
+    const STEP_MS = 50;
+
+    fn run(self: *Watchdog) void {
+        var waited: u64 = 0;
+        while (waited < CONNECT_TIMEOUT_MS) : (waited += STEP_MS) {
+            if (self.done.load(.acquire)) return;
+            self.io.sleep(.fromMilliseconds(STEP_MS), .awake) catch return;
+        }
+
+        if (self.done.load(.acquire)) return;
+
+        // Ends the pending read the way a closed connection does. Errors are
+        // ignored: the socket may already have closed under us, which is the
+        // case this is racing and the harmless outcome.
+        self.stream.shutdown(self.io, .both) catch {};
+    }
+};
 
 /// What one round-trip returns. `body` is null when the response carried no
 /// JSON - only possible for a non-200, which is decided on status alone.
@@ -132,17 +173,33 @@ fn roundtrip(
         client.now = now;
     }
 
-    // Connecting is the one step std lets us bound; an unreachable vault is
-    // the hang this protects an app's startup from.
     const connection = try client.connectTcpOptions(.{
         .host = host,
         .port = port,
         .protocol = protocol,
-        .timeout = .{ .duration = .{
-            .raw = .fromMilliseconds(CONNECT_TIMEOUT_MS),
-            .clock = .awake,
-        } },
     });
+
+    // The bound std would not apply. See CONNECT_TIMEOUT_MS: the `timeout`
+    // field on ConnectTcpOptions is declared and never read, so this port
+    // had none at all.
+    //
+    // Enforced with a watchdog rather than SO_RCVTIMEO. The socket option
+    // is the obvious move and it is wrong here: it makes recv return EAGAIN,
+    // and `Io.Threaded` treats EAGAIN on a socket read as a programmer bug
+    // and PANICS. That turns a hung vault into a crash, which is not an
+    // improvement. Shutting the socket down instead makes the pending read
+    // end the way a closed connection does, which the reader already
+    // handles, so a wedged vault surfaces as the ordinary "cannot reach"
+    // error every other port gives.
+    var watch: Watchdog = .{
+        .stream = connection.stream_reader.stream,
+        .io = io,
+    };
+    const watcher = std.Thread.spawn(.{}, Watchdog.run, .{&watch}) catch null;
+    defer if (watcher) |thread| {
+        watch.done.store(true, .release);
+        thread.join();
+    };
 
     var req = try client.request(method, uri, .{
         .connection = connection,

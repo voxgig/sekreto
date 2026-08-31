@@ -101,12 +101,22 @@ all, so the library and the CLI compile on a machine with no omni checkout
   global state cannot be tested.
 - **The cache is a list**, not a map, so redaction order is stable between
   runs — the same reason Go and Rust keep insertion order explicitly.
-- **The HTTP timeout is a connect timeout.** `std.http.Client` in 0.16
-  exposes `timeout` on `connectTcpOptions` and nowhere else, so this port
-  bounds the connect at 10s (the canonical's whole-request bound) and
-  cannot bound a server that accepts and then goes silent. That is why
-  `src/http.zig` builds the request by hand instead of calling
-  `Client.fetch`, which opens its connection with no timeout at all.
+- **The HTTP timeout is set on the socket, because `std` will not set it.**
+  `ConnectTcpOptions` has a `timeout` field and `connectTcpOptions` never
+  reads it — in 0.16 the whole of `std/http/Client.zig` mentions `timeout`
+  exactly once, at the field's own declaration. This README previously
+  claimed the connect was bounded at 10s on the strength of passing that
+  field; it was not, and the port had no bound at all. Measured: still
+  blocked at 35s against a server that accepted and went silent, where
+  every other port gave up at 10.
+
+  `src/http.zig` now sets `SO_RCVTIMEO` / `SO_SNDTIMEO` on the connection's
+  own socket, which does hold. Being a socket option it bounds each read
+  and each write rather than the request as a whole — the same shape as
+  every port here except Go, whose deadline is total. A server dribbling
+  one byte at a time can still outlast it; a server that says nothing
+  cannot. The request is still built by hand rather than through
+  `Client.fetch`, which gives no access to the connection at all.
 
 ## Testing
 

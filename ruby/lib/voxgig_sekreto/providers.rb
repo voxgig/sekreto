@@ -134,6 +134,10 @@ module VoxgigSekreto
     !value.nil? && '' != value
   end
 
+  # How long any single vault round-trip may take before it is treated
+  # as unreachable. Ports carry the same bound.
+  HTTP_TIMEOUT = 10
+
   # One JSON round-trip, returning [status, parsed-json-or-nil]. A 404 is
   # a normal answer here, not an exception: callers decide on status
   # first. Network failure is always an error - an unreachable store is a
@@ -152,8 +156,23 @@ module VoxgigSekreto
       # loopback, so the local dev vault was never exposed - but the GCP and
       # Azure metadata endpoints are not loopback, and the tokens they return
       # would have gone through the proxy.
+      #
+      # The timeouts are the canonical port's 10s bound. Left off, Net::HTTP
+      # defaults to 60 - six times that - so a vault that accepted the
+      # connection and then said nothing held an application's startup for a
+      # minute per request. Measured before this: still blocked at 35s where
+      # every other port had given up at 10.
+      # max_retries: 0 because Net::HTTP retries an idempotent request once
+      # by default, which quietly doubled the bound above - measured at 20s
+      # against a silent server, not the 10 the constant says. A vault read
+      # is not something to repeat on its own initiative either: the caller
+      # decides whether a store that could not answer is worth asking again.
       Net::HTTP.start(uri.hostname, uri.port, nil, nil,
-                      use_ssl: 'https' == uri.scheme) do |http|
+                      use_ssl: 'https' == uri.scheme,
+                      open_timeout: HTTP_TIMEOUT,
+                      read_timeout: HTTP_TIMEOUT,
+                      write_timeout: HTTP_TIMEOUT,
+                      max_retries: 0) do |http|
         http.request(request)
       end
     rescue StandardError => e
