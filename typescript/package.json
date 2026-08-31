@@ -5,6 +5,25 @@
   "main": "dist/src/index.js",
   "type": "commonjs",
   "types": "dist/src/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/src/index.d.ts",
+      "default": "./dist/src/index.js"
+    },
+    "./Providers": {
+      "types": "./dist/src/Providers.d.ts",
+      "default": "./dist/src/Providers.js"
+    },
+    "./Sigv4": {
+      "types": "./dist/src/Sigv4.d.ts",
+      "default": "./dist/src/Sigv4.js"
+    },
+    "./provider/*": {
+      "types": "./dist/src/provider/*.d.ts",
+      "default": "./dist/src/provider/*.js"
+    },
+    "./package.json": "./package.json"
+  },
   "homepage": "https://github.com/voxgig/sekreto",
   "keywords": [
     "voxgig",
