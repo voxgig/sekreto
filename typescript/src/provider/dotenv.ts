@@ -1,0 +1,48 @@
+/* Copyright (c) 2025 Voxgig Ltd, MIT License */
+
+import { ProviderSpec, Provider, SekretoError, envkey, nodemod, parsedotenv } from './support'
+
+export function dotenvprovider(file: string, prefix?: string): Provider {
+  let values: Record<string, string> | undefined
+
+  const load = () => {
+    if (undefined === values) {
+      try {
+        const { readFileSync } = nodemod<typeof import('node:fs')>('node:fs')
+        values = parsedotenv(readFileSync(file, 'utf8'))
+      } catch (err: any) {
+        // An absent file - or an absent directory - means "no secrets
+        // here", exactly like fileprovider. Anything else (permission
+        // denied, an unreadable mount) is a store that could not answer,
+        // and swallowing it would fall through to a weaker store.
+        if ('ENOENT' === err.code || 'ENOTDIR' === err.code) {
+          values = {}
+        } else {
+          throw new SekretoError(
+            'sekreto: dotenv provider cannot read ' + file + ': ' + err.message,
+          )
+        }
+      }
+    }
+    return values
+  }
+
+  return {
+    lookup: (name: string) => load()[envkey(name, prefix)],
+    describe: () => 'dotenv:' + file,
+  }
+}
+
+/** Literal values, keyed like environment variables. The spec uses this
+ * to test chain behaviour without touching the outside world. */
+
+
+// Registering at import is what makes this module's presence the only
+// thing that decides whether the kind exists in a build.
+import { register } from './Registry'
+
+register({
+  name: 'dotenv',
+  needs: ['fs'],
+  define: (spec: ProviderSpec) => dotenvprovider(spec.file || '.env', spec.prefix),
+})

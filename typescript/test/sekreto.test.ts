@@ -12,10 +12,25 @@ import {
   flatname,
   parsedotenv,
   redact,
-  sigv4,
   validname,
   vaultref,
 } from '../src'
+
+// `sigv4` is no longer on the core surface - it is the node:crypto edge
+// and only the aws providers use it (docs/design/plugin-providers.md).
+import { sigv4 } from '../src/Sigv4'
+
+// THE CONFORMANCE SUITE REGISTERS EVERY KIND, deliberately.
+//
+// `spec/sekreto.json` is the contract for the whole library and exercises
+// all thirteen providers, so this suite imports the full-set barrel to
+// register them. That is not a leak of the core/plugin split - it is the
+// split working: a CONSUMER imports the kinds it configures and carries
+// nothing else, while the suite that proves all thirteen behave has to
+// have all thirteen. `lazyload.test.ts` pins the other half, that the core
+// surface reaches none of them.
+import '../src/Providers'
+
 import { omnihome, specfile } from '../src/omnihome'
 
 // omni is a sibling checkout, not a published package (yet), so it is

@@ -30,6 +30,13 @@ const GUARDED = /^node:(fs|path|child_process|crypto)$/
 
 const SRC = join(__dirname, '..', 'src')
 
+// A platform-dependent provider now lives in its OWN module, and is not
+// on the core surface at all - importing the core cannot reach it. That
+// is the point of the core/plugin split: deferring the builtin stopped
+// the module being EVALUATED, but the code was still in the build. See
+// docs/design/plugin-providers.md.
+const FILE_PROVIDER = join(__dirname, '..', 'src', 'provider', 'file')
+
 // Record every module request made while `fn` runs, then restore.
 function loadsDuring(fn: () => void): string[] {
   const seen: string[] = []
@@ -88,12 +95,47 @@ describe('lazy node builtins', () => {
     assert.ok(null != sekreto)
   })
 
+  // THE SPLIT'S OWN INVARIANT, and the one that actually keeps SDKs lean.
+  //
+  // Deferring the builtin (the tests above) stops the module being
+  // EVALUATED; it does not stop the code being in the build, because a
+  // bundler still resolves a require it can see. So the core surface must
+  // not reach a platform-dependent provider AT ALL - if `fileprovider` is
+  // exported from the core index again, every consumer carries node:fs's
+  // provider whether or not they configured one, and every consumer of the
+  // aws kinds carries request signing.
+  test('the core surface exposes no platform-dependent provider', () => {
+    uncache()
+
+    const core = require(SRC)
+
+    // Registered from the module, not from core - importing core alone
+    // must not register them either, or the trim has nothing to trim.
+    const platform = [
+      'dotenvprovider', 'fileprovider', 'hashicorpprovider', 'boruprovider',
+      'awssecretsprovider', 'awsparamsprovider', 'gcpsecretsprovider',
+      'azuresecretsprovider', 'onepasswordprovider', 'dopplerprovider',
+      'infisicalprovider',
+    ]
+
+    const leaked = platform.filter((name) => undefined !== core[name])
+    assert.deepEqual(leaked, [],
+      'these providers are reachable from the core surface, so every ' +
+      'consumer carries them: ' + leaked.join(', '))
+
+    // The two that import nothing stay, because a chain with nowhere to
+    // read from is not usable.
+    assert.equal('function', typeof core.envprovider)
+    assert.equal('function', typeof core.memoryprovider)
+  })
+
+
   // The other half of the claim: deferred, not removed. A provider that
   // genuinely needs a builtin must still get it when it runs.
   test('a file provider loads node:fs when it is actually used', async () => {
     uncache()
 
-    const { fileprovider } = require(SRC)
+    const { fileprovider } = require(FILE_PROVIDER)
 
     // Construction alone must not load it...
     const atbuild = loadsDuring(() => {
@@ -121,7 +163,7 @@ describe('lazy node builtins', () => {
   test('a file provider lookup still behaves the same', async () => {
     uncache()
 
-    const { fileprovider } = require(SRC)
+    const { fileprovider } = require(FILE_PROVIDER)
     const provider = fileprovider('/nonexistent-sekreto-test')
 
     // Synchronous return preserved: this is why the loader uses require()

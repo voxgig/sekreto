@@ -8,7 +8,13 @@
 // This file is CANONICAL. Every other port is a translation of it, and
 // spec/sekreto.json is the behavioural contract they all run.
 
-import { Provider, ProviderSpec, makeprovider } from './Providers'
+// The REGISTRY, never './Providers'. Importing the barrel here is what
+// made every provider kind reachable from the core: the chain needs
+// `makeprovider`, and the barrel's edge dragged AWS request signing and
+// seven HTTP clients in behind it. The registry knows only the kinds
+// something actually imported. See docs/design/plugin-providers.md.
+import { Provider, ProviderSpec } from './provider/support'
+import { makeprovider } from './provider/Registry'
 
 /** A secret name: dot-separated lowercase segments, e.g. `api.token`. */
 export type Name = string

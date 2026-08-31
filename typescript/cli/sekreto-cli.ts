@@ -16,7 +16,20 @@
 // in chainfor below.
 
 import { Sekreto } from '../src'
-import { ProviderSpec } from '../src/Providers'
+
+// THE FULL SET, imported for its SIDE EFFECT. The CLI is asked for any
+// provider kind on the command line, so it is the one consumer that
+// legitimately wants all thirteen.
+//
+// It must be a VALUE import. The line below used to be
+// `import { ProviderSpec } from '../src/Providers'` and did double duty by
+// accident: it named a type, so TypeScript ERASED it, and the providers
+// were registered only because Sekreto.ts still reached the barrel itself.
+// Cutting that edge left the CLI with env and memory alone, and every
+// other kind failed as `unknown provider kind` — caught by the
+// integration suite, which is exactly what it is for.
+import '../src/Providers'
+import type { ProviderSpec } from '../src/Providers'
 
 function chainfor(source: string): ProviderSpec[] {
   const env = process.env
