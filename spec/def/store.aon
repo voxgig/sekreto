@@ -105,6 +105,24 @@ getfrom: set: [
     err: 'sekreto: not an http(s) address: ftp://vault.example.com'
   }
 
+  # NO REFUSAL PRINTS THE CREDENTIAL IT IS REFUSING.
+  #
+  # Every message here names the address, and one of them fires precisely
+  # because that address carries a password - so printing it verbatim
+  # wrote the password to stderr and into the logs. It cannot be cleaned
+  # up afterwards either: the password was never resolved as a secret, so
+  # `redact` has never seen it. The host is what identifies the offending
+  # chain entry; the userinfo is not. This case is the scheme branch,
+  # which fires before any of the parsing and leaked too.
+  {
+    in: {
+      chain: [ { kind: 'hashicorp', addr: 'ftp://svc:hunter2@vault.example.com/' } ]
+      store: 'hashicorp'
+      name: 'api.token'
+    }
+    err: 'sekreto: not an http(s) address: ftp://[redacted]@vault.example.com/'
+  }
+
   # USERINFO, refused outright.
   #
   # `localhost:8200@evil.example.com` is a request to evil.example.com,
@@ -124,7 +142,7 @@ getfrom: set: [
       store: 'hashicorp'
       name: 'api.token'
     }
-    err: 'sekreto: refusing an address with embedded credentials: http://localhost:8200@evil.example.com/'
+    err: 'sekreto: refusing an address with embedded credentials: http://[redacted]@evil.example.com/'
   }
 
   # The same trick without a colon in the userinfo, which the splitting
@@ -136,7 +154,7 @@ getfrom: set: [
       store: 'hashicorp'
       name: 'api.token'
     }
-    err: 'sekreto: refusing an address with embedded credentials: http://127.0.0.1@evil.example.com/'
+    err: 'sekreto: refusing an address with embedded credentials: http://[redacted]@evil.example.com/'
   }
 
   # Two @ signs. The URL parsers split this one four different ways
@@ -147,7 +165,7 @@ getfrom: set: [
       store: 'hashicorp'
       name: 'api.token'
     }
-    err: 'sekreto: refusing an address with embedded credentials: http://a@127.0.0.1@evil.example.com/'
+    err: 'sekreto: refusing an address with embedded credentials: http://[redacted]@evil.example.com/'
   }
 
   # Refused on https too, where there is no plaintext argument for it -
@@ -159,7 +177,7 @@ getfrom: set: [
       store: 'hashicorp'
       name: 'api.token'
     }
-    err: 'sekreto: refusing an address with embedded credentials: https://user:pass@vault.example.com'
+    err: 'sekreto: refusing an address with embedded credentials: https://[redacted]@vault.example.com'
   }
 
   # An '@' after the authority is part of the path, and the path is not

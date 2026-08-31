@@ -363,6 +363,35 @@ function runcmd(array $argv, array $env = []): array
 }
 
 /**
+ * An address with any userinfo replaced by `[redacted]`, for messages.
+ *
+ * Every refusal below names the address it refused, and one of them fires
+ * precisely because the address carries a credential - so printing it
+ * verbatim wrote the password to stderr and into the logs. It cannot be
+ * cleaned up afterwards either: that password was never resolved as a
+ * secret, so redact() has never seen it and never will. The host is what a
+ * reader needs to identify which chain entry is at fault; the userinfo is
+ * not.
+ */
+function safeaddr(string $addr): string
+{
+    $mark = strpos($addr, '://');
+    if (false === $mark) {
+        return $addr;
+    }
+
+    $rest = substr($addr, $mark + 3);
+    $authority = substr($rest, 0, strcspn($rest, '/?#'));
+
+    $at = strrpos($authority, '@');
+    if (false === $at) {
+        return $addr;
+    }
+
+    return substr($addr, 0, $mark + 3) . '[redacted]' . substr($addr, $mark + 3 + $at);
+}
+
+/**
  * Refuse to send a Vault token in the clear.
  *
  * Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -392,7 +421,7 @@ function checkaddr(string $addr): void
     } elseif (str_starts_with($addr, 'http://')) {
         $scheme = 'http://';
     } else {
-        throw new SekretoError('sekreto: not an http(s) address: ' . $addr);
+        throw new SekretoError('sekreto: not an http(s) address: ' . safeaddr($addr));
     }
 
     $rest = substr($addr, strlen($scheme));
@@ -408,13 +437,13 @@ function checkaddr(string $addr): void
     // ':', as loopback.
     if (str_contains($authority, '@')) {
         throw new SekretoError(
-            'sekreto: refusing an address with embedded credentials: ' . $addr
+            'sekreto: refusing an address with embedded credentials: ' . safeaddr($addr)
         );
     }
 
     // An opening bracket with no closing one is not an address at all.
     if (str_starts_with($authority, '[') && !str_contains($authority, ']')) {
-        throw new SekretoError('sekreto: not a valid http(s) address: ' . $addr);
+        throw new SekretoError('sekreto: not a valid http(s) address: ' . safeaddr($addr));
     }
 
     if ('https://' === $scheme) {
@@ -436,7 +465,7 @@ function checkaddr(string $addr): void
     }
 
     throw new SekretoError(
-        'sekreto: refusing to send a token in plaintext to ' . $addr . ' (use https)'
+        'sekreto: refusing to send a token in plaintext to ' . safeaddr($addr) . ' (use https)'
     );
 }
 

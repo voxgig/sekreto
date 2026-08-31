@@ -219,6 +219,36 @@ def _tonumber(value):
         return 0
 
 
+def safeaddr(addr):
+    """An address with any userinfo replaced by `[redacted]`, for messages.
+
+    Every refusal below names the address it refused, and one of them fires
+    precisely because the address carries a credential - so printing it
+    verbatim wrote the password to stderr and into the logs. It cannot be
+    cleaned up afterwards either: that password was never resolved as a
+    secret, so `redact` has never seen it and never will. The host is what a
+    reader needs to identify which chain entry is at fault; the userinfo is
+    not.
+    """
+    mark = addr.find('://')
+    if -1 == mark:
+        return addr
+
+    rest = addr[mark + 3:]
+    end = len(rest)
+    for ch in ('/', '?', '#'):
+        at = rest.find(ch)
+        if -1 != at and at < end:
+            end = at
+    authority = rest[:end]
+
+    at = authority.rfind('@')
+    if -1 == at:
+        return addr
+
+    return addr[:mark + 3] + '[redacted]' + addr[mark + 3 + at:]
+
+
 def checkaddr(addr):
     """Refuse to send a Vault token in the clear.
 
@@ -247,7 +277,7 @@ def checkaddr(addr):
     elif addr.startswith('http://'):
         scheme = 'http://'
     else:
-        raise SekretoError('sekreto: not an http(s) address: ' + addr)
+        raise SekretoError('sekreto: not an http(s) address: ' + safeaddr(addr))
 
     rest = addr[len(scheme):]
     end = len(rest)
@@ -266,12 +296,12 @@ def checkaddr(addr):
     # ':', as loopback.
     if '@' in authority:
         raise SekretoError(
-            'sekreto: refusing an address with embedded credentials: ' + addr
+            'sekreto: refusing an address with embedded credentials: ' + safeaddr(addr)
         )
 
     # An opening bracket with no closing one is not an address at all.
     if authority.startswith('[') and ']' not in authority:
-        raise SekretoError('sekreto: not a valid http(s) address: ' + addr)
+        raise SekretoError('sekreto: not a valid http(s) address: ' + safeaddr(addr))
 
     if 'https://' == scheme:
         return
@@ -289,7 +319,8 @@ def checkaddr(addr):
         return
 
     raise SekretoError(
-        'sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)'
+        'sekreto: refusing to send a token in plaintext to ' + safeaddr(addr)
+        + ' (use https)'
     )
 
 

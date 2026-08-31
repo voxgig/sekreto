@@ -292,6 +292,33 @@ impl Provider for FileProvider {
     }
 }
 
+/// An address with any userinfo replaced by `[redacted]`, for messages.
+///
+/// Every refusal below names the address it refused, and one of them fires
+/// precisely because the address carries a credential - so printing it
+/// verbatim wrote the password to stderr and into the logs. It cannot be
+/// cleaned up afterwards either: that password was never resolved as a
+/// secret, so `redact` has never seen it and never will. The host is what a
+/// reader needs to identify which chain entry is at fault; the userinfo is
+/// not.
+pub fn safeaddr(addr: &str) -> String {
+    let mark = match addr.find("://") {
+        Some(at) => at,
+        None => return addr.to_string(),
+    };
+
+    let rest = &addr[mark + 3..];
+    let authority = match rest.find(['/', '?', '#']) {
+        Some(at) => &rest[..at],
+        None => rest,
+    };
+
+    match authority.rfind('@') {
+        Some(at) => format!("{}[redacted]{}", &addr[..mark + 3], &addr[mark + 3 + at..]),
+        None => addr.to_string(),
+    }
+}
+
 /// Refuse to send a secret-bearing credential in the clear.
 ///
 /// A vault API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -328,7 +355,7 @@ pub fn checkaddr(addr: &str) -> Answer<()> {
     } else {
         return Err(SekretoError::new(format!(
             "sekreto: not an http(s) address: {}",
-            addr
+            safeaddr(addr)
         )));
     };
 
@@ -348,7 +375,7 @@ pub fn checkaddr(addr: &str) -> Answer<()> {
     if authority.contains('@') {
         return Err(SekretoError::new(format!(
             "sekreto: refusing an address with embedded credentials: {}",
-            addr
+            safeaddr(addr)
         )));
     }
 
@@ -356,7 +383,7 @@ pub fn checkaddr(addr: &str) -> Answer<()> {
     if authority.starts_with('[') && !authority.contains(']') {
         return Err(SekretoError::new(format!(
             "sekreto: not a valid http(s) address: {}",
-            addr
+            safeaddr(addr)
         )));
     }
 
@@ -390,7 +417,7 @@ pub fn checkaddr(addr: &str) -> Answer<()> {
 
     Err(SekretoError::new(format!(
         "sekreto: refusing to send a token in plaintext to {} (use https)",
-        addr
+        safeaddr(addr)
     )))
 }
 

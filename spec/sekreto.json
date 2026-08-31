@@ -329,7 +329,20 @@
             }
           },
           {
-            "err": "sekreto: refusing an address with embedded credentials: http://localhost:8200@evil.example.com/",
+            "err": "sekreto: not an http(s) address: ftp://[redacted]@vault.example.com/",
+            "in": {
+              "chain": [
+                {
+                  "addr": "ftp://svc:hunter2@vault.example.com/",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: refusing an address with embedded credentials: http://[redacted]@evil.example.com/",
             "in": {
               "chain": [
                 {
@@ -342,7 +355,7 @@
             }
           },
           {
-            "err": "sekreto: refusing an address with embedded credentials: http://127.0.0.1@evil.example.com/",
+            "err": "sekreto: refusing an address with embedded credentials: http://[redacted]@evil.example.com/",
             "in": {
               "chain": [
                 {
@@ -355,7 +368,7 @@
             }
           },
           {
-            "err": "sekreto: refusing an address with embedded credentials: http://a@127.0.0.1@evil.example.com/",
+            "err": "sekreto: refusing an address with embedded credentials: http://[redacted]@evil.example.com/",
             "in": {
               "chain": [
                 {
@@ -368,7 +381,7 @@
             }
           },
           {
-            "err": "sekreto: refusing an address with embedded credentials: https://user:pass@vault.example.com",
+            "err": "sekreto: refusing an address with embedded credentials: https://[redacted]@vault.example.com",
             "in": {
               "chain": [
                 {

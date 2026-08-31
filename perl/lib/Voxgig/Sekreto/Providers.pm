@@ -236,6 +236,30 @@ sub fetchjson {
     return ( $response->{status}, $parsed );
 }
 
+# An address with any userinfo replaced by `[redacted]`, for messages.
+#
+# Every refusal below names the address it refused, and one of them fires
+# precisely because the address carries a credential - so printing it
+# verbatim wrote the password to stderr and into the logs. It cannot be
+# cleaned up afterwards either: that password was never resolved as a secret,
+# so redact() has never seen it and never will. The host is what a reader
+# needs to identify which chain entry is at fault; the userinfo is not.
+sub safeaddr {
+    my ($addr) = @_;
+
+    my $mark = index( $addr, '://' );
+    return $addr if -1 == $mark;
+
+    my $rest = substr( $addr, $mark + 3 );
+    my ($authority) = $rest =~ m{\A([^/?\#]*)};
+    $authority = '' if !defined $authority;
+
+    my $at = rindex( $authority, '@' );
+    return $addr if -1 == $at;
+
+    return substr( $addr, 0, $mark + 3 ) . '[redacted]' . substr( $addr, $mark + 3 + $at );
+}
+
 # Refuse to send a secret-bearing credential in the clear.
 #
 # A vault API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -269,7 +293,7 @@ sub checkaddr {
         : 0 == index( $addr, 'http://' )  ? 'http://'
         :                                   '';
 
-    fail( 'sekreto: not an http(s) address: ' . $addr ) if '' eq $scheme;
+    fail( 'sekreto: not an http(s) address: ' . safeaddr($addr) ) if '' eq $scheme;
 
     my $rest = substr( $addr, length($scheme) );
     my ($authority) = $rest =~ m{\A([^/?\#]*)};
@@ -282,11 +306,11 @@ sub checkaddr {
     # stop: `http://localhost:8200@evil.example.com/` is a request to
     # evil.example.com that reads, to anything that splits the authority on
     # ':', as loopback.
-    fail( 'sekreto: refusing an address with embedded credentials: ' . $addr )
+    fail( 'sekreto: refusing an address with embedded credentials: ' . safeaddr($addr) )
         if -1 != index( $authority, '@' );
 
     # An opening bracket with no closing one is not an address at all.
-    fail( 'sekreto: not a valid http(s) address: ' . $addr )
+    fail( 'sekreto: not a valid http(s) address: ' . safeaddr($addr) )
         if 0 == index( $authority, '[' ) && -1 == index( $authority, ']' );
 
     return if 'https://' eq $scheme;
@@ -304,7 +328,7 @@ sub checkaddr {
 
     return if grep { $_ eq $host } ( 'localhost', '127.0.0.1', '::1', '[::1]' );
 
-    fail( 'sekreto: refusing to send a token in plaintext to ' . $addr . ' (use https)' );
+    fail( 'sekreto: refusing to send a token in plaintext to ' . safeaddr($addr) . ' (use https)' );
 }
 
 # When a logged-in token must be renewed: shortly before its lease runs

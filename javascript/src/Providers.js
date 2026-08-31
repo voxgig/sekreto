@@ -116,6 +116,33 @@ function fileprovider(dir, prefix) {
   }
 }
 
+/** An address with any userinfo replaced by `[redacted]`, for messages.
+ *
+ * Every refusal below names the address it refused, and one of them fires
+ * precisely because the address carries a credential - so printing it
+ * verbatim wrote the password to stderr and into the logs. It cannot be
+ * cleaned up afterwards either: that password was never resolved as a
+ * secret, so `redact()` has never seen it and never will. The host is what
+ * a reader needs to identify which chain entry is at fault; the userinfo
+ * is not. */
+function safeaddr(addr) {
+  const mark = addr.indexOf('://')
+  if (-1 === mark) {
+    return addr
+  }
+
+  const rest = addr.slice(mark + 3)
+  const end = rest.search(/[/?#]/)
+  const authority = -1 === end ? rest : rest.slice(0, end)
+
+  const at = authority.lastIndexOf('@')
+  if (-1 === at) {
+    return addr
+  }
+
+  return addr.slice(0, mark + 3) + '[redacted]' + addr.slice(mark + 3 + at)
+}
+
 /** Refuse to send a secret-bearing credential in the clear.
  *
  * A vault API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -146,7 +173,7 @@ function checkaddr(addr) {
       : ''
 
   if ('' === scheme) {
-    throw new SekretoError('sekreto: not an http(s) address: ' + addr)
+    throw new SekretoError('sekreto: not an http(s) address: ' + safeaddr(addr))
   }
 
   const rest = addr.slice(scheme.length)
@@ -161,12 +188,14 @@ function checkaddr(addr) {
   // a request to evil.example.com that reads, to anything that splits the
   // authority on ':', as loopback.
   if (authority.includes('@')) {
-    throw new SekretoError('sekreto: refusing an address with embedded credentials: ' + addr)
+    throw new SekretoError(
+      'sekreto: refusing an address with embedded credentials: ' + safeaddr(addr),
+    )
   }
 
   // An opening bracket with no closing one is not an address at all.
   if (authority.startsWith('[') && !authority.includes(']')) {
-    throw new SekretoError('sekreto: not a valid http(s) address: ' + addr)
+    throw new SekretoError('sekreto: not a valid http(s) address: ' + safeaddr(addr))
   }
 
   if ('https://' === scheme) {
@@ -188,7 +217,7 @@ function checkaddr(addr) {
   }
 
   throw new SekretoError(
-    'sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)',
+    'sekreto: refusing to send a token in plaintext to ' + safeaddr(addr) + ' (use https)',
   )
 }
 

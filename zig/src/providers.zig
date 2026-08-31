@@ -146,6 +146,33 @@ pub const ProviderSpec = struct {
     path: []const u8 = "",
 };
 
+/// An address with any userinfo replaced by `[redacted]`, for messages.
+///
+/// Every refusal in `checkaddr` names the address it refused, and one of them
+/// fires precisely because the address carries a credential - so printing it
+/// verbatim wrote the password to stderr and into the logs. It cannot be
+/// cleaned up afterwards either: that password was never resolved as a
+/// secret, so `redact` has never seen it and never will. The host is what a
+/// reader needs to identify which chain entry is at fault; the userinfo is
+/// not.
+///
+/// The caller owns the returned slice.
+fn safeaddr(alloc: Allocator, addr: []const u8) Allocator.Error![]const u8 {
+    const mark = std.mem.indexOf(u8, addr, "://") orelse return alloc.dupe(u8, addr);
+
+    const rest = addr[mark + 3 ..];
+    const end = std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len;
+    const authority = rest[0..end];
+
+    const at = std.mem.lastIndexOfScalar(u8, authority, '@') orelse
+        return alloc.dupe(u8, addr);
+
+    return std.fmt.allocPrint(alloc, "{s}[redacted]{s}", .{
+        addr[0 .. mark + 3],
+        addr[mark + 3 + at ..],
+    });
+}
+
 /// Refuse to send a secret-bearing credential in the clear.
 ///
 /// A vault API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -172,8 +199,20 @@ pub fn checkaddr(alloc: Allocator, addr: []const u8) Allocator.Error!Answer(void
         "https://"
     else if (std.mem.startsWith(u8, addr, "http://"))
         "http://"
-    else
-        return .{ .err = try sekreto.fail(alloc, "sekreto: not an http(s) address: {s}", .{addr}) };
+    else {
+        const bad = try safeaddr(alloc, addr);
+        defer alloc.free(bad);
+        return .{ .err = try sekreto.fail(
+            alloc,
+            "sekreto: not an http(s) address: {s}",
+            .{bad},
+        ) };
+    };
+
+    // Redacted once, and used by every message below: no refusal prints the
+    // credential it is refusing.
+    const shown = try safeaddr(alloc, addr);
+    defer alloc.free(shown);
 
     const rest = addr[scheme.len..];
     const authority_end = std.mem.indexOfAny(u8, rest, "/?#") orelse rest.len;
@@ -190,7 +229,7 @@ pub fn checkaddr(alloc: Allocator, addr: []const u8) Allocator.Error!Answer(void
         return .{ .err = try sekreto.fail(
             alloc,
             "sekreto: refusing an address with embedded credentials: {s}",
-            .{addr},
+            .{shown},
         ) };
     }
 
@@ -201,7 +240,7 @@ pub fn checkaddr(alloc: Allocator, addr: []const u8) Allocator.Error!Answer(void
         return .{ .err = try sekreto.fail(
             alloc,
             "sekreto: not a valid http(s) address: {s}",
-            .{addr},
+            .{shown},
         ) };
     }
 
@@ -235,7 +274,7 @@ pub fn checkaddr(alloc: Allocator, addr: []const u8) Allocator.Error!Answer(void
     return .{ .err = try sekreto.fail(
         alloc,
         "sekreto: refusing to send a token in plaintext to {s} (use https)",
-        .{addr},
+        .{shown},
     ) };
 }
 

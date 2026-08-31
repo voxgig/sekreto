@@ -281,6 +281,39 @@ namespace Voxgig.Sekreto
     public static class Addr
     {
         /// <summary>
+        /// An address with any userinfo replaced by `[redacted]`, for
+        /// messages.
+        ///
+        /// <para>Every refusal below names the address it refused, and one of
+        /// them fires precisely because the address carries a credential - so
+        /// printing it verbatim wrote the password to stderr and into the
+        /// logs. It cannot be cleaned up afterwards either: that password was
+        /// never resolved as a secret, so Redact has never seen it and never
+        /// will. The host is what a reader needs to identify which chain entry
+        /// is at fault; the userinfo is not.</para>
+        /// </summary>
+        internal static string Safe(string addr)
+        {
+            int mark = addr.IndexOf("://", StringComparison.Ordinal);
+            if (-1 == mark)
+            {
+                return addr;
+            }
+
+            string rest = addr.Substring(mark + 3);
+            int stop = rest.IndexOfAny(new[] { '/', '?', '#' });
+            string authority = -1 == stop ? rest : rest.Substring(0, stop);
+
+            int at = authority.LastIndexOf('@');
+            if (-1 == at)
+            {
+                return addr;
+            }
+
+            return addr.Substring(0, mark + 3) + "[redacted]" + addr.Substring(mark + 3 + at);
+        }
+
+        /// <summary>
         /// Refuse to send a secret-bearing credential in the clear.
         ///
         /// <para>A vault API is HTTPS in any real deployment; plaintext is a
@@ -319,7 +352,7 @@ namespace Voxgig.Sekreto
             }
             else
             {
-                throw new SekretoError("sekreto: not an http(s) address: " + addr);
+                throw new SekretoError("sekreto: not an http(s) address: " + Safe(addr));
             }
 
             string rest = addr.Substring(scheme.Length);
@@ -337,14 +370,14 @@ namespace Voxgig.Sekreto
             if (authority.Contains('@'))
             {
                 throw new SekretoError(
-                    "sekreto: refusing an address with embedded credentials: " + addr);
+                    "sekreto: refusing an address with embedded credentials: " + Safe(addr));
             }
 
             // An opening bracket with no closing one is not an address at all.
             if (authority.StartsWith("[", StringComparison.Ordinal)
                 && !authority.Contains(']'))
             {
-                throw new SekretoError("sekreto: not a valid http(s) address: " + addr);
+                throw new SekretoError("sekreto: not a valid http(s) address: " + Safe(addr));
             }
 
             if ("https://" == scheme)
@@ -374,7 +407,7 @@ namespace Voxgig.Sekreto
             }
 
             throw new SekretoError(
-                "sekreto: refusing to send a token in plaintext to " + addr + " (use https)");
+                "sekreto: refusing to send a token in plaintext to " + Safe(addr) + " (use https)");
         }
     }
 

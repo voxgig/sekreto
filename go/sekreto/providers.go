@@ -409,6 +409,36 @@ func due(renewat time.Time) bool {
 	return !renewat.IsZero() && !time.Now().Before(renewat)
 }
 
+// safeaddr returns the address with any userinfo replaced by [redacted],
+// for messages.
+//
+// Every refusal below names the address it refused, and one of them fires
+// precisely because the address carries a credential - so printing it
+// verbatim wrote the password to stderr and into the logs. It cannot be
+// cleaned up afterwards either: that password was never resolved as a
+// secret, so Redact has never seen it and never will. The host is what a
+// reader needs to identify which chain entry is at fault; the userinfo is
+// not.
+func safeaddr(addr string) string {
+	mark := strings.Index(addr, "://")
+	if -1 == mark {
+		return addr
+	}
+
+	rest := addr[mark+3:]
+	authority := rest
+	if end := strings.IndexAny(rest, "/?#"); -1 != end {
+		authority = rest[:end]
+	}
+
+	at := strings.LastIndex(authority, "@")
+	if -1 == at {
+		return addr
+	}
+
+	return addr[:mark+3] + "[redacted]" + addr[mark+3+at:]
+}
+
 // checkaddr refuses to send a Vault token in the clear.
 //
 // Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -437,7 +467,7 @@ func checkaddr(addr string) error {
 	} else if strings.HasPrefix(addr, "http://") {
 		scheme = "http://"
 	} else {
-		return fail("sekreto: not an http(s) address: " + addr)
+		return fail("sekreto: not an http(s) address: " + safeaddr(addr))
 	}
 
 	rest := addr[len(scheme):]
@@ -455,12 +485,12 @@ func checkaddr(addr string) error {
 	// evil.example.com that reads, to anything that splits the authority on
 	// ':', as loopback.
 	if strings.Contains(authority, "@") {
-		return fail("sekreto: refusing an address with embedded credentials: " + addr)
+		return fail("sekreto: refusing an address with embedded credentials: " + safeaddr(addr))
 	}
 
 	// An opening bracket with no closing one is not an address at all.
 	if strings.HasPrefix(authority, "[") && !strings.Contains(authority, "]") {
-		return fail("sekreto: not a valid http(s) address: " + addr)
+		return fail("sekreto: not a valid http(s) address: " + safeaddr(addr))
 	}
 
 	if "https://" == scheme {
@@ -483,7 +513,7 @@ func checkaddr(addr string) error {
 		return nil
 	}
 
-	return fail("sekreto: refusing to send a token in plaintext to " + addr + " (use https)")
+	return fail("sekreto: refusing to send a token in plaintext to " + safeaddr(addr) + " (use https)")
 }
 
 // HashicorpProvider reads HashiCorp Vault.

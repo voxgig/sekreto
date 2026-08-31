@@ -276,6 +276,40 @@ public final class Providers {
   }
 
   /**
+   * An address with any userinfo replaced by `[redacted]`, for messages.
+   *
+   * <p>Every refusal below names the address it refused, and one of them
+   * fires precisely because the address carries a credential - so printing it
+   * verbatim wrote the password to stderr and into the logs. It cannot be
+   * cleaned up afterwards either: that password was never resolved as a
+   * secret, so redact() has never seen it and never will. The host is what a
+   * reader needs to identify which chain entry is at fault; the userinfo is
+   * not.
+   */
+  static String safeaddr(String addr) {
+    int mark = addr.indexOf("://");
+    if (-1 == mark) {
+      return addr;
+    }
+
+    String rest = addr.substring(mark + 3);
+    int end = rest.length();
+    for (String mark2 : new String[] {"/", "?", "#"}) {
+      int found = rest.indexOf(mark2);
+      if (-1 != found && found < end) {
+        end = found;
+      }
+    }
+
+    int at = rest.substring(0, end).lastIndexOf('@');
+    if (-1 == at) {
+      return addr;
+    }
+
+    return addr.substring(0, mark + 3) + "[redacted]" + addr.substring(mark + 3 + at);
+  }
+
+  /**
    * Refuse to send a secret-bearing credential in the clear.
    *
    * <p>A vault API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -306,7 +340,7 @@ public final class Providers {
     } else if (addr.startsWith("http://")) {
       scheme = "http://";
     } else {
-      throw new SekretoError("sekreto: not an http(s) address: " + addr);
+      throw new SekretoError("sekreto: not an http(s) address: " + safeaddr(addr));
     }
 
     String rest = addr.substring(scheme.length());
@@ -328,12 +362,12 @@ public final class Providers {
     // evil.example.com that reads, to anything that splits the authority on
     // ':', as loopback.
     if (authority.contains("@")) {
-      throw new SekretoError("sekreto: refusing an address with embedded credentials: " + addr);
+      throw new SekretoError("sekreto: refusing an address with embedded credentials: " + safeaddr(addr));
     }
 
     // An opening bracket with no closing one is not an address at all.
     if (authority.startsWith("[") && !authority.contains("]")) {
-      throw new SekretoError("sekreto: not a valid http(s) address: " + addr);
+      throw new SekretoError("sekreto: not a valid http(s) address: " + safeaddr(addr));
     }
 
     if ("https://".equals(scheme)) {
@@ -361,7 +395,7 @@ public final class Providers {
     }
 
     throw new SekretoError(
-        "sekreto: refusing to send a token in plaintext to " + addr + " (use https)");
+        "sekreto: refusing to send a token in plaintext to " + safeaddr(addr) + " (use https)");
   }
 
   // HTTP/1.1, explicitly.
