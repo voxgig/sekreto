@@ -230,8 +230,23 @@ public final class Providers {
         "sekreto: refusing to send a token in plaintext to " + addr + " (use https)");
   }
 
-  private static final HttpClient CLIENT =
-      HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+  // HTTP/1.1, explicitly.
+  //
+  // java.net.http defaults to HTTP_2, and over cleartext that means an h2c
+  // upgrade: the first request goes out with `Upgrade: h2c`, the declared
+  // Content-Length, and NO BODY, and the body follows only after the server
+  // declines. A server that checks the two against each other - Fastify
+  // does, and Infisical is Fastify - rejects that request outright with
+  // "Request body size did not match Content-Length", so every POST this
+  // port makes to such a server fails before it is even read.
+  //
+  // The mocks in test/ are Node's own http module, which does not object,
+  // which is why this survived until the same code met a real Infisical.
+  // No vault API this library speaks needs HTTP/2.
+  private static final HttpClient CLIENT = HttpClient.newBuilder()
+      .version(HttpClient.Version.HTTP_1_1)
+      .connectTimeout(Duration.ofSeconds(10))
+      .build();
 
   /** One JSON round-trip's result: the status, and the parsed body. */
   static final class Answer {
