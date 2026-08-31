@@ -15,7 +15,12 @@ class SekretoError(Exception):
     provider that could not be reached."""
 
 
-NAMEPART = re.compile(r'^[a-z0-9_]+$')
+# `\z`-style anchors, not `$`. In Python, PCRE, Perl and .NET `$` also
+# matches BEFORE a final newline, so `api.token\n` was accepted here while the
+# canonical port rejected it - and `envkey` then produced the key
+# `API_TOKEN\n`, sending this port looking for a differently named file and
+# variable than the others.
+NAMEPART = re.compile(r'\A[a-z0-9_]+\Z')
 
 
 def validname(name):

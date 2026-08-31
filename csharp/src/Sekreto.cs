@@ -27,7 +27,13 @@ namespace Voxgig.Sekreto
 
     public static class Names
     {
-        private static readonly Regex NamePart = new Regex("^[a-z0-9_]+$", RegexOptions.Compiled);
+        // `\z`-style anchors, not `$`. In Python, PCRE, Perl and .NET `$` also
+        // matches BEFORE a final newline, so `api.token\n` was accepted here while the
+        // canonical port rejected it - and `envkey` then produced the key
+        // `API_TOKEN\n`, sending this port looking for a differently named file and
+        // variable than the others.
+        private static readonly Regex NamePart =
+            new Regex(@"\A[a-z0-9_]+\z", RegexOptions.Compiled);
 
         /// <summary>Is this a well-formed secret name?</summary>
         public static bool ValidName(object name)

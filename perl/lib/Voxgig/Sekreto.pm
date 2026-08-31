@@ -52,7 +52,12 @@ sub validname {
     return 0 if '' eq $name;
 
     for my $part ( split( /\./, $name, -1 ) ) {
-        return 0 if $part !~ /^[a-z0-9_]+$/;
+        # `\z`-style anchors, not `$`. In Python, PCRE, Perl and .NET `$` also
+        # matches BEFORE a final newline, so `api.token\n` was accepted here while the
+        # canonical port rejected it - and `envkey` then produced the key
+        # `API_TOKEN\n`, sending this port looking for a differently named file and
+        # variable than the others.
+        return 0 if $part !~ /\A[a-z0-9_]+\z/;
     }
 
     return 1;

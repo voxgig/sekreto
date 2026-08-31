@@ -27,7 +27,12 @@ class SekretoError extends \RuntimeException
 
 final class Name
 {
-    private const NAMEPART = '/^[a-z0-9_]+$/';
+    // `\z`-style anchors, not `$`. In Python, PCRE, Perl and .NET `$` also
+    // matches BEFORE a final newline, so `api.token\n` was accepted here while the
+    // canonical port rejected it - and `envkey` then produced the key
+    // `API_TOKEN\n`, sending this port looking for a differently named file and
+    // variable than the others.
+    private const NAMEPART = '/\A[a-z0-9_]+\z/';
 
     /** Is this a well-formed secret name? */
     public static function valid($name): bool

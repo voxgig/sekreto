@@ -1350,6 +1350,18 @@
           {
             "in": "a$b",
             "out": false
+          },
+          {
+            "in": "api.token\n",
+            "out": false
+          },
+          {
+            "in": "api\n.token",
+            "out": false
+          },
+          {
+            "in": "api.token\r",
+            "out": false
           }
         ]
       },
