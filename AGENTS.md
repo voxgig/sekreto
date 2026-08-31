@@ -38,7 +38,28 @@ ten stay one.
    JSON, HTTP, PEM and base64 — all of which this port carries rather than
    pulling in a crate.
 
-4. **Two ways to read, and they are not interchangeable.** `get` is
+4. **Core carries no platform dependency; providers are modules.**
+   `env` and `memory` live in the core because they import nothing. The
+   other eleven each live in their own module under `provider/` and
+   REGISTER THEMSELVES at import, so a kind nobody imports is not in the
+   build. `makeprovider` is a registry lookup, not a switch.
+
+   The rule that keeps it true: **nothing in the core may import the
+   full-set barrel.** `Sekreto.ts` importing `./Providers` for
+   `makeprovider` is exactly what made all thirteen kinds reachable
+   before — one edge, and every consumer carried AWS request signing.
+   Import `./provider/Registry`.
+
+   Deferring a builtin (`nodemod`) is not the same thing and does not
+   replace it: deferring stops the module being EVALUATED, while a
+   bundler still resolves a `require` it can see. Both are needed.
+
+   `typescript/test/lazyload.test.ts` pins it from both sides — the core
+   surface exposes no platform provider, and a provider still loads its
+   builtin when actually used. Design and the propagation order for the
+   other nine ports: [`docs/design/plugin-providers.md`](./docs/design/plugin-providers.md).
+
+5. **Two ways to read, and they are not interchangeable.** `get` is
    transparent — the chain answers and the caller never learns which store
    did. `getfrom` is directed — one named store answers, or nothing. Adding
    a method to one half means adding its twin to the other.
