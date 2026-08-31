@@ -1220,8 +1220,13 @@ impl Provider for AwsSecretsProvider {
                     Some(Json::Str(bin)) => bin.clone(),
                     _ => return Ok(None),
                 };
-                return Ok(http::unbase64(&bin)
-                    .map(|bytes| String::from_utf8_lossy(&bytes).to_string()));
+                // A payload that will not decode was reported as None -
+                // a MISS - so the chain carried on to a weaker store. A
+                // store that answered incoherently could not answer.
+                return match http::unbase64(&bin) {
+                    Some(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).to_string())),
+                    None => Err(SekretoError::new("sekreto: aws secretsmanager: undecodable secret".to_string())),
+                };
             }
         };
 
@@ -1402,7 +1407,12 @@ impl Provider for GcpSecretsProvider {
             _ => return Ok(None),
         };
 
-        Ok(http::unbase64(&data).map(|bytes| String::from_utf8_lossy(&bytes).to_string()))
+        // See the aws provider: an undecodable payload is an error, not a
+        // miss.
+        match http::unbase64(&data) {
+            Some(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).to_string())),
+            None => Err(SekretoError::new("sekreto: gcp: undecodable secret".to_string())),
+        }
     }
 
     fn describe(&self) -> String {

@@ -1162,7 +1162,13 @@ func (provider *AwsSecretsProvider) Lookup(name string) (string, bool, error) {
 		// `value` field can mean "the bytes themselves".
 		bin, is := dig(body, "SecretBinary").(string)
 		if is && "value" == ref.Field {
-			decoded, _ := base64.StdEncoding.DecodeString(bin)
+			// The error was discarded, so a corrupted payload decoded to
+			// whatever came before the bad byte and was returned as the
+			// secret. A store that answered incoherently is an error.
+			decoded, err := base64.StdEncoding.DecodeString(bin)
+			if nil != err {
+				return "", false, fail("sekreto: aws secretsmanager: undecodable secret")
+			}
 			return string(decoded), true, nil
 		}
 		return "", false, nil
@@ -1358,7 +1364,11 @@ func (provider *GcpSecretsProvider) Lookup(name string) (string, bool, error) {
 		return "", false, nil
 	}
 
-	decoded, _ := base64.StdEncoding.DecodeString(data)
+	// See the aws provider: an undecodable payload is an error, not a miss.
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if nil != err {
+		return "", false, fail("sekreto: gcp: undecodable secret")
+	}
 	return string(decoded), true, nil
 }
 

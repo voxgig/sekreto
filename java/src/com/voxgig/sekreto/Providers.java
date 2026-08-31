@@ -1088,7 +1088,15 @@ public final class Providers {
         // `value` field can mean "the bytes themselves".
         Object bin = dig(res.body, "SecretBinary");
         if (bin instanceof String && "value".equals(ref.get("field"))) {
-          return new String(Base64.getDecoder().decode((String) bin), StandardCharsets.UTF_8);
+          // decode() throws IllegalArgumentException on a bad payload,
+          // which is not a SekretoError and so escaped the library's own
+          // error type. A store that answered incoherently is an error.
+          try {
+            return new String(
+                Base64.getDecoder().decode((String) bin), StandardCharsets.UTF_8);
+          } catch (IllegalArgumentException err) {
+            throw new SekretoError("sekreto: aws secretsmanager: undecodable secret");
+          }
         }
         return null;
       }
@@ -1257,7 +1265,13 @@ public final class Providers {
         return null;
       }
 
-      return new String(Base64.getDecoder().decode((String) data), StandardCharsets.UTF_8);
+      // See the aws provider: an undecodable payload is a SekretoError.
+      try {
+        return new String(
+            Base64.getDecoder().decode((String) data), StandardCharsets.UTF_8);
+      } catch (IllegalArgumentException err) {
+        throw new SekretoError("sekreto: gcp: undecodable secret");
+      }
     }
 
     @Override

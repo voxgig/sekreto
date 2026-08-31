@@ -1051,7 +1051,15 @@ object Providers {
                 // conventional `value` field can mean "the bytes themselves".
                 val bin = res.body?.dig("SecretBinary")?.asstr
                 if (null != bin && "value" == ref.field) {
-                    return String(Base64.getDecoder().decode(bin), StandardCharsets.UTF_8)
+                    // decode() throws IllegalArgumentException on a bad
+                    // payload, which is not a SekretoError and so escaped
+                    // the library's own error type. A store that answered
+                    // incoherently is an error.
+                    return try {
+                        String(Base64.getDecoder().decode(bin), StandardCharsets.UTF_8)
+                    } catch (err: IllegalArgumentException) {
+                        throw SekretoError("sekreto: aws secretsmanager: undecodable secret")
+                    }
                 }
                 return null
             }
@@ -1195,7 +1203,12 @@ object Providers {
 
             val data = res.body?.dig("payload", "data")?.asstr ?: return null
 
-            return String(Base64.getDecoder().decode(data), StandardCharsets.UTF_8)
+            // See the aws provider: an undecodable payload is a SekretoError.
+            return try {
+                String(Base64.getDecoder().decode(data), StandardCharsets.UTF_8)
+            } catch (err: IllegalArgumentException) {
+                throw SekretoError("sekreto: gcp: undecodable secret")
+            }
         }
 
         override fun describe(): String = "gcpsecrets:${project ?: ""}"

@@ -1008,7 +1008,16 @@ class AwsSecretsProvider implements Provider
             // `value` field can mean "the bytes themselves".
             $bin = $body['SecretBinary'] ?? null;
             if (is_string($bin) && 'value' === $ref['field']) {
-                return base64_decode($bin);
+                // strict: base64_decode SKIPS characters outside the
+                // alphabet by default, so a corrupted payload decoded to
+                // plausible-looking bytes that were then returned as the
+                // secret. A store that answered incoherently is an error.
+                $decoded = base64_decode($bin, true);
+                if (false === $decoded) {
+                    throw new SekretoError('sekreto: aws secretsmanager: undecodable secret');
+                }
+
+                return $decoded;
             }
             return null;
         }
@@ -1166,7 +1175,14 @@ class GcpSecretsProvider implements Provider
             return null;
         }
 
-        return base64_decode($data);
+        // See the aws provider: strict, and an undecodable payload is an
+        // error rather than a miss.
+        $decoded = base64_decode($data, true);
+        if (false === $decoded) {
+            throw new SekretoError('sekreto: gcp: undecodable secret');
+        }
+
+        return $decoded;
     }
 
     public function describe(): string

@@ -790,7 +790,15 @@ class AwssecretsProvider(Provider):
             # `value` field can mean "the bytes themselves".
             binary = (body or {}).get('SecretBinary')
             if isinstance(binary, str) and 'value' == ref['field']:
-                return base64.b64decode(binary).decode('utf8')
+                # validate=True: b64decode silently SKIPS characters
+                # outside the alphabet, so a corrupted payload decoded to
+                # plausible-looking bytes that were then returned as the
+                # secret. A store that answered incoherently is an error,
+                # never a miss.
+                try:
+                    return base64.b64decode(binary, validate=True).decode('utf8')
+                except Exception:
+                    raise SekretoError('sekreto: aws secretsmanager: undecodable secret')
             return None
 
         try:
@@ -914,7 +922,12 @@ class GcpsecretsProvider(Provider):
         if not isinstance(data, str):
             return None
 
-        return base64.b64decode(data).decode('utf8')
+        # See the aws provider: validate=True, and an undecodable payload
+        # is an error rather than a miss.
+        try:
+            return base64.b64decode(data, validate=True).decode('utf8')
+        except Exception:
+            raise SekretoError('sekreto: gcp: undecodable secret')
 
     def describe(self):
         return 'gcpsecrets:' + (self.opts.get('project') or '')

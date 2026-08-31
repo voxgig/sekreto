@@ -1193,7 +1193,11 @@ pub const AwsSecretsProvider = struct {
             if (!std.mem.eql(u8, "value", ref.field)) {
                 return .{ .ok = null };
             }
-            return .{ .ok = try unbase64(alloc, binary) };
+            // A payload that will not decode was reported as null - a
+            // MISS - so the chain carried on to a weaker store. A store
+            // that answered incoherently could not answer.
+            return .{ .ok = try unbase64(alloc, binary) orelse
+                return .{ .err = try sekreto.fail(alloc, "sekreto: aws secretsmanager: undecodable secret", .{}) } };
         };
 
         const parsed = std.json.parseFromSlice(std.json.Value, alloc, text, .{}) catch {
@@ -1385,7 +1389,10 @@ pub const GcpSecretsProvider = struct {
         const data = http.jstr(http.jget(http.jget(res.body, "payload"), "data")) orelse
             return .{ .ok = null };
 
-        return .{ .ok = try unbase64(alloc, data) };
+        // See the aws provider: an undecodable payload is an error, not a
+        // miss.
+        return .{ .ok = try unbase64(alloc, data) orelse
+            return .{ .err = try sekreto.fail(alloc, "sekreto: gcp: undecodable secret", .{}) } };
     }
 
     pub fn describe(self: *GcpSecretsProvider, alloc: Allocator) Allocator.Error![]const u8 {

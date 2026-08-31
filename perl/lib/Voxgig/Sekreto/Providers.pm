@@ -204,6 +204,23 @@ sub urlenc { return Voxgig::Sekreto::Sigv4::uriescape(@_) }
     }
 }
 
+# Decode standard base64, or undef when the text is not base64.
+#
+# MIME::Base64::decode_base64 SKIPS characters outside the alphabet, so a
+# corrupted payload decoded to plausible-looking bytes that the caller then
+# returned AS THE SECRET. The alphabet is checked first, so a store that
+# answered incoherently can be told apart from one that answered.
+sub unbase64 {
+    my ($text) = @_;
+
+    ( my $trimmed = $text ) =~ s/\s+//g;
+
+    return undef if $trimmed !~ m{\A[A-Za-z0-9+/]*={0,2}\z};
+    return undef if 0 != length($trimmed) % 4;
+
+    return MIME::Base64::decode_base64($trimmed);
+}
+
 # One JSON round-trip, returning (status, decoded-json-or-undef). A 404 is
 # a normal answer here, not a failure: it means the store has no such
 # secret. Network failure is always an error - an unreachable store is a
@@ -970,8 +987,16 @@ sub awsmiss {
             # A binary secret has no fields to address; only the conventional
             # `value` field can mean "the bytes themselves".
             my $bin = 'HASH' eq ref( $body || '' ) ? $body->{SecretBinary} : undef;
-            return MIME::Base64::decode_base64($bin)
-              if defined $bin && !ref($bin) && 'value' eq $ref->{field};
+            if ( defined $bin && !ref($bin) && 'value' eq $ref->{field} ) {
+                my $decoded = Voxgig::Sekreto::Providers::unbase64($bin);
+
+                # A store that answered incoherently could not answer.
+                Voxgig::Sekreto::Providers::fail(
+                    'sekreto: aws secretsmanager: undecodable secret')
+                  if !defined $decoded;
+
+                return $decoded;
+            }
             return undef;
         }
 
@@ -1131,7 +1156,14 @@ sub awsmiss {
 
         return undef if !defined $data || ref($data);
 
-        return MIME::Base64::decode_base64($data);
+        # See the aws provider: an undecodable payload is an error, not a
+        # miss.
+        my $decoded = Voxgig::Sekreto::Providers::unbase64($data);
+
+        Voxgig::Sekreto::Providers::fail('sekreto: gcp: undecodable secret')
+          if !defined $decoded;
+
+        return $decoded;
     }
 
     sub describe {

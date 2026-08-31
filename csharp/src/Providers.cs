@@ -1226,7 +1226,18 @@ namespace Voxgig.Sekreto
                 object bin = (body as Dictionary<string, object>)?.GetValueOrDefault("SecretBinary");
                 if (bin is string encoded && "value" == field)
                 {
-                    return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+                    // FromBase64String throws FormatException on a bad
+                    // payload, which is not a SekretoError and so escaped
+                    // the library's own error type. A store that answered
+                    // incoherently is an error.
+                    try
+                    {
+                        return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+                    }
+                    catch (FormatException)
+                    {
+                        throw new SekretoError("sekreto: aws secretsmanager: undecodable secret");
+                    }
                 }
                 return null;
             }
@@ -1425,7 +1436,15 @@ namespace Voxgig.Sekreto
                 return null;
             }
 
-            return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+            // See the aws provider: an undecodable payload is a SekretoError.
+            try
+            {
+                return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+            }
+            catch (FormatException)
+            {
+                throw new SekretoError("sekreto: gcp: undecodable secret");
+            }
         }
 
         public string Describe()

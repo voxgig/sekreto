@@ -375,6 +375,26 @@ export function checkaddr(addr: string): void {
   )
 }
 
+/** Decode standard base64, or undefined when the text is not base64.
+ *
+ * `Buffer.from(text, 'base64')` is lenient: it skips anything outside the
+ * alphabet and hands back whatever it managed, so a corrupted payload
+ * became a plausible-looking string of bytes that the caller then returned
+ * AS THE SECRET. The alphabet is checked first so that a store which
+ * answered incoherently can be told apart from one that answered.
+ *
+ * A store that could not answer coherently is an ERROR, never a miss - the
+ * same rule this file already applies to a 200 whose body is not JSON. */
+export function unbase64(text: string): string | undefined {
+  const trimmed = text.replace(/\s+/g, '')
+
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(trimmed) || 0 !== trimmed.length % 4) {
+    return undefined
+  }
+
+  return Buffer.from(trimmed, 'base64').toString('utf8')
+}
+
 /** How long any single vault round-trip may take before it is treated as
  * unreachable. Ports carry the same bound. */
 const HTTP_TIMEOUT_MS = 10000
@@ -915,7 +935,11 @@ export function awssecretsprovider(options?: Awsopts): Provider {
         // `value` field can mean "the bytes themselves".
         const bin = res.body && res.body.SecretBinary
         if ('string' === typeof bin && 'value' === ref.field) {
-          return Buffer.from(bin, 'base64').toString('utf8')
+          const decoded = unbase64(bin)
+          if (undefined === decoded) {
+            throw new SekretoError('sekreto: aws secretsmanager: undecodable secret')
+          }
+          return decoded
         }
         return undefined
       }
@@ -1063,7 +1087,12 @@ export function gcpsecretsprovider(options?: {
         return undefined
       }
 
-      return Buffer.from(data, 'base64').toString('utf8')
+      const decoded = unbase64(data)
+      if (undefined === decoded) {
+        throw new SekretoError('sekreto: gcp: undecodable secret')
+      }
+
+      return decoded
     },
     describe: () => 'gcpsecrets:' + (opts.project || ''),
   }

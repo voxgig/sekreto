@@ -715,7 +715,19 @@ module VoxgigSekreto
         # A binary secret has no fields to address; only the conventional
         # `value` field can mean "the bytes themselves".
         bin = body.is_a?(Hash) ? body['SecretBinary'] : nil
-        return bin.unpack1('m').force_encoding('UTF-8') if bin.is_a?(String) && 'value' == ref['field']
+        if bin.is_a?(String) && 'value' == ref['field']
+          # 'm' skips characters outside the alphabet, so a corrupted
+          # payload decoded to plausible-looking bytes that were then
+          # returned as the secret. 'm0' is strict. A store that answered
+          # incoherently is an error, never a miss.
+          decoded = begin
+            bin.unpack1('m0')
+          rescue ArgumentError
+            raise SekretoError, 'sekreto: aws secretsmanager: undecodable secret'
+          end
+
+          return decoded.force_encoding('UTF-8')
+        end
 
         return nil
       end
@@ -840,7 +852,15 @@ module VoxgigSekreto
       data = body.is_a?(Hash) && body['payload'].is_a?(Hash) ? body['payload']['data'] : nil
       return nil unless data.is_a?(String)
 
-      data.unpack1('m').force_encoding('UTF-8')
+      # See the aws provider: strict, and an undecodable payload is an
+      # error rather than a miss.
+      decoded = begin
+        data.unpack1('m0')
+      rescue ArgumentError
+        raise SekretoError, 'sekreto: gcp: undecodable secret'
+      end
+
+      decoded.force_encoding('UTF-8')
     end
 
     def describe
