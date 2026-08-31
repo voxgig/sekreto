@@ -1,6 +1,6 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
-import { ProviderSpec, Provider, SekretoError, flatname, nodemod } from './support'
+import { ProviderSpec, Provider, SekretoError, flatname, nodemod, unbase64 } from './support'
 import { checkaddr } from './addr'
 import { fetchjson } from './http'
 
@@ -85,7 +85,12 @@ export function gcpsecretsprovider(options?: {
         return undefined
       }
 
-      return Buffer.from(data, 'base64').toString('utf8')
+      const decoded = unbase64(data)
+      if (undefined === decoded) {
+        throw new SekretoError('sekreto: gcp: undecodable secret')
+      }
+
+      return decoded
     },
     describe: () => 'gcpsecrets:' + (opts.project || ''),
   }

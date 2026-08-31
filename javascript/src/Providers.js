@@ -116,6 +116,33 @@ function fileprovider(dir, prefix) {
   }
 }
 
+/** An address with any userinfo replaced by `[redacted]`, for messages.
+ *
+ * Every refusal below names the address it refused, and one of them fires
+ * precisely because the address carries a credential - so printing it
+ * verbatim wrote the password to stderr and into the logs. It cannot be
+ * cleaned up afterwards either: that password was never resolved as a
+ * secret, so `redact()` has never seen it and never will. The host is what
+ * a reader needs to identify which chain entry is at fault; the userinfo
+ * is not. */
+function safeaddr(addr) {
+  const mark = addr.indexOf('://')
+  if (-1 === mark) {
+    return addr
+  }
+
+  const rest = addr.slice(mark + 3)
+  const end = rest.search(/[/?#]/)
+  const authority = -1 === end ? rest : rest.slice(0, end)
+
+  const at = authority.lastIndexOf('@')
+  if (-1 === at) {
+    return addr
+  }
+
+  return addr.slice(0, mark + 3) + '[redacted]' + addr.slice(mark + 3 + at)
+}
+
 /** Refuse to send a secret-bearing credential in the clear.
  *
  * A vault API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -123,40 +150,163 @@ function fileprovider(dir, prefix) {
  * machine puts both the token and the secret it fetches on the wire for
  * anyone on the path, so sekreto will not do it. Loopback stays allowed:
  * that is `vault server -dev`, `boru vault serve`, and this repo's own
- * test harness. */
+ * test harness.
+ *
+ * The address is read by hand, in the same handful of steps in every
+ * port, rather than by each platform's URL parser. That is deliberate.
+ * Twelve parsers disagree about malformed input - where userinfo ends,
+ * whether `0177.0.0.1` is loopback, what an unclosed bracket means - and
+ * a check that answers differently in different ports is not a check.
+ *
+ * The rule this parse obeys, and the reason it can be trusted: it is
+ * never more permissive than the HTTP client that will dial the address.
+ * It ends the authority at `/`, `?` or `#` only, so a client that also
+ * breaks on `\` (WHATWG does) can only ever see a SHORTER host than this
+ * does. It refuses userinfo outright rather than locating its end. It
+ * compares the host literally, so a numeric form no parser here agrees
+ * on is refused rather than guessed at. */
 function checkaddr(addr) {
-  if (addr.startsWith('https://')) {
+  const scheme = addr.startsWith('https://')
+    ? 'https://'
+    : addr.startsWith('http://')
+      ? 'http://'
+      : ''
+
+  if ('' === scheme) {
+    throw new SekretoError('sekreto: not an http(s) address: ' + safeaddr(addr))
+  }
+
+  const rest = addr.slice(scheme.length)
+  const end = rest.search(/[/?#]/)
+  const authority = -1 === end ? rest : rest.slice(0, end)
+
+  // Userinfo is refused outright rather than parsed around, and on https
+  // as well as http. No store this library speaks authenticates by
+  // userinfo - they take a token or a signature - so an address carrying
+  // one is a mistake at best. At worst it is the attack this whole
+  // function exists to stop: `http://localhost:8200@evil.example.com/` is
+  // a request to evil.example.com that reads, to anything that splits the
+  // authority on ':', as loopback.
+  if (authority.includes('@')) {
+    throw new SekretoError(
+      'sekreto: refusing an address with embedded credentials: ' + safeaddr(addr),
+    )
+  }
+
+  // An opening bracket with no closing one is not an address at all.
+  if (authority.startsWith('[') && !authority.includes(']')) {
+    throw new SekretoError('sekreto: not a valid http(s) address: ' + safeaddr(addr))
+  }
+
+  if ('https://' === scheme) {
     return
   }
 
-  if (!addr.startsWith('http://')) {
-    throw new SekretoError('sekreto: not an http(s) address: ' + addr)
-  }
-
-  const host = addr.slice('http://'.length).split('/')[0].split(':')[0]
+  // A bracketed IPv6 literal keeps its brackets. Splitting the authority
+  // on the first colon yields '[', so `http://[::1]:8200` could never
+  // match - which made the '[::1]' entry below unreachable, and refused a
+  // legitimate local vault.
+  const host = (
+    authority.startsWith('[')
+      ? authority.slice(0, authority.indexOf(']') + 1)
+      : authority.split(':')[0]
+  ).toLowerCase()
 
   if ('localhost' === host || '127.0.0.1' === host || '::1' === host || '[::1]' === host) {
     return
   }
 
   throw new SekretoError(
-    'sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)',
+    'sekreto: refusing to send a token in plaintext to ' + safeaddr(addr) + ' (use https)',
   )
 }
 
 /** One JSON round-trip. Network failure is always an error - an
  * unreachable store is a store that could not answer. */
+/** How long any single vault round-trip may take before it is treated as
+ * unreachable. Ports carry the same bound. */
+/** Decode standard base64, or undefined when the text is not base64.
+ *
+ * `Buffer.from(text, 'base64')` is lenient: it skips anything outside the
+ * alphabet and hands back whatever it managed, so a corrupted payload
+ * became a plausible-looking string of bytes that the caller then returned
+ * AS THE SECRET. The alphabet is checked first, so a store that answered
+ * incoherently can be told apart from one that answered.
+ *
+ * A store that could not answer coherently is an ERROR, never a miss - the
+ * same rule this file already applies to a 200 whose body is not JSON. */
+function unbase64(text) {
+  const trimmed = text.replace(/\s+/g, '')
+
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(trimmed) || 0 !== trimmed.length % 4) {
+    return undefined
+  }
+
+  return Buffer.from(trimmed, 'base64').toString('utf8')
+}
+
+const HTTP_TIMEOUT_MS = 10000
+
+/**
+ * How much of a response body will be read before the store is treated as
+ * having answered incoherently. Ports carry the same bound.
+ *
+ * Far above anything real - the largest legitimate payload this library
+ * fetches is Doppler's whole-config download, measured in kilobytes. A bound
+ * is needed because the TIMEOUT is not one: ten seconds on a loopback or
+ * datacentre link is gigabytes, and the body is accumulated in memory before
+ * it is parsed. This runs on an application's startup path, so the failure is
+ * the application never starting.
+ */
+const HTTP_MAXBODY = 8 * 1024 * 1024
+
 async function fetchjson(method, url, headers, body) {
   let res
   try {
-    res = await fetch(url, { method, headers, body })
+    res = await fetch(url, {
+      method,
+      headers,
+      body,
+      // A vault API never legitimately redirects, and a followed redirect
+      // carries X-Vault-Token to the redirect's host (and can downgrade
+      // https to http), which checkaddr - it only validates the configured
+      // address - cannot see. Refuse to follow one.
+      redirect: 'error',
+      // Bound the wait so an accepted-but-silent endpoint cannot hang the
+      // caller (and the app's startup) forever.
+      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    })
   } catch (err) {
+    throw new SekretoError('sekreto: cannot reach ' + url.split('?')[0] + ': ' + err.message)
+  }
+
+  // Read in chunks against HTTP_MAXBODY rather than `res.json()`, which
+  // buffers whatever arrives. Over the bound the store has failed: an
+  // endless body is a store that could not answer, and returning a miss
+  // there would fall through to a weaker store on an attacker's cue.
+  let text = ''
+  try {
+    const decoder = new TextDecoder()
+    let size = 0
+
+    for await (const chunk of res.body ?? []) {
+      size += chunk.length
+      if (HTTP_MAXBODY < size) {
+        throw new SekretoError('sekreto: oversized response from ' + url.split('?')[0])
+      }
+      text += decoder.decode(chunk, { stream: true })
+    }
+    text += decoder.decode()
+  } catch (err) {
+    if (err instanceof SekretoError) {
+      throw err
+    }
     throw new SekretoError('sekreto: cannot reach ' + url.split('?')[0] + ': ' + err.message)
   }
 
   let parsed = undefined
   try {
-    parsed = await res.json()
+    parsed = JSON.parse(text)
   } catch (err) {
     // A success status promised JSON; a body that does not parse means
     // the store could not answer coherently, and treating it as a miss
@@ -385,6 +535,86 @@ function borumiss(why) {
   return /no alias named/.test(why)
 }
 
+/** SecretSpec (https://secretspec.dev).
+ *
+ * SecretSpec is a declaration - a `secretspec.toml` naming the secrets a
+ * project needs - plus a chain of its own backends to satisfy them from.
+ * That makes it the same shape as sekreto one level down, and the reason
+ * to support it is the same reason sekreto exists: a project that has
+ * already declared its secrets there should not have to declare them
+ * again here.
+ *
+ * Read through its CLI, as boru is, because that is the interface it
+ * offers a program in another language: `secretspec get API_TOKEN`
+ * prints the value on stdout and nothing else. A sekreto name maps to a
+ * SecretSpec key exactly as it maps to an environment variable -
+ * `api.token` is `API_TOKEN`.
+ *
+ * `backend` selects one of SecretSpec's backends (`--provider`, e.g.
+ * `keyring` or `dotenv://.env`) and is called `backend` here only
+ * because `provider` already means something else in this library.
+ *
+ * A reason is required, not optional: SecretSpec records every read in
+ * an audit log and refuses to read at all without one. */
+function secretspecprovider(options) {
+  const opts = options || {}
+  const command = opts.command || 'secretspec'
+
+  return {
+    lookup: (name) => {
+      const key = envkey(name, opts.prefix)
+
+      const args = []
+      if (opts.file) {
+        args.push('--file', opts.file)
+      }
+      args.push('get', key)
+      if (opts.backend) {
+        args.push('--provider', opts.backend)
+      }
+      if (opts.profile) {
+        args.push('--profile', opts.profile)
+      }
+      args.push('--reason', opts.reason || 'sekreto')
+
+      const run = spawnSync(command, args, { encoding: 'utf8' })
+
+      if (run.error) {
+        throw new SekretoError('sekreto: cannot run ' + command + ': ' + run.error.message)
+      }
+
+      if (0 === run.status) {
+        // The value and one newline, and nothing else.
+        return run.stdout.replace(/\n$/, '')
+      }
+
+      const why = (run.stderr || '').trim()
+
+      if (secretspecmiss(why, key)) {
+        return undefined
+      }
+
+      throw new SekretoError('sekreto: secretspec error: ' + (why || 'exit ' + run.status))
+    },
+    describe: () => 'secretspec' + (opts.backend ? ':' + opts.backend : ''),
+  }
+}
+
+/** Does this SecretSpec failure mean "no such secret" rather than "I
+ * could not answer"?
+ *
+ * SecretSpec says `Secret 'API_TOKEN' not found` for both a name it does
+ * not declare and one declared with no value, and both are misses.
+ *
+ * MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
+ * `Provider backend 'keyring' not found`, which is a store that could
+ * not answer at all - and reading that as a miss is the worst failure
+ * this library has, because the chain then falls through to a weaker
+ * store without saying so. */
+function secretspecmiss(why, key) {
+  return why.includes("Secret '" + key + "' not found")
+}
+
 /** The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now. */
 function awsnow() {
   return new Date()
@@ -490,7 +720,11 @@ function awssecretsprovider(options) {
         // `value` field can mean "the bytes themselves".
         const bin = res.body && res.body.SecretBinary
         if ('string' === typeof bin && 'value' === ref.field) {
-          return Buffer.from(bin, 'base64').toString('utf8')
+          const decoded = unbase64(bin)
+          if (undefined === decoded) {
+            throw new SekretoError('sekreto: aws secretsmanager: undecodable secret')
+          }
+          return decoded
         }
         return undefined
       }
@@ -633,7 +867,12 @@ function gcpsecretsprovider(options) {
         return undefined
       }
 
-      return Buffer.from(data, 'base64').toString('utf8')
+      const decoded = unbase64(data)
+      if (undefined === decoded) {
+        throw new SekretoError('sekreto: gcp: undecodable secret')
+      }
+
+      return decoded
     },
     describe: () => 'gcpsecrets:' + (opts.project || ''),
   }
@@ -1030,6 +1269,15 @@ function makeprovider(spec) {
       return dopplerprovider(spec)
     case 'infisical':
       return infisicalprovider(spec)
+    case 'secretspec':
+      return secretspecprovider({
+        command: spec.command,
+        file: spec.file,
+        profile: spec.profile,
+        backend: spec.backend,
+        reason: spec.reason,
+        prefix: spec.prefix,
+      })
     default:
       throw new SekretoError('sekreto: unknown provider kind: ' + String(spec.kind))
   }
@@ -1051,4 +1299,5 @@ module.exports = {
   makeprovider,
   memoryprovider,
   onepasswordprovider,
+  secretspecprovider,
 }

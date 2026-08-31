@@ -13,7 +13,9 @@ package sekreto
 
 import (
 	"regexp"
+	"sort"
 	"strings"
+	"sync"
 )
 
 // SekretoError is anything sekreto refuses to do: a bad name, a missing
@@ -208,10 +210,19 @@ func unescape(text string) string {
 func Redact(text string, values []string) string {
 	out := text
 
+	// A copy: `values` belongs to the caller (it is `seen` when called
+	// through Sekreto.Redact), and sorting in place would reorder it.
+	usable := []string{}
 	for _, value := range values {
-		if 4 > len(value) {
-			continue
+		if 4 <= len(value) {
+			usable = append(usable, value)
 		}
+	}
+	sort.SliceStable(usable, func(left, right int) bool {
+		return len(usable[left]) > len(usable[right])
+	})
+
+	for _, value := range usable {
 		out = strings.Join(strings.Split(out, value), "[redacted]")
 	}
 
@@ -258,7 +269,14 @@ func StoreName(provider Provider) string {
 type Sekreto struct {
 	entries []entry
 	docache bool
-	cache   []cached
+	// Guards cache and seen. Four PROVIDERS were given a mutex for
+	// concurrent resolution; the facade holding the results was not, so two
+	// goroutines appending to seen from the same length silently dropped one
+	// - and a value missing from seen is a value Redact hands straight back
+	// into the log. Held only around the slices, never across a provider
+	// Lookup, so lookups stay concurrent.
+	mu    sync.Mutex
+	cache []cached
 	// Every value ever resolved, for Redact. Kept independently of the
 	// read cache so that redaction still works when caching is off -
 	// otherwise NoCache would silently disable Redact and leak secrets
@@ -360,24 +378,35 @@ func (sek *Sekreto) resolve(store string, name string, entries []entry) (string,
 	}
 
 	if sek.docache {
+		sek.mu.Lock()
 		for _, hit := range sek.cache {
 			if hit.store == store && hit.name == name {
-				return hit.value, true, nil
+				value := hit.value
+				sek.mu.Unlock()
+				return value, true, nil
 			}
 		}
+		sek.mu.Unlock()
 	}
 
 	for _, one := range entries {
+		// Deliberately not under the lock: a provider Lookup is a network
+		// round-trip, and serialising those would turn a chain resolved from
+		// several goroutines into a queue. Two goroutines can therefore both
+		// miss the cache and both fetch, which costs a duplicate read and is
+		// otherwise harmless - the store is being asked the same question.
 		found, has, err := one.provider.Lookup(name)
 		if nil != err {
 			return "", false, err
 		}
 
 		if has {
+			sek.mu.Lock()
 			if sek.docache {
 				sek.cache = append(sek.cache, cached{store: store, name: name, value: found})
 			}
 			sek.seen = append(sek.seen, found)
+			sek.mu.Unlock()
 			return found, true, nil
 		}
 	}
@@ -425,6 +454,20 @@ func (sek *Sekreto) Sources() []string {
 
 // Stores names each store that can be named by GetFrom, in resolution order
 // and without repeats.
+// String is what a Sekreto shows of itself when something prints it.
+//
+// fmt reflects into unexported fields, so %v and %+v reach cache and seen,
+// which between them hold every value this chain has ever resolved - one
+// ordinary log line writes every secret out. GoString covers %#v the same
+// way. Neither reaches a value.
+func (sek *Sekreto) String() string {
+	return "Sekreto{stores: [" + strings.Join(sek.Stores(), " ") + "]}"
+}
+
+func (sek *Sekreto) GoString() string {
+	return sek.String()
+}
+
 func (sek *Sekreto) Stores() []string {
 	out := []string{}
 
@@ -449,10 +492,17 @@ func (sek *Sekreto) Stores() []string {
 // Works whether or not caching is enabled: the redaction list is kept
 // independently of the read cache.
 func (sek *Sekreto) Redact(text string) string {
-	return Redact(text, sek.seen)
+	sek.mu.Lock()
+	seen := make([]string, len(sek.seen))
+	copy(seen, sek.seen)
+	sek.mu.Unlock()
+
+	return Redact(text, seen)
 }
 
 // Refresh drops cached values, so the next Get asks the providers again.
 func (sek *Sekreto) Refresh() {
+	sek.mu.Lock()
 	sek.cache = nil
+	sek.mu.Unlock()
 }

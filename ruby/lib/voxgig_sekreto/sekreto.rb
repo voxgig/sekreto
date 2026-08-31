@@ -149,10 +149,12 @@ module VoxgigSekreto
   def redact(text, values)
     out = text.is_a?(String) ? text : ''
 
-    (values || []).each do |value|
-      next unless value.is_a?(String)
-      next if 4 > value.length
+    usable = (values || []).select { |value| value.is_a?(String) && 4 <= value.length }
 
+    # sort_by returns a new array: `values` belongs to the caller (it is
+    # @seen when called through Sekreto#redact), and sorting in place
+    # would reorder it.
+    usable.sort_by { |value| -value.length }.each do |value|
       out = out.split(value, -1).join('[redacted]')
     end
 
@@ -262,6 +264,17 @@ module VoxgigSekreto
 
     # The name of each store that can be named by `getfrom`, in resolution
     # order and without repeats.
+    # What a Sekreto shows of itself when something prints it.
+    #
+    # `p sekreto` and `sekreto.inspect` reach @cache and @seen, which
+    # between them hold every value this chain has ever resolved - so one
+    # ordinary logging call writes every secret out. `inspect` is also
+    # what Rails error pages and most exception reporters call on locals,
+    # so this leaks on the path where a process is already in trouble.
+    def inspect
+      "#<VoxgigSekreto::Sekreto stores=[#{stores.join(', ')}]>"
+    end
+
     def stores
       @entries.map { |store, _provider| store }.uniq
     end

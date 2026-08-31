@@ -27,7 +27,12 @@ class SekretoError extends \RuntimeException
 
 final class Name
 {
-    private const NAMEPART = '/^[a-z0-9_]+$/';
+    // `\z`-style anchors, not `$`. In Python, PCRE, Perl and .NET `$` also
+    // matches BEFORE a final newline, so `api.token\n` was accepted here while the
+    // canonical port rejected it - and `envkey` then produced the key
+    // `API_TOKEN\n`, sending this port looking for a differently named file and
+    // variable than the others.
+    private const NAMEPART = '/\A[a-z0-9_]+\z/';
 
     /** Is this a well-formed secret name? */
     public static function valid($name): bool
@@ -213,10 +218,19 @@ function redact($text, $values): string
 {
     $out = is_string($text) ? $text : '';
 
+    $usable = [];
     foreach ($values ?? [] as $value) {
-        if (!is_string($value) || 4 > strlen($value)) {
-            continue;
+        if (is_string($value) && 4 <= strlen($value)) {
+            $usable[] = $value;
         }
+    }
+
+    // Longest first: a shorter secret that prefixes a longer one used to eat
+    // the prefix and leave the rest in the log. $usable is our own array, so
+    // sorting it does not reorder the caller's.
+    usort($usable, fn ($left, $right) => strlen($right) <=> strlen($left));
+
+    foreach ($usable as $value) {
         $out = implode('[redacted]', explode($value, $out));
     }
 
@@ -410,6 +424,21 @@ class Sekreto
      *
      * @return array<int, string>
      */
+    /**
+     * What a Sekreto shows of itself when something prints it.
+     *
+     * `var_dump`, `print_r` and `var_export` all reach private properties,
+     * and $cache and $seen between them hold every value this chain has
+     * ever resolved - so one ordinary debugging call writes every secret
+     * out.
+     *
+     * @return array<string, mixed>
+     */
+    public function __debugInfo(): array
+    {
+        return ['stores' => $this->stores()];
+    }
+
     public function stores(): array
     {
         $out = [];

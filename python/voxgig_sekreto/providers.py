@@ -151,6 +151,17 @@ class FileProvider(Provider):
 
 _HTTP_TIMEOUT = 10  # seconds; the same bound every port carries
 
+# How much of a response body will be read before the store is treated as
+# having answered incoherently. Ports carry the same bound.
+#
+# Far above anything real - the largest legitimate payload this library
+# fetches is Doppler's whole-config download, measured in kilobytes. A bound
+# is needed because the TIMEOUT is not one: ten seconds on a loopback or
+# datacentre link is gigabytes, and the body is accumulated in memory before
+# it is parsed. This runs on an application's startup path, so the failure is
+# the application never starting.
+_HTTP_MAXBODY = 8 * 1024 * 1024
+
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     """A redirect handler that refuses to follow: a vault API never
@@ -161,7 +172,15 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_opener = urllib.request.build_opener(_NoRedirect)
+# A secrets client dials the address it was configured with and nowhere
+# else. urllib installs a ProxyHandler from the environment by default, and
+# its proxy resolution does NOT exempt loopback - so with http_proxy set,
+# `X-Vault-Token` for a local dev vault went, in the clear, to whatever that
+# variable named. checkaddr permits plaintext to loopback precisely because
+# nothing leaves the machine; an environment variable it cannot see must not
+# be able to make that false. An empty ProxyHandler turns the whole
+# mechanism off.
+_opener = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
 
 
 def _fetchjson(method, url, headers, body=None):
@@ -181,14 +200,23 @@ def _fetchjson(method, url, headers, body=None):
         # as an HTTPError below and is treated as a store error.
         with _opener.open(request, timeout=_HTTP_TIMEOUT) as response:
             status = response.status
-            text = response.read().decode('utf8')
+            raw = response.read(_HTTP_MAXBODY + 1)
     except urllib.error.HTTPError as err:
         status = err.code
-        text = err.read().decode('utf8')
+        raw = err.read(_HTTP_MAXBODY + 1)
     except urllib.error.URLError as err:
         raise SekretoError(
             'sekreto: cannot reach ' + url.split('?')[0] + ': ' + str(err.reason)
         )
+
+    # One byte over the bound is enough to know it was exceeded. An endless
+    # body is a store that could not answer, so this raises rather than
+    # returning a miss - the latter would fall through to a weaker store on
+    # an attacker's cue.
+    if _HTTP_MAXBODY < len(raw):
+        raise SekretoError('sekreto: oversized response from ' + url.split('?')[0])
+
+    text = raw.decode('utf8', 'replace')
 
     try:
         return status, json.loads(text)
@@ -219,6 +247,36 @@ def _tonumber(value):
         return 0
 
 
+def safeaddr(addr):
+    """An address with any userinfo replaced by `[redacted]`, for messages.
+
+    Every refusal below names the address it refused, and one of them fires
+    precisely because the address carries a credential - so printing it
+    verbatim wrote the password to stderr and into the logs. It cannot be
+    cleaned up afterwards either: that password was never resolved as a
+    secret, so `redact` has never seen it and never will. The host is what a
+    reader needs to identify which chain entry is at fault; the userinfo is
+    not.
+    """
+    mark = addr.find('://')
+    if -1 == mark:
+        return addr
+
+    rest = addr[mark + 3:]
+    end = len(rest)
+    for ch in ('/', '?', '#'):
+        at = rest.find(ch)
+        if -1 != at and at < end:
+            end = at
+    authority = rest[:end]
+
+    at = authority.rfind('@')
+    if -1 == at:
+        return addr
+
+    return addr[:mark + 3] + '[redacted]' + addr[mark + 3 + at:]
+
+
 def checkaddr(addr):
     """Refuse to send a Vault token in the clear.
 
@@ -227,20 +285,70 @@ def checkaddr(addr):
     machine puts both the token and the secret it fetches on the wire for
     anyone on the path, so sekreto will not do it. Loopback stays allowed:
     that is `vault server -dev` and this repo's own test harness.
+
+    The address is read by hand, in the same handful of steps in every port,
+    rather than by each platform's URL parser. That is deliberate. Twelve
+    parsers disagree about malformed input - where userinfo ends, whether
+    `0177.0.0.1` is loopback, what an unclosed bracket means - and a check
+    that answers differently in different ports is not a check.
+
+    The rule this parse obeys, and the reason it can be trusted: it is never
+    more permissive than the HTTP client that will dial the address. It ends
+    the authority at `/`, `?` or `#` only, so a client that also breaks on
+    `\\` (WHATWG does) can only ever see a SHORTER host than this does. It
+    refuses userinfo outright rather than locating its end. It compares the
+    host literally, so a numeric form no parser here agrees on is refused
+    rather than guessed at.
     """
     if addr.startswith('https://'):
+        scheme = 'https://'
+    elif addr.startswith('http://'):
+        scheme = 'http://'
+    else:
+        raise SekretoError('sekreto: not an http(s) address: ' + safeaddr(addr))
+
+    rest = addr[len(scheme):]
+    end = len(rest)
+    for mark in ('/', '?', '#'):
+        at = rest.find(mark)
+        if -1 != at and at < end:
+            end = at
+    authority = rest[:end]
+
+    # Userinfo is refused outright rather than parsed around, and on https as
+    # well as http. No store this library speaks authenticates by userinfo -
+    # they take a token or a signature - so an address carrying one is a
+    # mistake at best. At worst it is the attack this whole function exists
+    # to stop: `http://localhost:8200@evil.example.com/` is a request to
+    # evil.example.com that reads, to anything that splits the authority on
+    # ':', as loopback.
+    if '@' in authority:
+        raise SekretoError(
+            'sekreto: refusing an address with embedded credentials: ' + safeaddr(addr)
+        )
+
+    # An opening bracket with no closing one is not an address at all.
+    if authority.startswith('[') and ']' not in authority:
+        raise SekretoError('sekreto: not a valid http(s) address: ' + safeaddr(addr))
+
+    if 'https://' == scheme:
         return
 
-    if not addr.startswith('http://'):
-        raise SekretoError('sekreto: not an http(s) address: ' + addr)
+    # A bracketed IPv6 literal keeps its brackets. Splitting the authority on
+    # the first colon yields '[', so `http://[::1]:8200` could never match -
+    # which made the '[::1]' entry below unreachable, and refused a
+    # legitimate local vault.
+    if authority.startswith('['):
+        host = authority[:authority.index(']') + 1]
+    else:
+        host = authority.split(':')[0]
 
-    host = addr[len('http://'):].split('/')[0].split(':')[0]
-
-    if host in ('localhost', '127.0.0.1', '::1', '[::1]'):
+    if host.lower() in ('localhost', '127.0.0.1', '::1', '[::1]'):
         return
 
     raise SekretoError(
-        'sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)'
+        'sekreto: refusing to send a token in plaintext to ' + safeaddr(addr)
+        + ' (use https)'
     )
 
 
@@ -422,6 +530,12 @@ class BoruProvider(Provider):
                 capture_output=True,
                 text=True,
                 env=env,
+                # Not inherited: a CLI that reads stdin - one prompting for a
+                # passphrase when its environment variable is absent - would
+                # otherwise block on the parent's own stdin forever, and
+                # nothing here sets a timeout. `capture_output` covers only
+                # the other two streams.
+                stdin=subprocess.DEVNULL,
             )
         except OSError as err:
             raise SekretoError('sekreto: cannot run ' + self.command + ': ' + str(err))
@@ -472,6 +586,101 @@ def borumiss(why):
     """Does this boru failure mean "no such secret" rather than "I could not
     answer"? Matched on boru's own wording for a missing alias."""
     return 'no alias named' in why
+
+
+class SecretspecProvider(Provider):
+    """SecretSpec (https://secretspec.dev).
+
+    SecretSpec is a declaration - a `secretspec.toml` naming the secrets a
+    project needs - plus a chain of its own backends to satisfy them from.
+    That makes it the same shape as sekreto one level down, and the reason
+    to support it is the same reason sekreto exists: a project that has
+    already declared its secrets there should not have to declare them
+    again here.
+
+    Read through its CLI, as boru is, because that is the interface it
+    offers a program in another language: `secretspec get API_TOKEN`
+    prints the value on stdout and nothing else. A sekreto name maps to a
+    SecretSpec key exactly as it maps to an environment variable -
+    `api.token` is `API_TOKEN` - which is the convention SecretSpec's own
+    examples use.
+
+    `backend` selects one of SecretSpec's backends (`--provider`, e.g.
+    `keyring` or `dotenv://.env`) and is called `backend` here only
+    because `provider` already means something else in this library.
+
+    A reason is required, not optional: SecretSpec records every read in
+    an audit log and refuses to read at all without one. sekreto sends
+    `sekreto` unless told otherwise, so the audit trail says which tool
+    asked.
+    """
+
+    def __init__(self, command=None, file=None, profile=None,
+                 backend=None, reason=None, prefix=None):
+        self.command = command or 'secretspec'
+        self.file = file
+        self.profile = profile
+        self.backend = backend
+        self.reason = reason
+        self.prefix = prefix
+
+    def lookup(self, name):
+        key = envkey(name, self.prefix)
+
+        args = [self.command]
+        if self.file:
+            args += ['--file', self.file]
+        args += ['get', key]
+        if self.backend:
+            args += ['--provider', self.backend]
+        if self.profile:
+            args += ['--profile', self.profile]
+        args += ['--reason', self.reason or 'sekreto']
+
+        try:
+            run = subprocess.run(
+                args,
+                capture_output=True,
+                text=True,
+                # See the boru provider: an inherited stdin lets a CLI that
+                # prompts block forever.
+                stdin=subprocess.DEVNULL,
+            )
+        except OSError as err:
+            raise SekretoError('sekreto: cannot run ' + self.command + ': ' + str(err))
+
+        if 0 == run.returncode:
+            # The value and one newline, and nothing else.
+            return run.stdout[:-1] if run.stdout.endswith('\n') else run.stdout
+
+        why = (run.stderr or '').strip()
+
+        if secretspecmiss(why, key):
+            return None
+
+        raise SekretoError(
+            'sekreto: secretspec error: ' + (why or 'exit ' + str(run.returncode))
+        )
+
+    def describe(self):
+        return 'secretspec' + (':' + self.backend if self.backend else '')
+
+
+def secretspecmiss(why, key):
+    """Does this SecretSpec failure mean "no such secret" rather than "I
+    could not answer"?
+
+    SecretSpec says `Secret 'API_TOKEN' not found` for both a name it does
+    not declare and one declared with no value, and both are misses: this
+    store does not hold it, so the chain carries on.
+
+    MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
+    `Provider backend 'keyring' not found`, which is a store that could
+    not answer at all - and reading that as a miss is the worst failure
+    this library has, because the chain then falls through to a weaker
+    store without saying so. The key is required to appear, so the two
+    cannot be confused."""
+    return ("Secret '" + key + "' not found") in why
 
 
 def awsnow():
@@ -581,7 +790,15 @@ class AwssecretsProvider(Provider):
             # `value` field can mean "the bytes themselves".
             binary = (body or {}).get('SecretBinary')
             if isinstance(binary, str) and 'value' == ref['field']:
-                return base64.b64decode(binary).decode('utf8')
+                # validate=True: b64decode silently SKIPS characters
+                # outside the alphabet, so a corrupted payload decoded to
+                # plausible-looking bytes that were then returned as the
+                # secret. A store that answered incoherently is an error,
+                # never a miss.
+                try:
+                    return base64.b64decode(binary, validate=True).decode('utf8')
+                except Exception:
+                    raise SekretoError('sekreto: aws secretsmanager: undecodable secret')
             return None
 
         try:
@@ -705,7 +922,12 @@ class GcpsecretsProvider(Provider):
         if not isinstance(data, str):
             return None
 
-        return base64.b64decode(data).decode('utf8')
+        # See the aws provider: validate=True, and an undecodable payload
+        # is an error rather than a miss.
+        try:
+            return base64.b64decode(data, validate=True).decode('utf8')
+        except Exception:
+            raise SekretoError('sekreto: gcp: undecodable secret')
 
     def describe(self):
         return 'gcpsecrets:' + (self.opts.get('project') or '')
@@ -1073,5 +1295,14 @@ def makeprovider(spec):
         return DopplerProvider(spec)
     if 'infisical' == kind:
         return InfisicalProvider(spec)
+    if 'secretspec' == kind:
+        return SecretspecProvider(
+            spec.get('command'),
+            spec.get('file'),
+            spec.get('profile'),
+            spec.get('backend'),
+            spec.get('reason'),
+            spec.get('prefix'),
+        )
 
     raise SekretoError('sekreto: unknown provider kind: ' + str(kind))

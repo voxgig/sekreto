@@ -8,7 +8,7 @@
 // Usage: sekreto-cli <api-url> [--source <source>] [--store <name>]
 //
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-// gcpsecrets azuresecrets onepassword doppler infisical chain
+// gcpsecrets azuresecrets onepassword doppler infisical secretspec chain
 //
 // Each source's configuration arrives in the environment variables its
 // own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -131,6 +131,17 @@ func chainfor(source string) []*sekreto.ProviderSpec {
 		Addr:    os.Getenv("DOPPLER_ADDR"),
 	}
 
+	// SecretSpec's own environment variables where it has them, so a
+	// shell already set up for secretspec needs nothing further.
+	secretspecspec := &sekreto.ProviderSpec{
+		Kind:    "secretspec",
+		Command: envor("SECRETSPEC_COMMAND", "secretspec"),
+		File:    os.Getenv("SECRETSPEC_FILE"),
+		Profile: os.Getenv("SECRETSPEC_PROFILE"),
+		Backend: os.Getenv("SECRETSPEC_PROVIDER"),
+		Reason:  os.Getenv("SECRETSPEC_REASON"),
+	}
+
 	infisicalspec := &sekreto.ProviderSpec{
 		Kind:         "infisical",
 		Addr:         os.Getenv("INFISICAL_ADDR"),
@@ -169,6 +180,8 @@ func chainfor(source string) []*sekreto.ProviderSpec {
 		return []*sekreto.ProviderSpec{dopplerspec}
 	case "infisical":
 		return []*sekreto.ProviderSpec{infisicalspec}
+	case "secretspec":
+		return []*sekreto.ProviderSpec{secretspecspec}
 	default:
 		// The default: the chain an app would actually ship with - local
 		// overrides first, shared vaults last.

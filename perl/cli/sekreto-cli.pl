@@ -10,7 +10,8 @@
 # Usage: perl -Ilib cli/sekreto-cli.pl <api-url> [--source <source>] [--store <name>]
 #
 # Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-#          gcpsecrets azuresecrets onepassword doppler infisical chain
+#          gcpsecrets azuresecrets onepassword doppler infisical
+#          secretspec chain
 #
 # Each source's configuration arrives in the environment variables its own
 # ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed in
@@ -119,6 +120,17 @@ sub chainfor {
         addr    => $ENV{DOPPLER_ADDR},
     };
 
+    # SecretSpec's own environment variables where it has them, so a shell
+    # already set up for secretspec needs nothing further.
+    my $secretspecspec = {
+        kind    => 'secretspec',
+        command => $ENV{SECRETSPEC_COMMAND} || 'secretspec',
+        file    => $ENV{SECRETSPEC_FILE},
+        profile => $ENV{SECRETSPEC_PROFILE},
+        backend => $ENV{SECRETSPEC_PROVIDER},
+        reason  => $ENV{SECRETSPEC_REASON},
+    };
+
     my $infisicalspec = {
         kind         => 'infisical',
         addr         => $ENV{INFISICAL_ADDR},
@@ -143,6 +155,7 @@ sub chainfor {
     return [$onepasswordspec]  if 'onepassword' eq $source;
     return [$dopplerspec]      if 'doppler' eq $source;
     return [$infisicalspec]    if 'infisical' eq $source;
+    return [$secretspecspec]   if 'secretspec' eq $source;
 
     # The default: the chain an app would actually ship with - local
     # overrides first, shared vaults last.

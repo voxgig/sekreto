@@ -52,7 +52,12 @@ sub validname {
     return 0 if '' eq $name;
 
     for my $part ( split( /\./, $name, -1 ) ) {
-        return 0 if $part !~ /^[a-z0-9_]+$/;
+        # `\z`-style anchors, not `$`. In Python, PCRE, Perl and .NET `$` also
+        # matches BEFORE a final newline, so `api.token\n` was accepted here while the
+        # canonical port rejected it - and `envkey` then produced the key
+        # `API_TOKEN\n`, sending this port looking for a differently named file and
+        # variable than the others.
+        return 0 if $part !~ /\A[a-z0-9_]+\z/;
     }
 
     return 1;
@@ -218,10 +223,12 @@ sub redact {
 
     my $out = defined $text && !ref($text) ? $text : '';
 
-    for my $value ( @{ $values || [] } ) {
-        next if !defined $value || ref($value);
-        next if 4 > length($value);
+    my @usable = grep { defined $_ && !ref($_) && 4 <= length($_) } @{ $values || [] };
 
+    # Longest first: a shorter secret that prefixes a longer one used to eat
+    # the prefix and leave the rest in the log. @usable is our own list, so
+    # sorting it does not reorder the caller's.
+    for my $value ( sort { length($b) <=> length($a) } @usable ) {
         $out = join( '[redacted]', split( /\Q$value\E/, $out, -1 ) );
     }
 

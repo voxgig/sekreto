@@ -27,6 +27,7 @@ use Exporter 'import';
 use Errno        ();
 use File::Spec   ();
 use HTTP::Tiny   ();
+use IO::Select   ();
 use IPC::Open3   ();
 use JSON::PP     ();
 use MIME::Base64 ();
@@ -203,6 +204,23 @@ sub urlenc { return Voxgig::Sekreto::Sigv4::uriescape(@_) }
     }
 }
 
+# Decode standard base64, or undef when the text is not base64.
+#
+# MIME::Base64::decode_base64 SKIPS characters outside the alphabet, so a
+# corrupted payload decoded to plausible-looking bytes that the caller then
+# returned AS THE SECRET. The alphabet is checked first, so a store that
+# answered incoherently can be told apart from one that answered.
+sub unbase64 {
+    my ($text) = @_;
+
+    ( my $trimmed = $text ) =~ s/\s+//g;
+
+    return undef if $trimmed !~ m{\A[A-Za-z0-9+/]*={0,2}\z};
+    return undef if 0 != length($trimmed) % 4;
+
+    return MIME::Base64::decode_base64($trimmed);
+}
+
 # One JSON round-trip, returning (status, decoded-json-or-undef). A 404 is
 # a normal answer here, not a failure: it means the store has no such
 # secret. Network failure is always an error - an unreachable store is a
@@ -213,7 +231,40 @@ sub fetchjson {
     my $options = { headers => $headers || {} };
     $options->{content} = $body if defined $body;
 
-    my $response = HTTP::Tiny->new( timeout => 10, verify_SSL => 1, max_redirect => 0 )->request( $method, $url, $options );
+    # A secrets client dials the address it was configured with and nowhere
+    # else. HTTP::Tiny's constructor calls _set_proxies, which reads
+    # http_proxy WITHOUT exempting loopback - so with that variable set,
+    # `X-Vault-Token` for a local dev vault went, in the clear, to whatever
+    # it named. checkaddr permits plaintext to loopback precisely because
+    # nothing leaves the machine; an environment variable it cannot see must
+    # not be able to make that false. All three keys are needed: an explicit
+    # undef is what suppresses the lookup.
+    # max_size is the response-body bound every port carries. HTTP::Tiny
+    # accepts it and this port was not passing it, so an endless body was
+    # accumulated in memory until the deadline - which on a loopback or
+    # datacentre link is gigabytes. Far above anything real: the largest
+    # legitimate payload here is Doppler's whole-config download, measured
+    # in kilobytes.
+    my $response = HTTP::Tiny->new(
+        timeout      => 10,
+        verify_SSL   => 1,
+        max_redirect => 0,
+        max_size     => 8 * 1024 * 1024,
+        proxy        => undef,
+        http_proxy   => undef,
+        https_proxy  => undef,
+    )->request( $method, $url, $options );
+
+    # HTTP::Tiny reports an over-size body as a 599 with this text. An
+    # endless body is a store that could not answer, so it must raise
+    # rather than become a miss - the latter would fall through to a
+    # weaker store on an attacker's cue.
+    if ( 599 == $response->{status}
+        && -1 != index( $response->{content} || '', 'Size of response body exceeds' ) )
+    {
+        ( my $plain = $url ) =~ s/\?.*//s;
+        fail( 'sekreto: oversized response from ' . $plain );
+    }
 
     # HTTP::Tiny reports transport failures as a synthetic 599.
     if ( 599 == $response->{status} ) {
@@ -235,6 +286,30 @@ sub fetchjson {
     return ( $response->{status}, $parsed );
 }
 
+# An address with any userinfo replaced by `[redacted]`, for messages.
+#
+# Every refusal below names the address it refused, and one of them fires
+# precisely because the address carries a credential - so printing it
+# verbatim wrote the password to stderr and into the logs. It cannot be
+# cleaned up afterwards either: that password was never resolved as a secret,
+# so redact() has never seen it and never will. The host is what a reader
+# needs to identify which chain entry is at fault; the userinfo is not.
+sub safeaddr {
+    my ($addr) = @_;
+
+    my $mark = index( $addr, '://' );
+    return $addr if -1 == $mark;
+
+    my $rest = substr( $addr, $mark + 3 );
+    my ($authority) = $rest =~ m{\A([^/?\#]*)};
+    $authority = '' if !defined $authority;
+
+    my $at = rindex( $authority, '@' );
+    return $addr if -1 == $at;
+
+    return substr( $addr, 0, $mark + 3 ) . '[redacted]' . substr( $addr, $mark + 3 + $at );
+}
+
 # Refuse to send a secret-bearing credential in the clear.
 #
 # A vault API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -243,19 +318,67 @@ sub fetchjson {
 # the path, so sekreto will not do it. Loopback stays allowed: that is
 # `vault server -dev`, `boru vault serve`, and this repo's own test
 # harness.
+#
+# The address is read by hand, in the same handful of steps in every port,
+# rather than by each platform's URL parser. That is deliberate. Twelve
+# parsers disagree about malformed input - where userinfo ends, whether
+# `0177.0.0.1` is loopback, what an unclosed bracket means - and a check that
+# answers differently in different ports is not a check. (Core Perl has no
+# URL parser in any case - URI is not core, and this library takes no
+# dependencies.)
+#
+# The rule this parse obeys, and the reason it can be trusted: it is never
+# more permissive than the HTTP client that will dial the address. It ends
+# the authority at '/', '?' or '#' only, so a client that also breaks on '\'
+# (WHATWG does) can only ever see a SHORTER host than this does. It refuses
+# userinfo outright rather than locating its end - which also settles a
+# disagreement with HTTP::Tiny, whose own parse strips userinfo at the FIRST
+# '@' where the RFC says the last. It compares the host literally, so a
+# numeric form no parser here agrees on is refused rather than guessed at.
 sub checkaddr {
     my ($addr) = @_;
 
-    return if 0 == index( $addr, 'https://' );
+    my $scheme =
+          0 == index( $addr, 'https://' ) ? 'https://'
+        : 0 == index( $addr, 'http://' )  ? 'http://'
+        :                                   '';
 
-    fail( 'sekreto: not an http(s) address: ' . $addr ) if 0 != index( $addr, 'http://' );
+    fail( 'sekreto: not an http(s) address: ' . safeaddr($addr) ) if '' eq $scheme;
 
-    my $host = ( split( /:/, ( split( m{/}, substr( $addr, 7 ) ) )[0] ) )[0];
+    my $rest = substr( $addr, length($scheme) );
+    my ($authority) = $rest =~ m{\A([^/?\#]*)};
+    $authority = '' if !defined $authority;
+
+    # Userinfo is refused outright rather than parsed around, and on https as
+    # well as http. No store this library speaks authenticates by userinfo -
+    # they take a token or a signature - so an address carrying one is a
+    # mistake at best. At worst it is the attack this whole function exists to
+    # stop: `http://localhost:8200@evil.example.com/` is a request to
+    # evil.example.com that reads, to anything that splits the authority on
+    # ':', as loopback.
+    fail( 'sekreto: refusing an address with embedded credentials: ' . safeaddr($addr) )
+        if -1 != index( $authority, '@' );
+
+    # An opening bracket with no closing one is not an address at all.
+    fail( 'sekreto: not a valid http(s) address: ' . safeaddr($addr) )
+        if 0 == index( $authority, '[' ) && -1 == index( $authority, ']' );
+
+    return if 'https://' eq $scheme;
+
+    # A bracketed IPv6 literal keeps its brackets. Splitting the authority on
+    # the first colon yields '[', so `http://[::1]:8200` could never match -
+    # which made the '[::1]' entry below unreachable, and refused a legitimate
+    # local vault.
+    my $host =
+        0 == index( $authority, '[' )
+        ? substr( $authority, 0, index( $authority, ']' ) + 1 )
+        : ( split( /:/, $authority, 2 ) )[0];
     $host = '' if !defined $host;
+    $host = lc $host;
 
     return if grep { $_ eq $host } ( 'localhost', '127.0.0.1', '::1', '[::1]' );
 
-    fail( 'sekreto: refusing to send a token in plaintext to ' . $addr . ' (use https)' );
+    fail( 'sekreto: refusing to send a token in plaintext to ' . safeaddr($addr) . ' (use https)' );
 }
 
 # When a logged-in token must be renewed: shortly before its lease runs
@@ -587,21 +710,59 @@ sub runcmd {
 
     fail( 'sekreto: cannot run ' . $argv[0] . ': ' . $@ ) if !$pid;
 
+    # The child's stdin is closed rather than left open on a pipe nobody
+    # writes to, so a CLI that reads it - one prompting for a passphrase when
+    # its environment variable is absent - sees EOF and gives up instead of
+    # waiting forever.
     close($in);
 
-    local $/ = undef;
-    my $outtext = <$out>;
-    my $errtext = <$err>;
+    # Both streams are drained TOGETHER. Reading stdout to EOF and only then
+    # reading stderr deadlocks the moment the child writes more than one pipe
+    # buffer (64 KiB on Linux) to stderr: this process is blocked waiting for
+    # stdout, the child is blocked waiting for room on stderr, and neither can
+    # move. Nothing in this library sets a timeout, so that hang is permanent.
+    # secretspec's diagnostics are box-drawn and reach that size easily.
+    my $sel = IO::Select->new( $out, $err );
+    my %text = ( fileno($out) => '', fileno($err) => '' );
+
+    while ( my @ready = $sel->can_read ) {
+        for my $handle (@ready) {
+            my $chunk = '';
+            my $got = sysread( $handle, $chunk, 65536 );
+            if ( !defined $got || 0 == $got ) {
+                $sel->remove($handle);
+                next;
+            }
+            $text{ fileno($handle) } .= $chunk;
+        }
+    }
+
+    my $outtext = $text{ fileno($out) };
+    my $errtext = $text{ fileno($err) };
 
     close($out);
     close($err);
 
     waitpid( $pid, 0 );
 
+    # $? packs the exit code in the HIGH byte and the killing signal in the
+    # low one, so `$? >> 8` alone reads a signal-killed child as exit 0 - and
+    # the caller then returns its empty stdout as the secret, discarding
+    # whatever the child managed to say on stderr. A boru that printed
+    # "vault sealed" and was then OOM-killed handed the application '' as a
+    # live credential.
+    #
+    # A child that died from a signal did not answer. Reported as the shells
+    # do, 128 + the signal, so it is non-zero and distinguishable. waitpid
+    # failure leaves $? at -1, whose low bits are 127, which is also non-zero
+    # - the safe direction.
+    my $raw    = $?;
+    my $status = ( $raw & 127 ) ? 128 + ( $raw & 127 ) : ( $raw >> 8 );
+
     return (
         defined $outtext ? $outtext : '',
         defined $errtext ? $errtext : '',
-        $? >> 8,
+        $status,
     );
 }
 
@@ -610,6 +771,96 @@ sub runcmd {
 sub borumiss {
     my ($why) = @_;
     return index( $why, 'no alias named' ) >= 0 ? 1 : 0;
+}
+
+# Does this SecretSpec failure mean "no such secret" rather than "I could
+# not answer"?
+#
+# SecretSpec says `Secret 'API_TOKEN' not found` for both a name it does not
+# declare and one declared with no value, and both are misses: this store
+# does not hold it, so the chain carries on.
+#
+# MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
+# `Provider backend 'keyring' not found`, which is a store that could not
+# answer at all - and reading that as a miss is the worst failure this
+# library has, because the chain then falls through to a weaker store
+# without saying so. The key is required to appear, so the two cannot be
+# confused.
+sub secretspecmiss {
+    my ( $why, $key ) = @_;
+    return index( $why, "Secret '" . $key . "' not found" ) >= 0 ? 1 : 0;
+}
+
+# SecretSpec (https://secretspec.dev).
+#
+# SecretSpec is a declaration - a `secretspec.toml` naming the secrets a
+# project needs - plus a chain of its own backends to satisfy them from.
+# That makes it the same shape as sekreto one level down, and the reason to
+# support it is the same reason sekreto exists: a project that has already
+# declared its secrets there should not have to declare them again here.
+#
+# Read through its CLI, as boru is, because that is the interface it offers
+# a program in another language: `secretspec get API_TOKEN` prints the value
+# on stdout and nothing else. A sekreto name maps to a SecretSpec key
+# exactly as it maps to an environment variable - `api.token` is
+# `API_TOKEN` - which is the convention SecretSpec's own examples use.
+#
+# `backend` selects one of SecretSpec's backends (`--provider`, e.g.
+# `keyring` or `dotenv://.env`) and is called `backend` here only because
+# `provider` already means something else in this library.
+#
+# A reason is required, not optional: SecretSpec records every read in an
+# audit log and refuses to read at all without one. sekreto sends `sekreto`
+# unless told otherwise, so the audit trail says which tool asked.
+{
+
+    package Voxgig::Sekreto::Providers::Secretspec;
+
+    sub new {
+        my ( $class, $command, $file, $profile, $backend, $reason, $prefix ) = @_;
+        return bless {
+            command => $command || 'secretspec',
+            file    => $file,
+            profile => $profile,
+            backend => $backend,
+            reason  => $reason,
+            prefix  => $prefix,
+        }, $class;
+    }
+
+    sub lookup {
+        my ( $self, $name ) = @_;
+
+        my $key = Voxgig::Sekreto::Providers::envkey( $name, $self->{prefix} );
+
+        my @args;
+        push @args, '--file', $self->{file} if $self->{file};
+        push @args, 'get', $key;
+        push @args, '--provider', $self->{backend} if $self->{backend};
+        push @args, '--profile', $self->{profile} if $self->{profile};
+        push @args, '--reason', ( $self->{reason} || 'sekreto' );
+
+        my ( $out, $err, $status ) =
+          Voxgig::Sekreto::Providers::runcmd( $self->{command}, @args );
+
+        if ( 0 == $status ) {
+            # The value and one newline, and nothing else.
+            $out =~ s/\n\z//;
+            return $out;
+        }
+
+        $err =~ s/^\s+|\s+$//g;
+
+        return undef if Voxgig::Sekreto::Providers::secretspecmiss( $err, $key );
+
+        Voxgig::Sekreto::Providers::fail(
+            'sekreto: secretspec error: ' . ( '' eq $err ? 'exit ' . $status : $err ) );
+    }
+
+    sub describe {
+        my ($self) = @_;
+        return 'secretspec' . ( $self->{backend} ? ':' . $self->{backend} : '' );
+    }
 }
 
 # The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now.
@@ -736,8 +987,16 @@ sub awsmiss {
             # A binary secret has no fields to address; only the conventional
             # `value` field can mean "the bytes themselves".
             my $bin = 'HASH' eq ref( $body || '' ) ? $body->{SecretBinary} : undef;
-            return MIME::Base64::decode_base64($bin)
-              if defined $bin && !ref($bin) && 'value' eq $ref->{field};
+            if ( defined $bin && !ref($bin) && 'value' eq $ref->{field} ) {
+                my $decoded = Voxgig::Sekreto::Providers::unbase64($bin);
+
+                # A store that answered incoherently could not answer.
+                Voxgig::Sekreto::Providers::fail(
+                    'sekreto: aws secretsmanager: undecodable secret')
+                  if !defined $decoded;
+
+                return $decoded;
+            }
             return undef;
         }
 
@@ -897,7 +1156,14 @@ sub awsmiss {
 
         return undef if !defined $data || ref($data);
 
-        return MIME::Base64::decode_base64($data);
+        # See the aws provider: an undecodable payload is an error, not a
+        # miss.
+        my $decoded = Voxgig::Sekreto::Providers::unbase64($data);
+
+        Voxgig::Sekreto::Providers::fail('sekreto: gcp: undecodable secret')
+          if !defined $decoded;
+
+        return $decoded;
     }
 
     sub describe {
@@ -1341,6 +1607,11 @@ sub makeprovider {
 
     return Voxgig::Sekreto::Providers::Infisical->new($spec)
       if 'infisical' eq ( $kind || '' );
+
+    return Voxgig::Sekreto::Providers::Secretspec->new(
+        $spec->{command}, $spec->{file},   $spec->{profile},
+        $spec->{backend}, $spec->{reason}, $spec->{prefix}
+    ) if 'secretspec' eq ( $kind || '' );
 
     fail( 'sekreto: unknown provider kind: ' . ( defined $kind ? $kind : '' ) );
 }

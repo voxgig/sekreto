@@ -14,6 +14,7 @@
 //!
 //! A port of typescript/src/Providers.ts, which is canonical.
 
+use std::fmt;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::env;
@@ -38,7 +39,11 @@ pub trait Provider {
 }
 
 /// hashicorp: log in for a token instead of being handed one.
-#[derive(Clone, Debug, Default)]
+///
+/// No `Debug` derive: `secretid` and `jwt` are credentials, and
+/// `tracing::error!(?spec, ...)` is the idiomatic thing to write. See the
+/// hand-written impl below.
+#[derive(Clone, Default)]
 pub struct AuthSpec {
     /// `kubernetes` or `approle`.
     pub method: String,
@@ -59,7 +64,10 @@ pub struct AuthSpec {
 
 /// The declarative form of a provider, as used in config and in the shared
 /// spec. Absent fields are empty strings (or zero, or None).
-#[derive(Clone, Debug, Default)]
+///
+/// No `Debug` derive: `token`, `secret` and `clientsecret` are credentials.
+/// See the hand-written impl below.
+#[derive(Clone, Default)]
 pub struct ProviderSpec {
     pub kind: String,
     /// The store name `Sekreto::getfrom` addresses. Defaults to `kind`.
@@ -85,12 +93,22 @@ pub struct ProviderSpec {
     pub vaultnamespace: String,
     /// hashicorp: log in for a token instead of being handed one.
     pub auth: Option<AuthSpec>,
-    /// boru: the executable to run (default `boru`).
+    /// boru / secretspec: the executable to run (default: the kind's own
+    /// name).
     pub command: String,
     /// boru: the namespace qualifying the alias.
     pub namespace: String,
     /// boru: the vault home, passed as BORU_HOME.
     pub home: String,
+    /// secretspec: the profile to read (`--profile`).
+    pub profile: String,
+    /// secretspec: which of ITS backends to read from (`--provider`),
+    /// e.g. `keyring` or `dotenv://.env`. Named `backend` because
+    /// `provider` already means a sekreto provider.
+    pub backend: String,
+    /// secretspec: the audit reason recorded for the read (`--reason`).
+    /// SecretSpec refuses to read without one.
+    pub reason: String,
     /// aws: region and credentials; the standard AWS_* environment
     /// variables fill whichever are not given.
     pub region: String,
@@ -282,6 +300,77 @@ impl Provider for FileProvider {
     }
 }
 
+/// An address with any userinfo replaced by `[redacted]`, for messages.
+///
+/// Every refusal below names the address it refused, and one of them fires
+/// precisely because the address carries a credential - so printing it
+/// verbatim wrote the password to stderr and into the logs. It cannot be
+/// cleaned up afterwards either: that password was never resolved as a
+/// secret, so `redact` has never seen it and never will. The host is what a
+/// reader needs to identify which chain entry is at fault; the userinfo is
+/// not.
+pub fn safeaddr(addr: &str) -> String {
+    let mark = match addr.find("://") {
+        Some(at) => at,
+        None => return addr.to_string(),
+    };
+
+    let rest = &addr[mark + 3..];
+    let authority = match rest.find(['/', '?', '#']) {
+        Some(at) => &rest[..at],
+        None => rest,
+    };
+
+    match authority.rfind('@') {
+        Some(at) => format!("{}[redacted]{}", &addr[..mark + 3], &addr[mark + 3 + at..]),
+        None => addr.to_string(),
+    }
+}
+
+/// Printed without its credentials.
+///
+/// A derived `Debug` puts the Vault token, the AWS secret access key and
+/// the Azure client secret into whatever formatted it - and
+/// `tracing::error!(?spec, "chain build failed")` is exactly what someone
+/// writes when a chain will not build. Fields that hold a credential
+/// report whether they are set, never what they are.
+impl fmt::Debug for AuthSpec {
+    fn fmt(&self, form: &mut fmt::Formatter<'_>) -> fmt::Result {
+        form.debug_struct("AuthSpec")
+            .field("method", &self.method)
+            .field("mount", &self.mount)
+            .field("role", &self.role)
+            .field("jwtfile", &self.jwtfile)
+            .field("roleid", &self.roleid)
+            .field("jwt", &setornot(self.jwt.as_deref().unwrap_or("")))
+            .field("secretid", &setornot(&self.secretid))
+            .finish()
+    }
+}
+
+impl fmt::Debug for ProviderSpec {
+    fn fmt(&self, form: &mut fmt::Formatter<'_>) -> fmt::Result {
+        form.debug_struct("ProviderSpec")
+            .field("kind", &self.kind)
+            .field("name", &self.name)
+            .field("addr", &self.addr)
+            .field("token", &setornot(&self.token))
+            .field("secret", &setornot(&self.secret))
+            .field("clientsecret", &setornot(&self.clientsecret))
+            .field("auth", &self.auth)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a credential field reports about itself.
+fn setornot(value: &str) -> &'static str {
+    if value.is_empty() {
+        "[unset]"
+    } else {
+        "[set]"
+    }
+}
+
 /// Refuse to send a secret-bearing credential in the clear.
 ///
 /// A vault API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -294,33 +383,93 @@ impl Provider for FileProvider {
 /// https goes over rustls, with the server certificate and host name both
 /// verified; `SEKRETO_CA_BUNDLE` adds trust roots for an internal CA. See
 /// `src/http.rs`.
+///
+/// The address is read by hand, in the same handful of steps in every port,
+/// rather than by each platform's URL parser. That is deliberate. Twelve
+/// parsers disagree about malformed input - where userinfo ends, whether
+/// `0177.0.0.1` is loopback, what an unclosed bracket means - and a check
+/// that answers differently in different ports is not a check. (Rust has no
+/// URL parser in std in any case, and a crate for one is exactly what this
+/// library does not take.)
+///
+/// The rule this parse obeys, and the reason it can be trusted: it is never
+/// more permissive than the HTTP client that will dial the address. It ends
+/// the authority at `/`, `?` or `#` only, so a client that also breaks on
+/// `\` (WHATWG does) can only ever see a SHORTER host than this does. It
+/// refuses userinfo outright rather than locating its end. It compares the
+/// host literally, so a numeric form no parser here agrees on is refused
+/// rather than guessed at.
 pub fn checkaddr(addr: &str) -> Answer<()> {
-    if addr.starts_with("https://") {
-        return Ok(());
-    }
-
-    if !addr.starts_with("http://") {
+    let scheme = if addr.starts_with("https://") {
+        "https://"
+    } else if addr.starts_with("http://") {
+        "http://"
+    } else {
         return Err(SekretoError::new(format!(
             "sekreto: not an http(s) address: {}",
-            addr
+            safeaddr(addr)
+        )));
+    };
+
+    let rest = &addr[scheme.len()..];
+    let authority = match rest.find(['/', '?', '#']) {
+        Some(at) => &rest[..at],
+        None => rest,
+    };
+
+    // Userinfo is refused outright rather than parsed around, and on https
+    // as well as http. No store this library speaks authenticates by
+    // userinfo - they take a token or a signature - so an address carrying
+    // one is a mistake at best. At worst it is the attack this whole
+    // function exists to stop: `http://localhost:8200@evil.example.com/` is
+    // a request to evil.example.com that reads, to anything that splits the
+    // authority on ':', as loopback.
+    if authority.contains('@') {
+        return Err(SekretoError::new(format!(
+            "sekreto: refusing an address with embedded credentials: {}",
+            safeaddr(addr)
         )));
     }
 
-    let host = addr["http://".len()..]
-        .split('/')
-        .next()
-        .unwrap_or("")
-        .split(':')
-        .next()
-        .unwrap_or("");
+    // An opening bracket with no closing one is not an address at all.
+    if authority.starts_with('[') && !authority.contains(']') {
+        return Err(SekretoError::new(format!(
+            "sekreto: not a valid http(s) address: {}",
+            safeaddr(addr)
+        )));
+    }
 
-    if matches!(host, "localhost" | "127.0.0.1" | "::1" | "[::1]") {
+    if "https://" == scheme {
+        return Ok(());
+    }
+
+    // A bracketed IPv6 literal keeps its brackets. Splitting the authority
+    // on the first colon yields `[`, so `http://[::1]:8200` could never
+    // match - which made the `[::1]` entry below unreachable, and refused a
+    // legitimate local vault.
+    let host = if authority.starts_with('[') {
+        // The closing bracket is known to be there: the check above returned
+        // for an authority that opens one without closing it.
+        match authority.find(']') {
+            Some(close) => &authority[..close + 1],
+            None => authority,
+        }
+    } else {
+        match authority.find(':') {
+            Some(colon) => &authority[..colon],
+            None => authority,
+        }
+    };
+
+    let host = host.to_ascii_lowercase();
+
+    if matches!(host.as_str(), "localhost" | "127.0.0.1" | "::1" | "[::1]") {
         return Ok(());
     }
 
     Err(SekretoError::new(format!(
         "sekreto: refusing to send a token in plaintext to {} (use https)",
-        addr
+        safeaddr(addr)
     )))
 }
 
@@ -752,6 +901,124 @@ fn borumiss(why: &str) -> bool {
     why.contains("no alias named")
 }
 
+/// SecretSpec (https://secretspec.dev).
+///
+/// SecretSpec is a declaration - a `secretspec.toml` naming the secrets a
+/// project needs - plus a chain of its own backends to satisfy them from.
+/// That makes it the same shape as sekreto one level down, and the reason
+/// to support it is the same reason sekreto exists: a project that has
+/// already declared its secrets there should not have to declare them
+/// again here.
+///
+/// Read through its CLI, as boru is, because that is the interface it
+/// offers a program in another language: `secretspec get API_TOKEN`
+/// prints the value on stdout and nothing else. A sekreto name maps to a
+/// SecretSpec key exactly as it maps to an environment variable -
+/// `api.token` is `API_TOKEN` - which is the convention SecretSpec's own
+/// examples use.
+///
+/// `backend` selects one of SecretSpec's backends (`--provider`, e.g.
+/// `keyring` or `dotenv://.env`) and is called `backend` here only
+/// because `provider` already means something else in this library.
+///
+/// A reason is required, not optional: SecretSpec records every read in
+/// an audit log and refuses to read at all without one. sekreto sends
+/// `sekreto` unless told otherwise, so the audit trail says which tool
+/// asked.
+pub struct SecretSpecProvider {
+    pub command: String,
+    pub file: String,
+    pub profile: String,
+    pub backend: String,
+    pub reason: String,
+    pub prefix: String,
+}
+
+impl Provider for SecretSpecProvider {
+    fn lookup(&self, name: &str) -> Answer<Option<String>> {
+        let key = envkey(name, &self.prefix)?;
+
+        let mut args: Vec<&str> = Vec::new();
+        if !self.file.is_empty() {
+            args.push("--file");
+            args.push(&self.file);
+        }
+        args.push("get");
+        args.push(&key);
+        if !self.backend.is_empty() {
+            args.push("--provider");
+            args.push(&self.backend);
+        }
+        if !self.profile.is_empty() {
+            args.push("--profile");
+            args.push(&self.profile);
+        }
+        args.push("--reason");
+        args.push(if self.reason.is_empty() {
+            "sekreto"
+        } else {
+            &self.reason
+        });
+
+        let mut run = Command::new(&self.command);
+        run.args(&args);
+
+        let done = run.output().map_err(|err| {
+            SekretoError::new(format!("sekreto: cannot run {}: {}", self.command, err))
+        })?;
+
+        if done.status.success() {
+            // The value and one newline, and nothing else.
+            let out = String::from_utf8_lossy(&done.stdout).to_string();
+            return Ok(Some(
+                out.strip_suffix('\n').map(str::to_string).unwrap_or(out),
+            ));
+        }
+
+        let why = String::from_utf8_lossy(&done.stderr).trim().to_string();
+
+        if secretspecmiss(&why, &key) {
+            return Ok(None);
+        }
+
+        let reason = if why.is_empty() {
+            format!("exit {}", done.status.code().unwrap_or(-1))
+        } else {
+            why
+        };
+
+        Err(SekretoError::new(format!(
+            "sekreto: secretspec error: {}",
+            reason
+        )))
+    }
+
+    fn describe(&self) -> String {
+        if self.backend.is_empty() {
+            "secretspec".to_string()
+        } else {
+            format!("secretspec:{}", self.backend)
+        }
+    }
+}
+
+/// Does this SecretSpec failure mean "no such secret" rather than "I
+/// could not answer"?
+///
+/// SecretSpec says `Secret 'API_TOKEN' not found` for both a name it does
+/// not declare and one declared with no value, and both are misses: this
+/// store does not hold it, so the chain carries on.
+///
+/// MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
+/// `Provider backend 'keyring' not found`, which is a store that could
+/// not answer at all - and reading that as a miss is the worst failure
+/// this library has, because the chain then falls through to a weaker
+/// store without saying so. The key is required to appear, so the two
+/// cannot be confused.
+fn secretspecmiss(why: &str, key: &str) -> bool {
+    why.contains(&format!("Secret '{}' not found", key))
+}
+
 /// The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now.
 fn awsnow() -> String {
     let seconds = SystemTime::now()
@@ -953,8 +1220,13 @@ impl Provider for AwsSecretsProvider {
                     Some(Json::Str(bin)) => bin.clone(),
                     _ => return Ok(None),
                 };
-                return Ok(http::unbase64(&bin)
-                    .map(|bytes| String::from_utf8_lossy(&bytes).to_string()));
+                // A payload that will not decode was reported as None -
+                // a MISS - so the chain carried on to a weaker store. A
+                // store that answered incoherently could not answer.
+                return match http::unbase64(&bin) {
+                    Some(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).to_string())),
+                    None => Err(SekretoError::new("sekreto: aws secretsmanager: undecodable secret".to_string())),
+                };
             }
         };
 
@@ -1135,7 +1407,12 @@ impl Provider for GcpSecretsProvider {
             _ => return Ok(None),
         };
 
-        Ok(http::unbase64(&data).map(|bytes| String::from_utf8_lossy(&bytes).to_string()))
+        // See the aws provider: an undecodable payload is an error, not a
+        // miss.
+        match http::unbase64(&data) {
+            Some(bytes) => Ok(Some(String::from_utf8_lossy(&bytes).to_string())),
+            None => Err(SekretoError::new("sekreto: gcp: undecodable secret".to_string())),
+        }
     }
 
     fn describe(&self) -> String {
@@ -1745,6 +2022,18 @@ pub fn makeprovider(spec: &ProviderSpec) -> Answer<Box<dyn Provider>> {
             environment: spec.environment.clone(),
             path: spec.path.clone(),
             ..Default::default()
+        })),
+        "secretspec" => Ok(Box::new(SecretSpecProvider {
+            command: if spec.command.is_empty() {
+                "secretspec".to_string()
+            } else {
+                spec.command.clone()
+            },
+            file: spec.file.clone(),
+            profile: spec.profile.clone(),
+            backend: spec.backend.clone(),
+            reason: spec.reason.clone(),
+            prefix: spec.prefix.clone(),
         })),
         _ => Err(SekretoError::new(format!(
             "sekreto: unknown provider kind: {}",

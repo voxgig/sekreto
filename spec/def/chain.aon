@@ -52,6 +52,7 @@ sources: set: [
         { kind: 'doppler', project: 'app', config: 'prd' }
         { kind: 'infisical', project: 'w1', environment: 'prod' }
         { kind: 'boru', addr: 'http://127.0.0.1:8200' }
+        { kind: 'secretspec', backend: 'keyring' }
       ]
     }
     out: [
@@ -64,6 +65,7 @@ sources: set: [
       'doppler:app/prd'
       'infisical:w1/prod'
       'boru:http://127.0.0.1:8200'
+      'secretspec:keyring'
     ]
   }
 ]

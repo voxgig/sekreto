@@ -20,33 +20,49 @@ ten stay one.
    run `make spec`, commit both. CI's `spec-freshness` job rebuilds and
    fails on any drift.
 
-3. **No third-party dependencies, with exactly one exception.** (`tools/` is
+3. **No third-party dependencies, with one narrow exception.** (`tools/` is
    build machinery, not a port — it depends on `@voxgig/model`, and nothing
    at test time ever reaches it.) Where a
    standard library is missing something, the port carries a small one of
    its own: JSON in Java and Rust (C# uses the BCL's), HTTP in Rust. That is
    the cost of the rule and it is worth paying.
 
-   The exception is **TLS in the Rust port**: `rustls`, plus `webpki-roots`
-   for the trust anchors, because rustls deliberately ships no root set and
-   something has to supply one. Two crates, one exception. That line is
-   drawn deliberately: hand-rolling TLS in a secrets library would be far
-   worse than depending on well-audited crates.
+   The exception is **cryptographic transport**, and it is a principle
+   rather than a list. Where a port's standard library has TLS, it uses it.
+   Where it does not, it binds the platform's audited TLS library — the
+   same one that language's own ecosystem binds. Hand-rolling TLS in a
+   secrets library would be far worse than depending on an audited
+   implementation, and no community these ports live in does otherwise.
 
-   Do not treat it as precedent for a third. If you think you need one, the
-   answer is almost certainly a small in-tree implementation, as it was for
-   JSON, HTTP, PEM and base64 — all of which this port carries rather than
-   pulling in a crate.
+   Rust is the instance you can already read: `rustls`, plus `webpki-roots`
+   for the trust anchors, because rustls deliberately ships no root set and
+   something has to supply one. (Perl is a quieter one: its HTTPS needs
+   `IO::Socket::SSL`, which is not core — `HTTP::Tiny` picks it up when
+   present, so nothing declares it, and a machine without it has a Perl
+   port that cannot reach a real vault.)
+
+   The exception is that narrow. Everything else a standard library lacks
+   is still written in-tree — JSON, HTTP framing, PEM, base64, all of which
+   these ports carry rather than taking a package. If you think you need a
+   dependency for one of those, the answer is a small in-tree
+   implementation.
+
+   A binding that connects without **verifying** is worse than no TLS,
+   because it looks like it works: verify the chain, verify the hostname
+   (a separate step, and the one people forget), send SNI, and honour
+   `SEKRETO_CA_BUNDLE` for extra roots. `test/realstores.sh` proves it both
+   ways — the Azure emulator must be refused without its certificate and
+   accepted with it. See `doc/design/more-ports.md`.
 
 4. **Core carries no platform dependency; providers are modules.**
    `env` and `memory` live in the core because they import nothing. The
-   other eleven each live in their own module under `provider/` and
+   other twelve each live in their own module under `provider/` and
    REGISTER THEMSELVES at import, so a kind nobody imports is not in the
    build. `makeprovider` is a registry lookup, not a switch.
 
    The rule that keeps it true: **nothing in the core may import the
    full-set barrel.** `Sekreto.ts` importing `./Providers` for
-   `makeprovider` is exactly what made all thirteen kinds reachable
+   `makeprovider` is exactly what made all fourteen kinds reachable
    before — one edge, and every consumer carried AWS request signing.
    Import `./provider/Registry`.
 
@@ -80,11 +96,37 @@ what proves that, and it is the suite most likely to catch a real bug.
 Run one port with `make test-go`, or one group with the `RUN-SOME:` line
 at the top of each port's test file.
 
+### And a third, when you have docker
+
+```sh
+make realstores   # the same CLIs against the REAL vaults, in containers
+```
+
+`test/integration.sh` runs against mocks, and a mock is a *claim* — "this
+is what the real server does" — written by the same people who wrote the
+client. `test/realstores.sh` checks the claim against HashiCorp Vault,
+LocalStack, self-hosted Infisical, a Key Vault emulator and a real boru.
+
+It is not part of `make all`: it needs docker, pulls images, and takes
+minutes. CI runs it weekly and on demand
+(`.github/workflows/real-stores.yml`), and a failure there means either a
+port has a bug the mocks do not model or a mock has drifted from the
+server it imitates.
+
+It has already found both kinds. Read `doc/design/real-stores.md` before
+changing it — in particular for which services are the vendor's own
+server, which are emulators, and why AWS signing is still guarded by the
+mock rather than by LocalStack.
+
+Both suites share `test/checks.sh`: what a check is, how a port's CLI is
+invoked, and what counts as a leak are defined once, because two suites
+that disagree about what passing means are worse than one.
+
 ## Adding a port
 
 A port is complete when it has all four:
 
-- the library — the equivalent of `Sekreto` and all thirteen provider
+- the library — the equivalent of `Sekreto` and all fourteen provider
   kinds
 - a conformance suite running `spec/sekreto.json` through that language's
   voxgig/omni runner, covering all fourteen groups
@@ -155,6 +197,23 @@ never do.
   `boru vault add` against the actual binary, found via `$BORU` or `PATH`
   — read through the CLI, and also over `boru vault serve` (its provision
   wire protocol) with a capability token from `vault grant`.
+
+Neither suite will start a server on a port something else already holds.
+`waitport` alone cannot tell a mock that bound from a squatter that was
+already there — the mock dies in milliseconds while the squatter answers
+the probe instantly — so the port is claimed first. A developer's own
+`vault server -dev` on 8200 is exactly the case: without the guard every
+HashiCorp check silently tests the wrong server.
+
+**Neither is there a SecretSpec mock**, for the same reason and with the
+same consequence: `secretspec` is read through its own CLI, so the thing
+under test is whether a port reads what that program prints and tells its
+two failure shapes apart. SecretSpec words both of them as "not found" —
+`Secret 'API_TOKEN' not found` is a miss, `Provider backend 'keyring' not
+found` is a store that could not answer — so a port that matches loosely
+passes the easy check and silently falls through to a weaker store on the
+hard one. `test/integration.sh` checks both, against the real binary,
+found via `$SECRETSPEC` or `PATH`, and skips them when it is absent.
 
 **There is still no boru mock, and there should not be one.** boru's wire
 protocol ships inside the same binary the CLI does, so both boru paths are

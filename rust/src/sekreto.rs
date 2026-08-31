@@ -232,10 +232,13 @@ fn unescape(text: &str) -> String {
 pub fn redact(text: &str, values: &[String]) -> String {
     let mut out = text.to_string();
 
-    for value in values {
-        if 4 > value.len() {
-            continue;
-        }
+    // Longest first: a shorter secret that prefixes a longer one used to eat
+    // the prefix and leave the rest in the log. Collected into our own Vec,
+    // so the caller's slice is not reordered.
+    let mut usable: Vec<&String> = values.iter().filter(|value| 4 <= value.len()).collect();
+    usable.sort_by(|left, right| right.len().cmp(&left.len()));
+
+    for value in usable {
         out = out
             .split(value.as_str())
             .collect::<Vec<&str>>()

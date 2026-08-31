@@ -9,7 +9,8 @@
 //                                                     [--store <name>]
 //
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-//          gcpsecrets azuresecrets onepassword doppler infisical chain
+//          gcpsecrets azuresecrets onepassword doppler infisical
+//          secretspec chain
 //
 // Each source's configuration arrives in the environment variables its
 // own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -131,6 +132,16 @@ public final class Cli {
         "config", System.getenv("DOPPLER_CONFIG"),
         "addr", System.getenv("DOPPLER_ADDR"));
 
+    // SecretSpec's own environment variables where it has them, so a
+    // shell already set up for secretspec needs nothing further.
+    Map<String, Object> secretspecspec = spec(
+        "kind", "secretspec",
+        "command", envor("SECRETSPEC_COMMAND", "secretspec"),
+        "file", System.getenv("SECRETSPEC_FILE"),
+        "profile", System.getenv("SECRETSPEC_PROFILE"),
+        "backend", System.getenv("SECRETSPEC_PROVIDER"),
+        "reason", System.getenv("SECRETSPEC_REASON"));
+
     Map<String, Object> infisicalspec = spec(
         "kind", "infisical",
         "addr", System.getenv("INFISICAL_ADDR"),
@@ -169,6 +180,8 @@ public final class Cli {
       chain.add(dopplerspec);
     } else if ("infisical".equals(source)) {
       chain.add(infisicalspec);
+    } else if ("secretspec".equals(source)) {
+      chain.add(secretspecspec);
     } else {
       // The default: the chain an app would actually ship with - local
       // overrides first, shared vaults last.
@@ -219,7 +232,17 @@ public final class Cli {
 
     HttpResponse<String> response;
     try {
-      response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+      // HTTP/1.1, for the same reason the library pins it (see CLIENT in
+      // Providers.java): java.net.http defaults to HTTP_2, and over
+      // cleartext that means an h2c upgrade a strict server rejects.
+      // This request is a GET with no body, so the Content-Length
+      // mismatch that breaks POSTs cannot bite here - but that is luck,
+      // not design, and this is the request that carries the bearer
+      // token to a URL the caller supplied.
+      HttpClient client = HttpClient.newBuilder()
+          .version(HttpClient.Version.HTTP_1_1)
+          .build();
+      response = client.send(request, HttpResponse.BodyHandlers.ofString());
     } catch (Exception err) {
       System.err.println("sekreto-cli: " + secrets.redact(String.valueOf(err.getMessage())));
       return 1;

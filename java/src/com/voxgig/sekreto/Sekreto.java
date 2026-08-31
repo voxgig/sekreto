@@ -12,6 +12,7 @@ package com.voxgig.sekreto;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
 
@@ -137,8 +138,14 @@ public final class Sekreto {
   public static String envkey(Object name, String prefix) {
     checkname(name);
 
+    // Locale.ROOT, not the machine's locale. `toUpperCase()` with no locale
+    // uppercases `i` to `İ` (U+0130) on a Turkish or Azeri JVM, so
+    // `api.token` would look for `APİ_TOKEN` - in the environment, in a
+    // .env, in a secrets directory, everywhere this key is used. Every
+    // lookup of every name containing an `i` would miss, silently, and the
+    // chain would report the secret simply absent.
     return (null == prefix ? "" : prefix)
-        + String.join("_", ((String) name).split("\\.", -1)).toUpperCase();
+        + String.join("_", ((String) name).split("\\.", -1)).toUpperCase(Locale.ROOT);
   }
 
   /**
@@ -300,11 +307,19 @@ public final class Sekreto {
       return out;
     }
 
+    // Longest first: a shorter secret that prefixes a longer one used to eat
+    // the prefix and leave the rest in the log. Collected into our own list,
+    // so the caller's is not reordered.
+    List<String> usable = new ArrayList<>();
     for (Object value : values) {
-      if (!(value instanceof String) || 4 > ((String) value).length()) {
-        continue;
+      if (value instanceof String && 4 <= ((String) value).length()) {
+        usable.add((String) value);
       }
-      out = String.join("[redacted]", out.split(Pattern.quote((String) value), -1));
+    }
+    usable.sort((left, right) -> right.length() - left.length());
+
+    for (String value : usable) {
+      out = String.join("[redacted]", out.split(Pattern.quote(value), -1));
     }
 
     return out;

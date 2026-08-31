@@ -15,7 +15,12 @@ class SekretoError(Exception):
     provider that could not be reached."""
 
 
-NAMEPART = re.compile(r'^[a-z0-9_]+$')
+# `\z`-style anchors, not `$`. In Python, PCRE, Perl and .NET `$` also
+# matches BEFORE a final newline, so `api.token\n` was accepted here while the
+# canonical port rejected it - and `envkey` then produced the key
+# `API_TOKEN\n`, sending this port looking for a differently named file and
+# variable than the others.
+NAMEPART = re.compile(r'\A[a-z0-9_]+\Z')
 
 
 def validname(name):
@@ -164,9 +169,15 @@ def redact(text, values):
     """
     out = text if isinstance(text, str) else ''
 
-    for value in values or []:
-        if not isinstance(value, str) or 4 > len(value):
-            continue
+    usable = [
+        value for value in (values or [])
+        if isinstance(value, str) and 4 <= len(value)
+    ]
+
+    # sorted() returns a new list: `values` belongs to the caller (it is
+    # `seen` when called through Sekreto.redact), and sorting in place
+    # would reorder it.
+    for value in sorted(usable, key=len, reverse=True):
         out = '[redacted]'.join(out.split(value))
 
     return out

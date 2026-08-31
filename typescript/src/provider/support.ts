@@ -90,6 +90,7 @@ export type ProviderSpec = {
     | 'onepassword'
     | 'doppler'
     | 'infisical'
+    | 'secretspec'
   /** The store name `Sekreto.getfrom` addresses. Defaults to `kind`. */
   name?: string
   prefix?: string
@@ -129,6 +130,15 @@ export type ProviderSpec = {
   }
   /** boru: the executable to run (default `boru`). */
   command?: string
+  /** secretspec: the profile to read (`--profile`). */
+  profile?: string
+  /** secretspec: which of ITS backends to read from (`--provider`), e.g.
+   * `keyring` or `dotenv://.env`. Named `backend` here because
+   * `provider` already means a sekreto provider. */
+  backend?: string
+  /** secretspec: the audit reason recorded for the read (`--reason`).
+   * SecretSpec refuses to read without one. */
+  reason?: string
   /** boru: the namespace qualifying the alias. */
   namespace?: string
   /** boru: the vault home, passed as BORU_HOME. */
@@ -171,3 +181,23 @@ export {
   SekretoError, awsparam, checkname, envkey, flatname, parsedotenv, vaultref,
 }
 export { nodemod }
+
+/** Decode standard base64, or undefined when the text is not base64.
+ *
+ * `Buffer.from(text, 'base64')` is lenient: it skips anything outside the
+ * alphabet and hands back whatever it managed, so a corrupted payload
+ * became a plausible-looking string of bytes that the caller then returned
+ * AS THE SECRET. The alphabet is checked first so that a store which
+ * answered incoherently can be told apart from one that answered.
+ *
+ * A store that could not answer coherently is an ERROR, never a miss — the
+ * same rule this code already applies to a 200 whose body is not JSON. */
+export function unbase64(text: string): string | undefined {
+  const trimmed = text.replace(/\s+/g, '')
+
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(trimmed) || 0 !== trimmed.length % 4) {
+    return undefined
+  }
+
+  return Buffer.from(trimmed, 'base64').toString('utf8')
+}

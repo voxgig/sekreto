@@ -25,7 +25,7 @@ matter of choice or of what the API actually needs.**
 | layer | holds |
 |---|---|
 | **core** | the chain (`get`/`try`/`getfrom`/`tryfrom`), cache, redaction, `Provider`, `SekretoError`, and the two providers that import nothing: `env` and `memory` |
-| **plugins** | the other eleven, each declaring what it needs: `dotenv` `file` `hashicorp` (fs), `boru` `gcpsecrets` `azuresecrets` `onepassword` `doppler` `infisical` (fetch), `awssecrets` `awsparams` (fetch + crypto, via `sigv4`) |
+| **plugins** | the other twelve, each declaring what it needs: `dotenv` `file` `hashicorp` (fs), `boru` `gcpsecrets` `azuresecrets` `onepassword` `doppler` `infisical` (fetch), `awssecrets` `awsparams` (fetch + crypto, via `sigv4`), `secretspec` (node:child_process) |
 
 A chain needs somewhere to read from, so `env` and `memory` stay in
 core: they make the library usable and testable standalone, and neither

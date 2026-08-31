@@ -17,6 +17,7 @@
 package com.voxgig.sekreto;
 
 import com.voxgig.sekreto.Sekreto.SekretoError;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -40,6 +41,102 @@ import java.util.Map;
 public final class Providers {
 
   private Providers() {}
+
+  /**
+   * Does this read failure mean "no secrets here", rather than "I could not
+   * answer"?
+   *
+   * <p>Absence is a MISS and the chain carries on; anything else - permission
+   * denied, an unreadable mount, a failing disk - is an ERROR, because
+   * returning a miss there falls silently through to a weaker store.
+   *
+   * <p>Asked of the directory, not of the file. The obvious spelling,
+   * {@code !Files.exists(file)}, is wrong in exactly the case the rule exists
+   * for: {@code Files.exists} is "did checkAccess throw", so it answers
+   * <em>false</em> for an {@code AccessDeniedException} and turned a locked
+   * directory - the canonical "unreadable mount" - into a miss. A path whose
+   * parent is a plain file (ENOTDIR) really is "no secrets here", and that is
+   * what this asks. The reason string is not consulted: it comes from the C
+   * library's strerror and follows the machine's locale.
+   */
+  static boolean absent(Path file) {
+    Path dir = file.getParent();
+    return null != dir && !Files.isDirectory(dir);
+  }
+
+  /**
+   * How much of a response body will be read before the store is treated as
+   * having answered incoherently. Ports carry the same bound.
+   *
+   * <p>Far above anything real - the largest legitimate payload this library
+   * fetches is Doppler's whole-config download, measured in kilobytes. A
+   * bound is needed because the TIMEOUT is not one: ten seconds on a loopback
+   * or datacentre link is gigabytes, and the body is accumulated in memory
+   * before it is parsed. This runs on an application's startup path, so the
+   * failure is the application never starting.
+   */
+  private static final int MAXBODY = 8 * 1024 * 1024;
+
+  /** What a finished child process left behind. */
+  static final class Ran {
+    final String out;
+    final String why;
+    final int status;
+
+    Ran(String out, String why, int status) {
+      this.out = out;
+      this.why = why;
+      this.status = status;
+    }
+  }
+
+  /**
+   * Run a child to completion and collect both its streams.
+   *
+   * <p>The two streams are drained CONCURRENTLY. Reading stdout to EOF and
+   * only then reading stderr deadlocks the moment the child writes more than
+   * one pipe buffer (64 KiB on Linux) to stderr: the parent is blocked
+   * waiting for stdout, the child is blocked waiting for room on stderr, and
+   * neither can move. Nothing in this library sets a timeout, so that hang is
+   * permanent - `get()` simply never returns. secretspec's diagnostics are
+   * box-drawn and reach that size easily.
+   *
+   * <p>The child's stdin is closed rather than left open on a pipe nobody
+   * writes to, so a CLI that reads it - one prompting for a passphrase when
+   * its environment variable is absent - sees EOF and gives up instead of
+   * waiting forever.
+   */
+  static Ran runcmd(ProcessBuilder builder, String command) {
+    try {
+      Process process = builder.start();
+
+      process.getOutputStream().close();
+
+      ByteArrayOutputStream errbuf = new ByteArrayOutputStream();
+      Thread drain =
+          new Thread(
+              () -> {
+                try {
+                  process.getErrorStream().transferTo(errbuf);
+                } catch (IOException err) {
+                  // The child went away mid-write; waitFor reports how.
+                }
+              });
+      drain.setDaemon(true);
+      drain.start();
+
+      String out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+      int status = process.waitFor();
+      drain.join();
+
+      return new Ran(out, new String(errbuf.toByteArray(), StandardCharsets.UTF_8).trim(), status);
+    } catch (IOException err) {
+      throw new SekretoError("sekreto: cannot run " + command + ": " + err.getMessage());
+    } catch (InterruptedException err) {
+      Thread.currentThread().interrupt();
+      throw new SekretoError("sekreto: interrupted running " + command);
+    }
+  }
 
   /** Environment variables: `api.token` from `API_TOKEN`. */
   public static final class Env implements Provider {
@@ -90,11 +187,7 @@ public final class Providers {
           // here", exactly like the file provider.
           values = new LinkedHashMap<>();
         } catch (IOException err) {
-          // A path component that is a plain file reads as "not a directory",
-          // which is still "no secrets here". Anything else (permission
-          // denied, an unreadable mount) is a store that could not answer,
-          // and swallowing it would fall through to a weaker store.
-          if (!Files.exists(path)) {
+          if (absent(path)) {
             values = new LinkedHashMap<>();
           } else {
             throw new SekretoError(
@@ -173,10 +266,7 @@ public final class Providers {
         // here", exactly like a missing .env.
         return null;
       } catch (IOException err) {
-        // A path component that is a plain file reads as "not a directory",
-        // which is still "no secrets here". Anything else (permission
-        // denied, an unreadable mount) is a store that could not answer.
-        if (!Files.exists(file)) {
+        if (absent(file)) {
           return null;
         }
         throw new SekretoError(
@@ -199,6 +289,40 @@ public final class Providers {
   }
 
   /**
+   * An address with any userinfo replaced by `[redacted]`, for messages.
+   *
+   * <p>Every refusal below names the address it refused, and one of them
+   * fires precisely because the address carries a credential - so printing it
+   * verbatim wrote the password to stderr and into the logs. It cannot be
+   * cleaned up afterwards either: that password was never resolved as a
+   * secret, so redact() has never seen it and never will. The host is what a
+   * reader needs to identify which chain entry is at fault; the userinfo is
+   * not.
+   */
+  static String safeaddr(String addr) {
+    int mark = addr.indexOf("://");
+    if (-1 == mark) {
+      return addr;
+    }
+
+    String rest = addr.substring(mark + 3);
+    int end = rest.length();
+    for (String mark2 : new String[] {"/", "?", "#"}) {
+      int found = rest.indexOf(mark2);
+      if (-1 != found && found < end) {
+        end = found;
+      }
+    }
+
+    int at = rest.substring(0, end).lastIndexOf('@');
+    if (-1 == at) {
+      return addr;
+    }
+
+    return addr.substring(0, mark + 3) + "[redacted]" + addr.substring(mark + 3 + at);
+  }
+
+  /**
    * Refuse to send a secret-bearing credential in the clear.
    *
    * <p>A vault API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -207,17 +331,74 @@ public final class Providers {
    * the path, so sekreto will not do it. Loopback stays allowed: that is
    * `vault server -dev`, `boru vault serve`, and this repo's own test
    * harness.
+   *
+   * <p>The address is read by hand, in the same handful of steps in every
+   * port, rather than by each platform's URL parser. That is deliberate.
+   * Twelve parsers disagree about malformed input - where userinfo ends,
+   * whether `0177.0.0.1` is loopback, what an unclosed bracket means - and a
+   * check that answers differently in different ports is not a check.
+   *
+   * <p>The rule this parse obeys, and the reason it can be trusted: it is
+   * never more permissive than the HTTP client that will dial the address. It
+   * ends the authority at `/`, `?` or `#` only, so a client that also breaks
+   * on `\` (WHATWG does) can only ever see a SHORTER host than this does. It
+   * refuses userinfo outright rather than locating its end. It compares the
+   * host literally, so a numeric form no parser here agrees on is refused
+   * rather than guessed at.
    */
   public static void checkaddr(String addr) {
+    String scheme;
     if (addr.startsWith("https://")) {
+      scheme = "https://";
+    } else if (addr.startsWith("http://")) {
+      scheme = "http://";
+    } else {
+      throw new SekretoError("sekreto: not an http(s) address: " + safeaddr(addr));
+    }
+
+    String rest = addr.substring(scheme.length());
+
+    int end = rest.length();
+    for (String mark : new String[] {"/", "?", "#"}) {
+      int at = rest.indexOf(mark);
+      if (-1 != at && at < end) {
+        end = at;
+      }
+    }
+    String authority = rest.substring(0, end);
+
+    // Userinfo is refused outright rather than parsed around, and on https as
+    // well as http. No store this library speaks authenticates by userinfo -
+    // they take a token or a signature - so an address carrying one is a
+    // mistake at best. At worst it is the attack this whole function exists
+    // to stop: http://localhost:8200@evil.example.com/ is a request to
+    // evil.example.com that reads, to anything that splits the authority on
+    // ':', as loopback.
+    if (authority.contains("@")) {
+      throw new SekretoError("sekreto: refusing an address with embedded credentials: " + safeaddr(addr));
+    }
+
+    // An opening bracket with no closing one is not an address at all.
+    if (authority.startsWith("[") && !authority.contains("]")) {
+      throw new SekretoError("sekreto: not a valid http(s) address: " + safeaddr(addr));
+    }
+
+    if ("https://".equals(scheme)) {
       return;
     }
 
-    if (!addr.startsWith("http://")) {
-      throw new SekretoError("sekreto: not an http(s) address: " + addr);
+    // A bracketed IPv6 literal keeps its brackets. Splitting the authority on
+    // the first colon yields "[", so http://[::1]:8200 could never match -
+    // which made the "[::1]" entry below unreachable, and refused a
+    // legitimate local vault.
+    String host;
+    if (authority.startsWith("[")) {
+      host = authority.substring(0, authority.indexOf("]") + 1);
+    } else {
+      int colon = authority.indexOf(':');
+      host = -1 == colon ? authority : authority.substring(0, colon);
     }
-
-    String host = addr.substring("http://".length()).split("/")[0].split(":")[0];
+    host = host.toLowerCase(java.util.Locale.ROOT);
 
     if ("localhost".equals(host)
         || "127.0.0.1".equals(host)
@@ -227,11 +408,26 @@ public final class Providers {
     }
 
     throw new SekretoError(
-        "sekreto: refusing to send a token in plaintext to " + addr + " (use https)");
+        "sekreto: refusing to send a token in plaintext to " + safeaddr(addr) + " (use https)");
   }
 
-  private static final HttpClient CLIENT =
-      HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
+  // HTTP/1.1, explicitly.
+  //
+  // java.net.http defaults to HTTP_2, and over cleartext that means an h2c
+  // upgrade: the first request goes out with `Upgrade: h2c`, the declared
+  // Content-Length, and NO BODY, and the body follows only after the server
+  // declines. A server that checks the two against each other - Fastify
+  // does, and Infisical is Fastify - rejects that request outright with
+  // "Request body size did not match Content-Length", so every POST this
+  // port makes to such a server fails before it is even read.
+  //
+  // The mocks in test/ are Node's own http module, which does not object,
+  // which is why this survived until the same code met a real Infisical.
+  // No vault API this library speaks needs HTTP/2.
+  private static final HttpClient CLIENT = HttpClient.newBuilder()
+      .version(HttpClient.Version.HTTP_1_1)
+      .connectTimeout(Duration.ofSeconds(10))
+      .build();
 
   /** One JSON round-trip's result: the status, and the parsed body. */
   static final class Answer {
@@ -262,9 +458,12 @@ public final class Providers {
       }
     }
 
-    HttpResponse<String> response;
+    // ofInputStream, not ofString: ofString buffers whatever arrives, so an
+    // endless body would be accumulated in memory until the deadline - which
+    // on a loopback or datacentre link is gigabytes.
+    HttpResponse<java.io.InputStream> response;
     try {
-      response = CLIENT.send(builder.build(), HttpResponse.BodyHandlers.ofString());
+      response = CLIENT.send(builder.build(), HttpResponse.BodyHandlers.ofInputStream());
     } catch (IOException err) {
       throw new SekretoError(
           "sekreto: cannot reach " + url.split("\\?")[0] + ": " + err.getMessage());
@@ -273,16 +472,30 @@ public final class Providers {
       throw new SekretoError("sekreto: cannot reach " + url.split("\\?")[0] + ": interrupted");
     }
 
+    String text;
+    try (java.io.InputStream stream = response.body()) {
+      // One byte over the bound is enough to know it was exceeded. An
+      // endless body is a store that could not answer, so this raises
+      // rather than returning a miss - the latter would fall through to a
+      // weaker store on an attacker's cue.
+      byte[] raw = stream.readNBytes(MAXBODY + 1);
+      if (MAXBODY < raw.length) {
+        throw new SekretoError("sekreto: oversized response from " + url.split("\\?")[0]);
+      }
+      text = new String(raw, StandardCharsets.UTF_8);
+    } catch (IOException err) {
+      throw new SekretoError(
+          "sekreto: cannot reach " + url.split("\\?")[0] + ": " + err.getMessage());
+    }
+
     // A success status promised JSON; a body that does not parse means
     // the store could not answer coherently, and treating it as a miss
     // would fall through to a weaker store. Error statuses may carry
     // any body - they are decided on status alone. (Json.parse answers
     // null for anything unreadable, and only a literal `null` body is a
     // genuine JSON null.)
-    Object parsed = Json.parse(response.body());
-    if (200 == response.statusCode()
-        && null == parsed
-        && !"null".equals(response.body().trim())) {
+    Object parsed = Json.parse(text);
+    if (200 == response.statusCode() && null == parsed && !"null".equals(text.trim())) {
       throw new SekretoError("sekreto: malformed response from " + url.split("\\?")[0]);
     }
 
@@ -547,21 +760,10 @@ public final class Providers {
         builder.environment().put("BORU_HOME", home);
       }
 
-      String out;
-      String why;
-      int status;
-
-      try {
-        Process process = builder.start();
-        out = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
-        why = new String(process.getErrorStream().readAllBytes(), StandardCharsets.UTF_8).trim();
-        status = process.waitFor();
-      } catch (IOException err) {
-        throw new SekretoError("sekreto: cannot run " + command + ": " + err.getMessage());
-      } catch (InterruptedException err) {
-        Thread.currentThread().interrupt();
-        throw new SekretoError("sekreto: interrupted running " + command);
-      }
+      Ran ran = runcmd(builder, command);
+      String out = ran.out;
+      String why = ran.why;
+      int status = ran.status;
 
       if (0 == status) {
         // boru prints the value and one newline, and nothing else.
@@ -618,6 +820,114 @@ public final class Providers {
    */
   static boolean borumiss(String why) {
     return why.contains("no alias named");
+  }
+
+  /**
+   * SecretSpec (https://secretspec.dev).
+   *
+   * <p>SecretSpec is a declaration - a `secretspec.toml` naming the secrets a
+   * project needs - plus a chain of its own backends to satisfy them from.
+   * That makes it the same shape as sekreto one level down, and the reason to
+   * support it is the same reason sekreto exists: a project that has already
+   * declared its secrets there should not have to declare them again here.
+   *
+   * <p>Read through its CLI, as boru is, because that is the interface it
+   * offers a program in another language: `secretspec get API_TOKEN` prints
+   * the value on stdout and nothing else. A sekreto name maps to a SecretSpec
+   * key exactly as it maps to an environment variable - `api.token` is
+   * `API_TOKEN` - which is the convention SecretSpec's own examples use.
+   *
+   * <p>`backend` selects one of SecretSpec's backends (`--provider`, e.g.
+   * `keyring` or `dotenv://.env`) and is called `backend` here only because
+   * `provider` already means something else in this library.
+   *
+   * <p>A reason is required, not optional: SecretSpec records every read in
+   * an audit log and refuses to read at all without one. sekreto sends
+   * `sekreto` unless told otherwise, so the audit trail says which tool
+   * asked.
+   */
+  public static final class Secretspec implements Provider {
+    private final String command;
+    private final String file;
+    private final String profile;
+    private final String backend;
+    private final String reason;
+    private final String prefix;
+
+    public Secretspec(String command, String file, String profile,
+        String backend, String reason, String prefix) {
+      this.command = null == command || command.isEmpty() ? "secretspec" : command;
+      this.file = file;
+      this.profile = profile;
+      this.backend = backend;
+      this.reason = reason;
+      this.prefix = prefix;
+    }
+
+    @Override
+    public String lookup(String name) {
+      String key = Sekreto.envkey(name, prefix);
+
+      List<String> args = new ArrayList<>();
+      args.add(command);
+      if (null != file && !file.isEmpty()) {
+        args.add("--file");
+        args.add(file);
+      }
+      args.add("get");
+      args.add(key);
+      if (null != backend && !backend.isEmpty()) {
+        args.add("--provider");
+        args.add(backend);
+      }
+      if (null != profile && !profile.isEmpty()) {
+        args.add("--profile");
+        args.add(profile);
+      }
+      args.add("--reason");
+      args.add(null == reason || reason.isEmpty() ? "sekreto" : reason);
+
+      Ran ran = runcmd(new ProcessBuilder(args), command);
+      String out = ran.out;
+      String why = ran.why;
+      int status = ran.status;
+
+      if (0 == status) {
+        // The value and one newline, and nothing else.
+        return out.endsWith("\n") ? out.substring(0, out.length() - 1) : out;
+      }
+
+      if (secretspecmiss(why, key)) {
+        return null;
+      }
+
+      throw new SekretoError(
+          "sekreto: secretspec error: " + (why.isEmpty() ? "exit " + status : why));
+    }
+
+    @Override
+    public String describe() {
+      return "secretspec" + (null == backend || backend.isEmpty() ? "" : ":" + backend);
+    }
+  }
+
+  /**
+   * Does this SecretSpec failure mean "no such secret" rather than "I could
+   * not answer"?
+   *
+   * <p>SecretSpec says `Secret 'API_TOKEN' not found` for both a name it does
+   * not declare and one declared with no value, and both are misses: this
+   * store does not hold it, so the chain carries on.
+   *
+   * <p>MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
+   * `Provider backend 'keyring' not found`, which is a store that could not
+   * answer at all - and reading that as a miss is the worst failure this
+   * library has, because the chain then falls through to a weaker store
+   * without saying so. The key is required to appear, so the two cannot be
+   * confused.
+   */
+  static boolean secretspecmiss(String why, String key) {
+    return why.contains("Secret '" + key + "' not found");
   }
 
   /** The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now. */
@@ -778,7 +1088,15 @@ public final class Providers {
         // `value` field can mean "the bytes themselves".
         Object bin = dig(res.body, "SecretBinary");
         if (bin instanceof String && "value".equals(ref.get("field"))) {
-          return new String(Base64.getDecoder().decode((String) bin), StandardCharsets.UTF_8);
+          // decode() throws IllegalArgumentException on a bad payload,
+          // which is not a SekretoError and so escaped the library's own
+          // error type. A store that answered incoherently is an error.
+          try {
+            return new String(
+                Base64.getDecoder().decode((String) bin), StandardCharsets.UTF_8);
+          } catch (IllegalArgumentException err) {
+            throw new SekretoError("sekreto: aws secretsmanager: undecodable secret");
+          }
         }
         return null;
       }
@@ -947,7 +1265,13 @@ public final class Providers {
         return null;
       }
 
-      return new String(Base64.getDecoder().decode((String) data), StandardCharsets.UTF_8);
+      // See the aws provider: an undecodable payload is a SekretoError.
+      try {
+        return new String(
+            Base64.getDecoder().decode((String) data), StandardCharsets.UTF_8);
+      } catch (IllegalArgumentException err) {
+        throw new SekretoError("sekreto: gcp: undecodable secret");
+      }
     }
 
     @Override
@@ -1451,6 +1775,11 @@ public final class Providers {
           text(spec.get("addr")), text(spec.get("token")), text(spec.get("clientid")),
           text(spec.get("clientsecret")), text(spec.get("project")),
           text(spec.get("environment")), text(spec.get("path")));
+    }
+    if ("secretspec".equals(kind)) {
+      return new Secretspec(
+          text(spec.get("command")), text(spec.get("file")), text(spec.get("profile")),
+          text(spec.get("backend")), text(spec.get("reason")), text(spec.get("prefix")));
     }
 
     throw new SekretoError("sekreto: unknown provider kind: " + (null == kind ? "" : kind));

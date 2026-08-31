@@ -47,4 +47,30 @@ redact: set: [
     in: { text: '', values: [ 'AAAA' ] }
     out: ''
   }
+
+  # LONGEST FIRST, whatever order the values arrived in.
+  #
+  # A shorter secret that prefixes a longer one used to eat the prefix
+  # and leave the rest in the log. That is not a contrived pair: with
+  # `db.pass` = 'abcd' from the environment and `api.token` = 'abcd1234'
+  # from the vault, whichever resolved first went into `seen` first, so
+  # an ordinary two-secret chain decided it - and resolving the weaker
+  # store first is the common arrangement.
+  {
+    in: { text: 'token=abcd1234', values: [ 'abcd', 'abcd1234' ] }
+    out: 'token=[redacted]'
+  }
+
+  # The same pair the other way round, which always worked. Both orders
+  # are here so the case cannot be satisfied by luck.
+  {
+    in: { text: 'token=abcd1234', values: [ 'abcd1234', 'abcd' ] }
+    out: 'token=[redacted]'
+  }
+
+  # And the shorter one is still redacted where it stands alone.
+  {
+    in: { text: 'pass=abcd token=abcd1234', values: [ 'abcd', 'abcd1234' ] }
+    out: 'pass=[redacted] token=[redacted]'
+  }
 ]

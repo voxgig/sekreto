@@ -1,0 +1,189 @@
+# The real secret stores, on demand and on a schedule.
+#
+# ci.yml runs every port against the MOCKS on every push. That is the
+# gate, and it stays the gate: it is fast, hermetic, and depends on
+# nothing outside this repository.
+#
+# This job runs the same ports against the REAL servers - HashiCorp
+# Vault, LocalStack, Infisical, a Key Vault emulator, a real boru. It is
+# deliberately NOT on push or pull_request. It pulls several images,
+# waits on a database migration, and depends on servers whose new
+# releases can change behaviour with nothing here changing at all; as a
+# gate on every PR it would be a flake generator. On a schedule it is
+# what it should be - a periodic check on whether the fast suite is
+# still telling the truth, arriving as its own failure rather than as
+# noise on someone's PR.
+#
+# A failure here means one of two things, and both are worth a morning:
+# a port has a bug the mocks do not model, or a mock has drifted from
+# the server it imitates.
+#
+# doc/design/real-stores.md says which services are the vendor's own,
+# which are emulators, and which cannot be run locally at all.
+
+name: real-stores
+
+on:
+  workflow_dispatch:
+    inputs:
+      langs:
+        description: 'Ports to run (space separated, blank for all)'
+        required: false
+        default: ''
+  schedule:
+    # 05:20 UTC on Mondays. Off the hour because everything is scheduled
+    # on the hour, and early enough that a failure is waiting rather than
+    # arriving mid-morning.
+    - cron: '20 5 * * 1'
+
+concurrency:
+  group: real-stores-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  KOTLIN_VERSION: '2.1.20'
+
+jobs:
+  real-stores:
+    name: every port against the real stores
+    runs-on: ubuntu-latest
+    # Image pulls, an Infisical migration and ten toolchains. Generous,
+    # because a timeout here reads as a store being broken.
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Check out voxgig/omni
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: voxgig/omni
+          path: .omni
+
+      - name: Check out boru-lang/boru
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: boru-lang/boru
+          path: .boru
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: '3.12'
+      - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: '3.3'
+      - uses: shivammathur/setup-php@f3e473d116dcccaddc5834248c87452386958240 # v2
+        with:
+          php-version: '8.3'
+      # 1.24, not the 1.22 the go PORT is built with: boru's own module
+      # requires a newer toolchain, and building it with 1.22 fails - so
+      # every boru check silently skips and the job is green while boru
+      # was never exercised at all.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.24'
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
+        with:
+          toolchain: stable
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Setup Kotlin
+        run: |
+          curl -sSLf --retry 3 -o /tmp/kotlinc.zip \
+            "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+          unzip -q /tmp/kotlinc.zip -d /opt
+          echo /opt/kotlinc/bin >> "$GITHUB_PATH"
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: '8.0'
+      - name: Setup Zig
+        run: |
+          python3 -m pip install --disable-pip-version-check --quiet \
+            --require-hashes -r "$GITHUB_WORKSPACE/.github/zig-requirements.txt"
+          bin="$RUNNER_TEMP/zigbin"; mkdir -p "$bin"
+          printf '#!/bin/sh\nexec python3 -m ziglang "$@"\n' > "$bin/zig"
+          chmod +x "$bin/zig"
+          echo "$bin" >> "$GITHUB_PATH"
+
+      # The Perl port needs IO::Socket::SSL to speak https, and it is not
+      # a core module. Without it the Azure check - the only https check
+      # in either suite - skips for perl rather than running. Installing
+      # it here is what makes that check mean something.
+      - name: Perl TLS support
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libio-socket-ssl-perl
+
+      # The boru provider is proved against the real binary or not at
+      # all. A build failure here must not read as a sekreto failure:
+      # the step may fail, and the harness skips the boru checks when the
+      # binary is absent.
+      - name: Build boru
+        id: boru
+        continue-on-error: true
+        run: go build -o "$GITHUB_WORKSPACE/boru-bin" ./cmd/go/boru
+        working-directory: .boru
+
+      - name: Install dependencies
+        run: |
+          npm --prefix typescript install
+          npm --prefix api install
+
+      # Not `make build`: the top-level build-% rule tolerates a port
+      # without a build target, which also swallows a port whose build
+      # *fails*. Here each one must succeed on its own.
+      - name: Build every port
+        env:
+          OMNI_HOME: ${{ github.workspace }}/.omni
+        run: |
+          for lang in typescript javascript python ruby php perl go rust java csharp zig kotlin; do
+            echo "======== $lang ========"
+            make -C "$lang" build
+          done
+
+      # Pulled before the harness runs so that a slow registry shows up
+      # as a slow step rather than as a store that "did not come up".
+      - name: Pull the store images
+        run: docker compose -f test/docker/compose.yaml pull --ignore-buildable
+
+      - name: Real stores
+        env:
+          OMNI_HOME: ${{ github.workspace }}/.omni
+          BORU: ${{ steps.boru.outcome == 'success' && format('{0}/boru-bin', github.workspace) || '' }}
+          # A port that did not build must fail the job, not be skipped.
+          REQUIRE_ALL: '1'
+          # So must a store that did not come up. Locally a missing store
+          # is a skip, because a developer may only care about one; here
+          # it means an image moved or a server stopped working, which is
+          # precisely what this job exists to notice.
+          REQUIRE_STORES: '1'
+          # Through the environment, not interpolated into the command
+          # line: this is a free-text dispatch input.
+          LANGS: ${{ inputs.langs }}
+          # The harness tears the stack down on its way out unless told
+          # not to, and the Store logs step below would then have nothing
+          # to read - the logs being the only place a failure like the
+          # Java HTTP/2 one is visible at all. Tear-down is the last
+          # step's job instead.
+          SEKRETO_KEEP: '1'
+        run: |
+          # shellcheck disable=SC2086
+          ./test/realstores.sh $LANGS
+
+      # Whatever happened, the logs of the servers are the first thing
+      # anyone reads when this fails - a 500 from Infisical says nothing
+      # useful on the client side, which is exactly how the Java HTTP/2
+      # bug hid.
+      - name: Store logs
+        if: always()
+        run: docker compose -f test/docker/compose.yaml logs --no-color --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f test/docker/compose.yaml down -v

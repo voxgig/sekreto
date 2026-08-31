@@ -30,7 +30,7 @@ import { kinds, makeprovider } from '../src/provider/Registry'
 const KINDS = [
   'awsparams', 'awssecrets', 'azuresecrets', 'boru', 'doppler', 'dotenv',
   'env', 'file', 'gcpsecrets', 'hashicorp', 'infisical', 'memory',
-  'onepassword',
+  'onepassword', 'secretspec',
 ]
 
 describe('provider registration', () => {

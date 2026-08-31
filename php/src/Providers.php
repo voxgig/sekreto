@@ -239,10 +239,20 @@ function fetchjson(string $method, string $url, array $headers, ?string $body = 
 
     $context = stream_context_create(['http' => $options]);
 
-    $text = @file_get_contents($url, false, $context);
+    // maxlen + 1: an endless body would otherwise be accumulated in memory
+    // until the deadline, which on a loopback or datacentre link is
+    // gigabytes. One byte over the bound is enough to know it was exceeded.
+    $text = @file_get_contents($url, false, $context, 0, HTTP_MAXBODY + 1);
 
     if (false === $text) {
         throw new SekretoError('sekreto: cannot reach ' . explode('?', $url)[0]);
+    }
+
+    // An endless body is a store that could not answer, so this raises
+    // rather than returning a miss - the latter would fall through to a
+    // weaker store on an attacker's cue.
+    if (HTTP_MAXBODY < strlen($text)) {
+        throw new SekretoError('sekreto: oversized response from ' . explode('?', $url)[0]);
     }
 
     $status = 0;
@@ -280,6 +290,131 @@ function httpget(string $url, array $headers): array
 }
 
 /**
+ * How much of a response body will be read before the store is treated as
+ * having answered incoherently. Ports carry the same bound.
+ *
+ * Far above anything real - the largest legitimate payload this library
+ * fetches is Doppler's whole-config download, measured in kilobytes. A bound
+ * is needed because the TIMEOUT is not one: ten seconds on a loopback or
+ * datacentre link is gigabytes, and the body is accumulated in memory before
+ * it is parsed. This runs on an application's startup path, so the failure is
+ * the application never starting.
+ */
+const HTTP_MAXBODY = 8 * 1024 * 1024;
+
+/**
+ * Run a child to completion and collect both its streams.
+ *
+ * Given an ARGV ARRAY, not a command string. `proc_open` with a string runs
+ * `/bin/sh -c`, which put every value - the command, the alias, the key -
+ * one escaping function away from being interpreted. `escapeshellarg` was
+ * doing that job correctly, but it made this the only port whose safety
+ * rested on quoting rather than on `execve`, and it broke two things
+ * besides: the "cannot run" branch was unreachable, because `sh` always
+ * starts and absorbs the exec failure into its own message, and the
+ * `BORU_HOME=...` prefix is POSIX-sh syntax that does nothing on Windows,
+ * where `proc_open` goes through `cmd.exe`. The array form (PHP 7.4+) makes
+ * this port behave like the other eleven.
+ *
+ * Both pipes are drained TOGETHER. `stream_get_contents` on stdout to EOF
+ * and only then on stderr deadlocks the moment the child writes more than
+ * one pipe buffer (64 KiB on Linux) to stderr: this process is blocked
+ * waiting for stdout, the child is blocked waiting for room on stderr, and
+ * neither can move. Nothing in this library sets a timeout, so that hang is
+ * permanent. secretspec's diagnostics are box-drawn and reach that size
+ * easily.
+ *
+ * The child's stdin is closed rather than inherited, so a CLI that reads it
+ * - one prompting for a passphrase when its environment variable is absent -
+ * sees EOF and gives up instead of waiting forever.
+ *
+ * @param list<string>          $argv
+ * @param array<string, string> $env  extra variables for the child only
+ *
+ * @return array{0: string, 1: string, 2: int} stdout, trimmed stderr, status
+ */
+function runcmd(array $argv, array $env = []): array
+{
+    $descriptors = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+
+    // null inherits the parent environment; a non-empty $env has to be the
+    // whole set, so it is merged rather than replacing it.
+    $childenv = [] === $env ? null : array_merge(getenv(), $env);
+
+    $process = @proc_open($argv, $descriptors, $pipes, null, $childenv);
+
+    if (!is_resource($process)) {
+        throw new SekretoError('sekreto: cannot run ' . $argv[0]);
+    }
+
+    fclose($pipes[0]);
+
+    stream_set_blocking($pipes[1], false);
+    stream_set_blocking($pipes[2], false);
+
+    $text = [1 => '', 2 => ''];
+    $open = [1 => $pipes[1], 2 => $pipes[2]];
+
+    while ([] !== $open) {
+        $read = array_values($open);
+        $write = null;
+        $except = null;
+
+        if (false === @stream_select($read, $write, $except, 30)) {
+            break;
+        }
+
+        foreach ($read as $handle) {
+            $chunk = fread($handle, 65536);
+            $key = $handle === $pipes[1] ? 1 : 2;
+
+            if (false === $chunk || ('' === $chunk && feof($handle))) {
+                unset($open[$key]);
+                continue;
+            }
+
+            $text[$key] .= $chunk;
+        }
+    }
+
+    fclose($pipes[1]);
+    fclose($pipes[2]);
+
+    $status = proc_close($process);
+
+    return [$text[1], trim($text[2]), $status];
+}
+
+/**
+ * An address with any userinfo replaced by `[redacted]`, for messages.
+ *
+ * Every refusal below names the address it refused, and one of them fires
+ * precisely because the address carries a credential - so printing it
+ * verbatim wrote the password to stderr and into the logs. It cannot be
+ * cleaned up afterwards either: that password was never resolved as a
+ * secret, so redact() has never seen it and never will. The host is what a
+ * reader needs to identify which chain entry is at fault; the userinfo is
+ * not.
+ */
+function safeaddr(string $addr): string
+{
+    $mark = strpos($addr, '://');
+    if (false === $mark) {
+        return $addr;
+    }
+
+    $rest = substr($addr, $mark + 3);
+    $authority = substr($rest, 0, strcspn($rest, '/?#'));
+
+    $at = strrpos($authority, '@');
+    if (false === $at) {
+        return $addr;
+    }
+
+    return substr($addr, 0, $mark + 3) . '[redacted]' . substr($addr, $mark + 3 + $at);
+}
+
+/**
  * Refuse to send a Vault token in the clear.
  *
  * Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -287,25 +422,73 @@ function httpget(string $url, array $headers): array
  * machine puts both the token and the secret it fetches on the wire for
  * anyone on the path, so sekreto will not do it. Loopback stays allowed:
  * that is `vault server -dev` and this repo's own test harness.
+ *
+ * The address is read by hand, in the same handful of steps in every port,
+ * rather than by each platform's URL parser. That is deliberate. Twelve
+ * parsers disagree about malformed input - where userinfo ends, whether
+ * `0177.0.0.1` is loopback, what an unclosed bracket means - and a check
+ * that answers differently in different ports is not a check.
+ *
+ * The rule this parse obeys, and the reason it can be trusted: it is never
+ * more permissive than the HTTP client that will dial the address. It ends
+ * the authority at `/`, `?` or `#` only, so a client that also breaks on
+ * `\` (WHATWG does) can only ever see a SHORTER host than this does. It
+ * refuses userinfo outright rather than locating its end. It compares the
+ * host literally, so a numeric form no parser here agrees on is refused
+ * rather than guessed at.
  */
 function checkaddr(string $addr): void
 {
     if (str_starts_with($addr, 'https://')) {
+        $scheme = 'https://';
+    } elseif (str_starts_with($addr, 'http://')) {
+        $scheme = 'http://';
+    } else {
+        throw new SekretoError('sekreto: not an http(s) address: ' . safeaddr($addr));
+    }
+
+    $rest = substr($addr, strlen($scheme));
+    $end = strcspn($rest, '/?#');
+    $authority = substr($rest, 0, $end);
+
+    // Userinfo is refused outright rather than parsed around, and on https as
+    // well as http. No store this library speaks authenticates by userinfo -
+    // they take a token or a signature - so an address carrying one is a
+    // mistake at best. At worst it is the attack this whole function exists
+    // to stop: `http://localhost:8200@evil.example.com/` is a request to
+    // evil.example.com that reads, to anything that splits the authority on
+    // ':', as loopback.
+    if (str_contains($authority, '@')) {
+        throw new SekretoError(
+            'sekreto: refusing an address with embedded credentials: ' . safeaddr($addr)
+        );
+    }
+
+    // An opening bracket with no closing one is not an address at all.
+    if (str_starts_with($authority, '[') && !str_contains($authority, ']')) {
+        throw new SekretoError('sekreto: not a valid http(s) address: ' . safeaddr($addr));
+    }
+
+    if ('https://' === $scheme) {
         return;
     }
 
-    if (!str_starts_with($addr, 'http://')) {
-        throw new SekretoError('sekreto: not an http(s) address: ' . $addr);
+    // A bracketed IPv6 literal keeps its brackets. Splitting the authority on
+    // the first colon yields '[', so `http://[::1]:8200` could never match -
+    // which made the '[::1]' entry below unreachable, and refused a
+    // legitimate local vault.
+    if (str_starts_with($authority, '[')) {
+        $host = substr($authority, 0, strpos($authority, ']') + 1);
+    } else {
+        $host = explode(':', $authority)[0];
     }
 
-    $host = explode(':', explode('/', substr($addr, 7))[0])[0];
-
-    if (in_array($host, ['localhost', '127.0.0.1', '::1', '[::1]'], true)) {
+    if (in_array(strtolower($host), ['localhost', '127.0.0.1', '::1', '[::1]'], true)) {
         return;
     }
 
     throw new SekretoError(
-        'sekreto: refusing to send a token in plaintext to ' . $addr . ' (use https)'
+        'sekreto: refusing to send a token in plaintext to ' . safeaddr($addr) . ' (use https)'
     );
 }
 
@@ -534,31 +717,15 @@ class BoruProvider implements Provider
 
         $alias = $this->namespace ? $this->namespace . ':' . $name : $name;
 
-        $cmd = escapeshellarg($this->command) . ' vault get --reveal ' . escapeshellarg($alias);
-
-        if ($this->home) {
-            $cmd = 'BORU_HOME=' . escapeshellarg($this->home) . ' ' . $cmd;
-        }
-
-        $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
-        $process = @proc_open($cmd, $descriptors, $pipes);
-
-        if (!is_resource($process)) {
-            throw new SekretoError('sekreto: cannot run ' . $this->command);
-        }
-
-        $out = stream_get_contents($pipes[1]);
-        $err = stream_get_contents($pipes[2]);
-        fclose($pipes[1]);
-        fclose($pipes[2]);
-        $status = proc_close($process);
+        [$out, $why, $status] = runcmd(
+            [$this->command, 'vault', 'get', '--reveal', $alias],
+            $this->home ? ['BORU_HOME' => $this->home] : []
+        );
 
         if (0 === $status) {
             // boru prints the value and one newline, and nothing else.
-            return preg_replace('/\r?\n\z/', '', $out, 1);
+            return preg_replace('/\n\z/', '', $out, 1);
         }
-
-        $why = trim($err);
 
         // "no alias named" is boru saying it does not hold this secret, which
         // is a miss: the chain carries on to the next provider. A locked vault
@@ -590,6 +757,111 @@ class BoruProvider implements Provider
 function borumiss(string $why): bool
 {
     return str_contains($why, 'no alias named');
+}
+
+/**
+ * SecretSpec (https://secretspec.dev).
+ *
+ * SecretSpec is a declaration - a `secretspec.toml` naming the secrets a
+ * project needs - plus a chain of its own backends to satisfy them from.
+ * That makes it the same shape as sekreto one level down, and the reason
+ * to support it is the same reason sekreto exists: a project that has
+ * already declared its secrets there should not have to declare them
+ * again here.
+ *
+ * Read through its CLI, as boru is, because that is the interface it
+ * offers a program in another language: `secretspec get API_TOKEN` prints
+ * the value on stdout and nothing else. A sekreto name maps to a
+ * SecretSpec key exactly as it maps to an environment variable -
+ * `api.token` is `API_TOKEN` - which is the convention SecretSpec's own
+ * examples use.
+ *
+ * `backend` selects one of SecretSpec's backends (`--provider`, e.g.
+ * `keyring` or `dotenv://.env`) and is called `backend` here only because
+ * `provider` already means something else in this library.
+ *
+ * A reason is required, not optional: SecretSpec records every read in an
+ * audit log and refuses to read at all without one. sekreto sends
+ * `sekreto` unless told otherwise, so the audit trail says which tool
+ * asked.
+ */
+class SecretspecProvider implements Provider
+{
+    private string $command;
+
+    public function __construct(
+        ?string $command = null,
+        private ?string $file = null,
+        private ?string $profile = null,
+        private ?string $backend = null,
+        private ?string $reason = null,
+        private ?string $prefix = null
+    ) {
+        $this->command = $command ?? 'secretspec';
+    }
+
+    public function lookup(string $name): ?string
+    {
+        $key = Name::envkey($name, $this->prefix);
+
+        $argv = [$this->command];
+        if ($this->file) {
+            $argv[] = '--file';
+            $argv[] = $this->file;
+        }
+        $argv[] = 'get';
+        $argv[] = $key;
+        if ($this->backend) {
+            $argv[] = '--provider';
+            $argv[] = $this->backend;
+        }
+        if ($this->profile) {
+            $argv[] = '--profile';
+            $argv[] = $this->profile;
+        }
+        $argv[] = '--reason';
+        $argv[] = $this->reason ?: 'sekreto';
+
+        [$out, $why, $status] = runcmd($argv);
+
+        if (0 === $status) {
+            // The value and one newline, and nothing else.
+            return preg_replace('/\n\z/', '', $out, 1);
+        }
+
+        if (secretspecmiss($why, $key)) {
+            return null;
+        }
+
+        throw new SekretoError(
+            'sekreto: secretspec error: ' . ('' === $why ? 'exit ' . $status : $why)
+        );
+    }
+
+    public function describe(): string
+    {
+        return 'secretspec' . ($this->backend ? ':' . $this->backend : '');
+    }
+}
+
+/**
+ * Does this SecretSpec failure mean "no such secret" rather than "I could
+ * not answer"?
+ *
+ * SecretSpec says `Secret 'API_TOKEN' not found` for both a name it does
+ * not declare and one declared with no value, and both are misses: this
+ * store does not hold it, so the chain carries on.
+ *
+ * MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
+ * `Provider backend 'keyring' not found`, which is a store that could not
+ * answer at all - and reading that as a miss is the worst failure this
+ * library has, because the chain then falls through to a weaker store
+ * without saying so. The key is required to appear, so the two cannot be
+ * confused.
+ */
+function secretspecmiss(string $why, string $key): bool
+{
+    return str_contains($why, "Secret '" . $key . "' not found");
 }
 
 /** The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now. */
@@ -736,7 +1008,16 @@ class AwsSecretsProvider implements Provider
             // `value` field can mean "the bytes themselves".
             $bin = $body['SecretBinary'] ?? null;
             if (is_string($bin) && 'value' === $ref['field']) {
-                return base64_decode($bin);
+                // strict: base64_decode SKIPS characters outside the
+                // alphabet by default, so a corrupted payload decoded to
+                // plausible-looking bytes that were then returned as the
+                // secret. A store that answered incoherently is an error.
+                $decoded = base64_decode($bin, true);
+                if (false === $decoded) {
+                    throw new SekretoError('sekreto: aws secretsmanager: undecodable secret');
+                }
+
+                return $decoded;
             }
             return null;
         }
@@ -894,7 +1175,14 @@ class GcpSecretsProvider implements Provider
             return null;
         }
 
-        return base64_decode($data);
+        // See the aws provider: strict, and an undecodable payload is an
+        // error rather than a miss.
+        $decoded = base64_decode($data, true);
+        if (false === $decoded) {
+            throw new SekretoError('sekreto: gcp: undecodable secret');
+        }
+
+        return $decoded;
     }
 
     public function describe(): string
@@ -1352,6 +1640,14 @@ function makeprovider(array $spec): Provider
         'onepassword' => new OnePasswordProvider($spec),
         'doppler' => new DopplerProvider($spec),
         'infisical' => new InfisicalProvider($spec),
+        'secretspec' => new SecretspecProvider(
+            $spec['command'] ?? null,
+            $spec['file'] ?? null,
+            $spec['profile'] ?? null,
+            $spec['backend'] ?? null,
+            $spec['reason'] ?? null,
+            $spec['prefix'] ?? null
+        ),
         default => throw new SekretoError(
             'sekreto: unknown provider kind: ' . (null === $kind ? '' : (string) $kind)
         ),

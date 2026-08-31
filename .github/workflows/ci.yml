@@ -27,6 +27,10 @@ concurrency:
 permissions:
   contents: read
 
+env:
+  # One place, because three jobs install it.
+  KOTLIN_VERSION: '2.1.20'
+
 jobs:
   omni-isolation:
     name: omni must not reach any shipped library
@@ -102,6 +106,8 @@ jobs:
           - rust
           - java
           - csharp
+          - zig
+          - kotlin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -117,9 +123,25 @@ jobs:
           node-version: '24'
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
-        if: matrix.lang == 'python'
+        if: matrix.lang == 'python' || matrix.lang == 'zig'
         with:
           python-version: '3.12'
+
+      # ziglang from PyPI, pinned by hash in .github/zig-requirements.txt.
+      # There is no zig package in Ubuntu's archives, and every published
+      # zig setup action targets a Node version GitHub now refuses. This
+      # is the route voxgig/struct takes for the same reasons.
+      - name: Setup Zig
+        if: matrix.lang == 'zig'
+        run: |
+          python3 -m pip install --disable-pip-version-check --quiet \
+            --require-hashes -r "$GITHUB_WORKSPACE/.github/zig-requirements.txt"
+          bin="$RUNNER_TEMP/zigbin"; mkdir -p "$bin"
+          printf '#!/bin/sh\nexec python3 -m ziglang "$@"\n' > "$bin/zig"
+          chmod +x "$bin/zig"
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/zig" version
+
 
       - uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
         if: matrix.lang == 'ruby'
@@ -142,10 +164,29 @@ jobs:
         if: matrix.lang == 'rust'
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        if: matrix.lang == 'java'
+        if: matrix.lang == 'java' || matrix.lang == 'kotlin'
         with:
           distribution: temurin
           java-version: '21'
+
+      # kotlinc from Maven Central, pinned. There is no kotlin package in
+      # Ubuntu's archives and the JetBrains release assets live on GitHub
+      # releases; the compiler distribution on Maven Central is the same
+      # artifact and is reachable the same way every other JVM dependency
+      # is.
+      - name: Setup Kotlin
+        if: matrix.lang == 'kotlin'
+        run: |
+          # --fail, so a wrong URL is an error here rather than a
+          # not-a-zipfile three lines later: Maven Central carries the
+          # kotlin-compiler JAR but not the standalone distribution, and
+          # fetching the jar's name with a .zip suffix returns a 404 page
+          # that curl will happily save.
+          curl -sSLf --retry 3 -o /tmp/kotlinc.zip \
+            "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+          unzip -q /tmp/kotlinc.zip -d /opt
+          echo /opt/kotlinc/bin >> "$GITHUB_PATH"
+
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         if: matrix.lang == 'csharp'
@@ -237,6 +278,20 @@ jobs:
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0'
+      - name: Setup Kotlin
+        run: |
+          curl -sSLf --retry 3 -o /tmp/kotlinc.zip \
+            "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
+          unzip -q /tmp/kotlinc.zip -d /opt
+          echo /opt/kotlinc/bin >> "$GITHUB_PATH"
+      - name: Setup Zig
+        run: |
+          python3 -m pip install --disable-pip-version-check --quiet \
+            --require-hashes -r "$GITHUB_WORKSPACE/.github/zig-requirements.txt"
+          bin="$RUNNER_TEMP/zigbin"; mkdir -p "$bin"
+          printf '#!/bin/sh\nexec python3 -m ziglang "$@"\n' > "$bin/zig"
+          chmod +x "$bin/zig"
+          echo "$bin" >> "$GITHUB_PATH"
 
       # The boru provider is proved against the real binary or not at all -
       # both the CLI path and, when this boru build has `vault serve` and
@@ -263,7 +318,7 @@ jobs:
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
         run: |
-          for lang in typescript javascript python ruby php perl go rust java csharp; do
+          for lang in typescript javascript python ruby php perl go rust java csharp zig kotlin; do
             echo "======== $lang ========"
             make -C "$lang" build
           done

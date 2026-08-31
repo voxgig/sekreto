@@ -1,8 +1,7 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
 import {
-  ProviderSpec, Provider, SekretoError, awsparam, flatname, vaultref,
-} from './support'
+  ProviderSpec, Provider, SekretoError, awsparam, flatname, vaultref, unbase64 } from './support'
 import { checkaddr } from './addr'
 import { sigv4 } from '../Sigv4'
 import { fetchjson } from './http'
@@ -130,7 +129,11 @@ export function awssecretsprovider(options?: Awsopts): Provider {
         // `value` field can mean "the bytes themselves".
         const bin = res.body && res.body.SecretBinary
         if ('string' === typeof bin && 'value' === ref.field) {
-          return Buffer.from(bin, 'base64').toString('utf8')
+          const decoded = unbase64(bin)
+          if (undefined === decoded) {
+            throw new SekretoError('sekreto: aws secretsmanager: undecodable secret')
+          }
+          return decoded
         }
         return undefined
       }

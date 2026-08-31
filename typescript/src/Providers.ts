@@ -4,7 +4,7 @@
 // carried them.
 //
 // It exists for compatibility and for the callers that genuinely want
-// all thirteen: importing it registers the lot, exactly as the old
+// all fourteen: importing it registers the lot, exactly as the old
 // `makeprovider` switch made them all reachable. Nothing that used
 // `from './Providers'` has to change.
 //
@@ -31,8 +31,9 @@ export { azuresecretsprovider } from './provider/azuresecrets'
 export { onepasswordprovider } from './provider/onepassword'
 export { dopplerprovider } from './provider/doppler'
 export { infisicalprovider } from './provider/infisical'
+export { secretspecprovider } from './provider/secretspec'
 
-export { checkaddr } from './provider/addr'
+export { checkaddr, safeaddr } from './provider/addr'
 export { makeprovider, register, registered, kinds } from './provider/Registry'
 export type { ProviderDefinition } from './provider/Registry'
 export type { Provider, ProviderSpec } from './provider/support'

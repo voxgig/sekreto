@@ -43,8 +43,14 @@ build-clean:
 # -count=1 disables the test cache. The spec is read at run time, so Go
 # cannot see that it changed and would otherwise report a stale pass after
 # spec/sekreto.json is edited.
+#
+# -race because this is the only port the compiler does not stop from
+# sharing a Sekreto across threads, and the bug it caught - a lost entry in
+# `seen`, so Redact hands a secret straight back into the log - produces a
+# correct-looking result on any single run. concurrent_test.go is only a
+# real guard with the detector on.
 test: go.work
-	go test -count=1 ./... ./testutil/...
+	go test -race -count=1 ./... ./testutil/...
 
 clean:
 	go clean

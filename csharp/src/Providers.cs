@@ -21,6 +21,7 @@ using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Text;
+using System.Threading.Tasks;
 
 namespace Voxgig.Sekreto
 {
@@ -217,8 +218,101 @@ namespace Voxgig.Sekreto
         }
     }
 
+    /// <summary>What a finished child process left behind.</summary>
+    internal readonly struct Ran
+    {
+        internal Ran(string outtext, string why, int status)
+        {
+            Out = outtext;
+            Why = why;
+            Status = status;
+        }
+
+        internal string Out { get; }
+
+        internal string Why { get; }
+
+        internal int Status { get; }
+    }
+
+    internal static class Child
+    {
+        /// <summary>
+        /// Run a child to completion and collect both its streams.
+        ///
+        /// <para>The two streams are drained CONCURRENTLY. Reading stdout to
+        /// EOF and only then reading stderr deadlocks the moment the child
+        /// writes more than one pipe buffer (64 KiB on Linux) to stderr: the
+        /// parent is blocked waiting for stdout, the child is blocked waiting
+        /// for room on stderr, and neither can move. Nothing in this library
+        /// sets a timeout, so that hang is permanent. secretspec's
+        /// diagnostics are box-drawn and reach that size easily.</para>
+        ///
+        /// <para>The child's stdin is closed rather than inherited, so a CLI
+        /// that reads it - one prompting for a passphrase when its
+        /// environment variable is absent - sees EOF and gives up instead of
+        /// waiting forever on the parent's own console.</para>
+        /// </summary>
+        internal static Ran Run(ProcessStartInfo start, string command)
+        {
+            try
+            {
+                using Process process = Process.Start(start);
+
+                process.StandardInput.Close();
+
+                // Started before stdout is read, so the child always has a
+                // reader on both pipes.
+                Task<string> errtask = process.StandardError.ReadToEndAsync();
+                string outtext = process.StandardOutput.ReadToEnd();
+                string why = errtask.GetAwaiter().GetResult();
+
+                process.WaitForExit();
+
+                return new Ran(outtext, why.Trim(), process.ExitCode);
+            }
+            catch (Exception err)
+            {
+                throw new SekretoError("sekreto: cannot run " + command + ": " + err.Message);
+            }
+        }
+    }
+
     public static class Addr
     {
+        /// <summary>
+        /// An address with any userinfo replaced by `[redacted]`, for
+        /// messages.
+        ///
+        /// <para>Every refusal below names the address it refused, and one of
+        /// them fires precisely because the address carries a credential - so
+        /// printing it verbatim wrote the password to stderr and into the
+        /// logs. It cannot be cleaned up afterwards either: that password was
+        /// never resolved as a secret, so Redact has never seen it and never
+        /// will. The host is what a reader needs to identify which chain entry
+        /// is at fault; the userinfo is not.</para>
+        /// </summary>
+        internal static string Safe(string addr)
+        {
+            int mark = addr.IndexOf("://", StringComparison.Ordinal);
+            if (-1 == mark)
+            {
+                return addr;
+            }
+
+            string rest = addr.Substring(mark + 3);
+            int stop = rest.IndexOfAny(new[] { '/', '?', '#' });
+            string authority = -1 == stop ? rest : rest.Substring(0, stop);
+
+            int at = authority.LastIndexOf('@');
+            if (-1 == at)
+            {
+                return addr;
+            }
+
+            return addr.Substring(0, mark + 3) + "[redacted]" + addr.Substring(mark + 3 + at);
+        }
+
         /// <summary>
         /// Refuse to send a secret-bearing credential in the clear.
         ///
@@ -228,20 +322,84 @@ namespace Voxgig.Sekreto
         /// on the wire for anyone on the path, so sekreto will not do it.
         /// Loopback stays allowed: that is `vault server -dev`,
         /// `boru vault serve`, and this repo's own test harness.</para>
+        ///
+        /// <para>The address is read by hand, in the same handful of steps in
+        /// every port, rather than by each platform's URL parser. That is
+        /// deliberate. Twelve parsers disagree about malformed input - where
+        /// userinfo ends, whether `0177.0.0.1` is loopback, what an unclosed
+        /// bracket means - and a check that answers differently in different
+        /// ports is not a check.</para>
+        ///
+        /// <para>The rule this parse obeys, and the reason it can be trusted:
+        /// it is never more permissive than the HTTP client that will dial
+        /// the address. It ends the authority at `/`, `?` or `#` only, so a
+        /// client that also breaks on `\` (WHATWG does) can only ever see a
+        /// SHORTER host than this does. It refuses userinfo outright rather
+        /// than locating its end. It compares the host literally, so a
+        /// numeric form no parser here agrees on is refused rather than
+        /// guessed at.</para>
         /// </summary>
         public static void Check(string addr)
         {
+            string scheme;
             if (addr.StartsWith("https://", StringComparison.Ordinal))
+            {
+                scheme = "https://";
+            }
+            else if (addr.StartsWith("http://", StringComparison.Ordinal))
+            {
+                scheme = "http://";
+            }
+            else
+            {
+                throw new SekretoError("sekreto: not an http(s) address: " + Safe(addr));
+            }
+
+            string rest = addr.Substring(scheme.Length);
+            int end = rest.IndexOfAny(new[] { '/', '?', '#' });
+            string authority = -1 == end ? rest : rest.Substring(0, end);
+
+            // Userinfo is refused outright rather than parsed around, and on
+            // https as well as http. No store this library speaks
+            // authenticates by userinfo - they take a token or a signature -
+            // so an address carrying one is a mistake at best. At worst it is
+            // the attack this whole method exists to stop:
+            // http://localhost:8200@evil.example.com/ is a request to
+            // evil.example.com that reads, to anything that splits the
+            // authority on ':', as loopback.
+            if (authority.Contains('@'))
+            {
+                throw new SekretoError(
+                    "sekreto: refusing an address with embedded credentials: " + Safe(addr));
+            }
+
+            // An opening bracket with no closing one is not an address at all.
+            if (authority.StartsWith("[", StringComparison.Ordinal)
+                && !authority.Contains(']'))
+            {
+                throw new SekretoError("sekreto: not a valid http(s) address: " + Safe(addr));
+            }
+
+            if ("https://" == scheme)
             {
                 return;
             }
 
-            if (!addr.StartsWith("http://", StringComparison.Ordinal))
+            // A bracketed IPv6 literal keeps its brackets. Splitting the
+            // authority on the first colon yields "[", so http://[::1]:8200
+            // could never match - which made the "[::1]" entry below
+            // unreachable, and refused a legitimate local vault.
+            string host;
+            if (authority.StartsWith("[", StringComparison.Ordinal))
             {
-                throw new SekretoError("sekreto: not an http(s) address: " + addr);
+                host = authority.Substring(0, authority.IndexOf(']') + 1);
             }
-
-            string host = addr.Substring("http://".Length).Split('/')[0].Split(':')[0];
+            else
+            {
+                int colon = authority.IndexOf(':');
+                host = -1 == colon ? authority : authority.Substring(0, colon);
+            }
+            host = host.ToLowerInvariant();
 
             if ("localhost" == host || "127.0.0.1" == host || "::1" == host || "[::1]" == host)
             {
@@ -249,7 +407,7 @@ namespace Voxgig.Sekreto
             }
 
             throw new SekretoError(
-                "sekreto: refusing to send a token in plaintext to " + addr + " (use https)");
+                "sekreto: refusing to send a token in plaintext to " + Safe(addr) + " (use https)");
         }
     }
 
@@ -287,12 +445,38 @@ namespace Voxgig.Sekreto
 
     internal static class Http
     {
+        /// <summary>
+        /// How much of a response body will be read before the store is treated
+        /// as having answered incoherently. Ports carry the same bound.
+        ///
+        /// <para>Far above anything real - the largest legitimate payload this
+        /// library fetches is Doppler's whole-config download, measured in
+        /// kilobytes. A bound is needed because the TIMEOUT is not one: ten
+        /// seconds on a loopback or datacentre link is gigabytes, and the body is
+        /// accumulated in memory before it is parsed. This runs on an
+        /// application's startup path, so the failure is the application never
+        /// starting.</para>
+        /// </summary>
+        internal const long MaxBody = 8 * 1024 * 1024;
+
         // AllowAutoRedirect = false: a vault API never legitimately
         // redirects, and a followed redirect carries X-Vault-Token to the
         // target host, which checkaddr - it validates only the configured
         // address - cannot see. A 3xx then surfaces as a store error.
         private static readonly HttpClient Client =
-            new HttpClient(new HttpClientHandler { AllowAutoRedirect = false })
+            new HttpClient(new HttpClientHandler
+            {
+                AllowAutoRedirect = false,
+
+                // A secrets client dials the address it was configured with
+                // and nowhere else. UseProxy defaults to true and resolves
+                // from the environment WITHOUT exempting loopback, so with
+                // HTTP_PROXY set the vault token for a local dev vault went,
+                // in the clear, to whatever that variable named. checkaddr
+                // permits plaintext to loopback precisely because nothing
+                // leaves the machine.
+                UseProxy = false,
+            })
             { Timeout = TimeSpan.FromSeconds(10) };
 
         /// <summary>
@@ -331,9 +515,34 @@ namespace Voxgig.Sekreto
             string text;
             try
             {
-                using HttpResponseMessage response = Client.Send(request);
+                using HttpResponseMessage response = Client.Send(
+                    request, HttpCompletionOption.ResponseHeadersRead);
                 status = (int)response.StatusCode;
-                text = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+
+                // Read against MaxBody rather than ReadAsStringAsync, which
+                // buffers whatever arrives: an endless body would otherwise be
+                // accumulated in memory until the deadline, which on a
+                // loopback or datacentre link is gigabytes.
+                using Stream stream = response.Content.ReadAsStream();
+                var buffer = new byte[64 * 1024];
+                using var collected = new MemoryStream();
+                int got;
+                while (0 < (got = stream.Read(buffer, 0, buffer.Length)))
+                {
+                    if (MaxBody < collected.Length + got)
+                    {
+                        // An endless body is a store that could not answer, so
+                        // this raises rather than returning a miss.
+                        throw new SekretoError(
+                            "sekreto: oversized response from " + url.Split('?')[0]);
+                    }
+                    collected.Write(buffer, 0, got);
+                }
+                text = Encoding.UTF8.GetString(collected.ToArray());
+            }
+            catch (SekretoError)
+            {
+                throw;
             }
             catch (Exception err)
             {
@@ -597,6 +806,10 @@ namespace Voxgig.Sekreto
                 FileName = command,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
+                // Redirected so it can be CLOSED: an inherited stdin lets a
+                // CLI that prompts for a passphrase block on the parent's
+                // console forever.
+                RedirectStandardInput = true,
                 UseShellExecute = false,
             };
 
@@ -612,22 +825,10 @@ namespace Voxgig.Sekreto
                 start.Environment["BORU_HOME"] = home;
             }
 
-            string outtext;
-            string why;
-            int status;
-
-            try
-            {
-                using Process process = Process.Start(start);
-                outtext = process.StandardOutput.ReadToEnd();
-                why = process.StandardError.ReadToEnd().Trim();
-                process.WaitForExit();
-                status = process.ExitCode;
-            }
-            catch (Exception err)
-            {
-                throw new SekretoError("sekreto: cannot run " + command + ": " + err.Message);
-            }
+            Ran ran = Child.Run(start, command);
+            string outtext = ran.Out;
+            string why = ran.Why;
+            int status = ran.Status;
 
             if (0 == status)
             {
@@ -697,6 +898,143 @@ namespace Voxgig.Sekreto
         internal static bool BoruMiss(string why)
         {
             return why.Contains("no alias named");
+        }
+    }
+
+    /// <summary>
+    /// SecretSpec (https://secretspec.dev).
+    ///
+    /// <para>SecretSpec is a declaration - a `secretspec.toml` naming the
+    /// secrets a project needs - plus a chain of its own backends to satisfy
+    /// them from. That makes it the same shape as sekreto one level down, and
+    /// the reason to support it is the same reason sekreto exists: a project
+    /// that has already declared its secrets there should not have to declare
+    /// them again here.</para>
+    ///
+    /// <para>Read through its CLI, as boru is, because that is the interface
+    /// it offers a program in another language: `secretspec get API_TOKEN`
+    /// prints the value on stdout and nothing else. A sekreto name maps to a
+    /// SecretSpec key exactly as it maps to an environment variable -
+    /// `api.token` is `API_TOKEN` - which is the convention SecretSpec's own
+    /// examples use.</para>
+    ///
+    /// <para>backend selects one of SecretSpec's backends (`--provider`, e.g.
+    /// `keyring` or `dotenv://.env`) and is called backend here only because
+    /// `provider` already means something else in this library.</para>
+    ///
+    /// <para>A reason is required, not optional: SecretSpec records every
+    /// read in an audit log and refuses to read at all without one. sekreto
+    /// sends `sekreto` unless told otherwise, so the audit trail says which
+    /// tool asked.</para>
+    /// </summary>
+    public class SecretSpecProvider : IProvider
+    {
+        private readonly string command;
+        private readonly string file;
+        private readonly string profile;
+        private readonly string backend;
+        private readonly string reason;
+        private readonly string prefix;
+
+        public SecretSpecProvider(string command = null, string file = null,
+            string profile = null, string backend = null, string reason = null,
+            string prefix = null)
+        {
+            this.command = string.IsNullOrEmpty(command) ? "secretspec" : command;
+            this.file = file;
+            this.profile = profile;
+            this.backend = backend;
+            this.reason = reason;
+            this.prefix = prefix;
+        }
+
+        public string Lookup(string name)
+        {
+            string key = Names.EnvKey(name, prefix);
+
+            var start = new ProcessStartInfo
+            {
+                FileName = command,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                // Redirected so it can be CLOSED: an inherited stdin lets a
+                // CLI that prompts for a passphrase block on the parent's
+                // console forever.
+                RedirectStandardInput = true,
+                UseShellExecute = false,
+            };
+
+            // Arguments are passed one by one, never through a shell.
+            if (!string.IsNullOrEmpty(file))
+            {
+                start.ArgumentList.Add("--file");
+                start.ArgumentList.Add(file);
+            }
+
+            start.ArgumentList.Add("get");
+            start.ArgumentList.Add(key);
+
+            if (!string.IsNullOrEmpty(backend))
+            {
+                start.ArgumentList.Add("--provider");
+                start.ArgumentList.Add(backend);
+            }
+
+            if (!string.IsNullOrEmpty(profile))
+            {
+                start.ArgumentList.Add("--profile");
+                start.ArgumentList.Add(profile);
+            }
+
+            start.ArgumentList.Add("--reason");
+            start.ArgumentList.Add(string.IsNullOrEmpty(reason) ? "sekreto" : reason);
+
+            Ran ran = Child.Run(start, command);
+            string outtext = ran.Out;
+            string why = ran.Why;
+            int status = ran.Status;
+
+            if (0 == status)
+            {
+                // The value and one newline, and nothing else.
+                return outtext.EndsWith("\n", StringComparison.Ordinal)
+                    ? outtext.Substring(0, outtext.Length - 1)
+                    : outtext;
+            }
+
+            if (SecretSpecMiss(why, key))
+            {
+                return null;
+            }
+
+            throw new SekretoError(
+                "sekreto: secretspec error: " + (0 == why.Length ? "exit " + status : why));
+        }
+
+        public string Describe()
+        {
+            return "secretspec" + (string.IsNullOrEmpty(backend) ? "" : ":" + backend);
+        }
+
+        /// <summary>
+        /// Does this SecretSpec failure mean "no such secret" rather than "I
+        /// could not answer"?
+        ///
+        /// <para>SecretSpec says `Secret 'API_TOKEN' not found` for both a
+        /// name it does not declare and one declared with no value, and both
+        /// are misses: this store does not hold it, so the chain carries
+        /// on.</para>
+        ///
+        /// <para>MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec
+        /// also says `Provider backend 'keyring' not found`, which is a store
+        /// that could not answer at all - and reading that as a miss is the
+        /// worst failure this library has, because the chain then falls
+        /// through to a weaker store without saying so. The key is required
+        /// to appear, so the two cannot be confused.</para>
+        /// </summary>
+        internal static bool SecretSpecMiss(string why, string key)
+        {
+            return why.Contains("Secret '" + key + "' not found");
         }
     }
 
@@ -888,7 +1226,18 @@ namespace Voxgig.Sekreto
                 object bin = (body as Dictionary<string, object>)?.GetValueOrDefault("SecretBinary");
                 if (bin is string encoded && "value" == field)
                 {
-                    return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+                    // FromBase64String throws FormatException on a bad
+                    // payload, which is not a SekretoError and so escaped
+                    // the library's own error type. A store that answered
+                    // incoherently is an error.
+                    try
+                    {
+                        return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+                    }
+                    catch (FormatException)
+                    {
+                        throw new SekretoError("sekreto: aws secretsmanager: undecodable secret");
+                    }
                 }
                 return null;
             }
@@ -1087,7 +1436,15 @@ namespace Voxgig.Sekreto
                 return null;
             }
 
-            return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+            // See the aws provider: an undecodable payload is a SekretoError.
+            try
+            {
+                return Encoding.UTF8.GetString(Convert.FromBase64String(encoded));
+            }
+            catch (FormatException)
+            {
+                throw new SekretoError("sekreto: gcp: undecodable secret");
+            }
         }
 
         public string Describe()
@@ -1744,6 +2101,15 @@ namespace Voxgig.Sekreto
                         Text(spec.GetValueOrDefault("project")),
                         Text(spec.GetValueOrDefault("environment")),
                         Text(spec.GetValueOrDefault("path")));
+
+                case "secretspec":
+                    return new SecretSpecProvider(
+                        Text(spec.GetValueOrDefault("command")),
+                        Text(spec.GetValueOrDefault("file")),
+                        Text(spec.GetValueOrDefault("profile")),
+                        Text(spec.GetValueOrDefault("backend")),
+                        Text(spec.GetValueOrDefault("reason")),
+                        Text(spec.GetValueOrDefault("prefix")));
 
                 default:
                     throw new SekretoError("sekreto: unknown provider kind: " + (kind ?? ""));

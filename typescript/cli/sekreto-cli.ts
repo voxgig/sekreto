@@ -8,7 +8,8 @@
 // Usage: sekreto-cli <api-url> [--source <source>] [--store <name>]
 //
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-//          gcpsecrets azuresecrets onepassword doppler infisical chain
+//          gcpsecrets azuresecrets onepassword doppler infisical
+//          secretspec chain
 //
 // Each source's configuration arrives in the environment variables its
 // own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -117,6 +118,19 @@ function chainfor(source: string): ProviderSpec[] {
     addr: env.DOPPLER_ADDR,
   }
 
+  // SecretSpec's own environment variables where it has them
+  // (SECRETSPEC_FILE, _PROFILE, _PROVIDER, _REASON are read by the
+  // secretspec CLI itself), so a shell already set up for secretspec
+  // needs nothing further.
+  const secretspecspec: ProviderSpec = {
+    kind: 'secretspec',
+    command: env.SECRETSPEC_COMMAND || 'secretspec',
+    file: env.SECRETSPEC_FILE,
+    profile: env.SECRETSPEC_PROFILE,
+    backend: env.SECRETSPEC_PROVIDER,
+    reason: env.SECRETSPEC_REASON,
+  }
+
   const infisicalspec: ProviderSpec = {
     kind: 'infisical',
     addr: env.INFISICAL_ADDR,
@@ -142,6 +156,7 @@ function chainfor(source: string): ProviderSpec[] {
     onepassword: [onepasswordspec],
     doppler: [dopplerspec],
     infisical: [infisicalspec],
+    secretspec: [secretspecspec],
   }
 
   const found = bysource[source]

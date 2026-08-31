@@ -15,6 +15,7 @@ from .providers import (
     OnepasswordProvider,
     Provider,
     HashicorpProvider,
+    SecretspecProvider,
     makeprovider,
 )
 from .sekreto import (
@@ -48,6 +49,7 @@ __all__ = [
     'Sekreto',
     'SekretoError',
     'HashicorpProvider',
+    'SecretspecProvider',
     'awsparam',
     'envkey',
     'flatname',

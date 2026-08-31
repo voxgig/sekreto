@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# The end-to-end proof.
+# The end-to-end proof, against mock servers.
 #
 # spec/sekreto.json proves each port computes the same answers. This proves
 # they can actually get a secret and use it: for every language, and for
@@ -10,6 +10,12 @@
 # The token lives in four different places - an environment variable, a
 # .env file, a HashiCorp vault and a boru vault - and the CLI is never told
 # which one it came from. That indirection is the whole library.
+#
+# The servers here are MOCKS: each speaks its vendor's published wire
+# protocol, reimplemented in-tree (see test/mockhashicorp.js and friends).
+# That makes this suite fast and hermetic enough to run on every push. It
+# also makes it a claim - "this is what the real server does" - which
+# test/realstores.sh checks against the real servers in Docker.
 #
 # Usage: test/integration.sh [lang...]      (default: every built port)
 #
@@ -22,6 +28,11 @@ set -u
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT=$(cd "$HERE/.." && pwd)
+
+# What a check is, and how a port's CLI is invoked, is shared with
+# test/realstores.sh so that the two suites cannot drift.
+# shellcheck source=test/checks.sh
+. "$HERE/checks.sh"
 
 API_PORT=${API_PORT:-8099}
 VAULT_PORT=${VAULT_PORT:-8200}
@@ -63,17 +74,16 @@ INF_ENV=prod
 BORU=${BORU:-$(command -v boru || true)}
 BORU_PASSPHRASE=integration-passphrase
 
+# SecretSpec is read through its own CLI, like boru, so like boru it is
+# tested against the real binary or not at all. There is no mock and
+# there should not be one: the thing being tested is whether sekreto
+# reads what that program prints and tells its two failure shapes apart.
+SECRETSPEC=${SECRETSPEC:-$(command -v secretspec || true)}
+
 API_URL=http://127.0.0.1:$API_PORT/whoami
 
 WORK=$(mktemp -d)
 PIDS=()
-
-pass=0
-fail=0
-FAILED=()
-
-green() { printf '\033[32m%s\033[0m' "$1"; }
-red() { printf '\033[31m%s\033[0m' "$1"; }
 
 cleanup() {
   for pid in "${PIDS[@]:-}"; do
@@ -83,75 +93,74 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Wait for a port to answer, rather than sleeping and hoping.
-waitport() {
-  local port=$1 name=$2 tries=0
-  while [ $tries -lt 100 ]; do
-    if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
-      exec 3<&- 3>&-
-      return 0
-    fi
-    tries=$((tries + 1))
-    sleep 0.1
-  done
-  echo "integration: $name did not start on port $port" >&2
-  return 1
+# Start one mock, and prove the server that answers is OURS.
+#
+#   startmock <port> <name> <logfile> <command...>
+#
+# waitport alone is not enough. A mock that cannot bind - because a real
+# Vault, a leftover run, or an unrelated service already holds the port -
+# dies, but waitport connects to the squatter and reports success, so the
+# suite goes on to test the wrong server. That is not hypothetical: a
+# `vault server -dev` on its own default port 8200 turns every HashiCorp
+# check into a test of the real Vault with the mock's credentials, which
+# reads as a sekreto failure. A friendlier squatter would read as a pass.
+#
+# So the port is claimed before anything is started, where the answer is
+# knowable without a race.
+startmock() {
+  local port=$1 name=$2 log=$3
+  shift 3
+
+  portfree "$port" "$name" || exit 1
+
+  "$@" >"$log" 2>&1 &
+  PIDS+=("$!")
+
+  if ! waitport "$port" "$name"; then
+    cat "$log"
+    exit 1
+  fi
 }
 
 # ---------------------------------------------------------------- servers
 
 echo '== starting servers =='
 
-API_TOKEN=$TOKEN PORT=$API_PORT node "$ROOT/api/server.js" >"$WORK/api.log" 2>&1 &
-PIDS+=($!)
+startmock "$API_PORT" api "$WORK/api.log" \
+  env API_TOKEN="$TOKEN" PORT="$API_PORT" node "$ROOT/api/server.js"
 
-node "$HERE/mockhashicorp.js" "$VAULT_PORT" "$VAULT_TOKEN" \
-  "api.token=$TOKEN" >"$WORK/vault.log" 2>&1 &
-PIDS+=($!)
+startmock "$VAULT_PORT" hashicorp "$WORK/vault.log" \
+  node "$HERE/mockhashicorp.js" "$VAULT_PORT" "$VAULT_TOKEN" "api.token=$TOKEN"
 
 # A second vault that behaves like Vault Enterprise: it demands a
 # namespace on every request, serves KV v1 as well as v2, and hands out
 # its token only through kubernetes/approle logins - so the auth paths
 # are proven, not just the happy GET.
-node "$HERE/mockhashicorp.js" "$VAULT2_PORT" "$VAULT_TOKEN" \
+startmock "$VAULT2_PORT" hashicorp2 "$WORK/vault2.log" \
+  node "$HERE/mockhashicorp.js" "$VAULT2_PORT" "$VAULT_TOKEN" \
   --namespace=teamA --jwt="$SA_JWT" --role=app \
   --roleid="$APPROLE_ID" --secretid="$APPROLE_SECRET" \
-  "api.token=$TOKEN" >"$WORK/vault2.log" 2>&1 &
-PIDS+=($!)
+  "api.token=$TOKEN"
 
-node "$HERE/mockaws.js" "$AWS_PORT" "$AWS_KEYID" "$AWS_SECRETKEY" \
-  "api.token=$TOKEN" >"$WORK/aws.log" 2>&1 &
-PIDS+=($!)
+startmock "$AWS_PORT" aws "$WORK/aws.log" \
+  node "$HERE/mockaws.js" "$AWS_PORT" "$AWS_KEYID" "$AWS_SECRETKEY" "api.token=$TOKEN"
 
-node "$HERE/mockgcp.js" "$GCP_PORT" "$GCP_PROJECT" gcp-access-token \
-  "api.token=$TOKEN" >"$WORK/gcp.log" 2>&1 &
-PIDS+=($!)
+startmock "$GCP_PORT" gcp "$WORK/gcp.log" \
+  node "$HERE/mockgcp.js" "$GCP_PORT" "$GCP_PROJECT" gcp-access-token "api.token=$TOKEN"
 
-node "$HERE/mockazure.js" "$AZURE_PORT" "$AZ_TENANT" "$AZ_CLIENT" "$AZ_SECRET" \
-  azure-access-token "api.token=$TOKEN" >"$WORK/azure.log" 2>&1 &
-PIDS+=($!)
+startmock "$AZURE_PORT" azure "$WORK/azure.log" \
+  node "$HERE/mockazure.js" "$AZURE_PORT" "$AZ_TENANT" "$AZ_CLIENT" "$AZ_SECRET" \
+  azure-access-token "api.token=$TOKEN"
 
-node "$HERE/mockonepassword.js" "$OP_PORT" "$OP_TOKEN" "$OP_VAULT_NAME" \
-  "api.token=$TOKEN" >"$WORK/op.log" 2>&1 &
-PIDS+=($!)
+startmock "$OP_PORT" onepassword "$WORK/op.log" \
+  node "$HERE/mockonepassword.js" "$OP_PORT" "$OP_TOKEN" "$OP_VAULT_NAME" "api.token=$TOKEN"
 
-node "$HERE/mockdoppler.js" "$DOPPLER_PORT" "$DOPPLER_TOK" \
-  "api.token=$TOKEN" >"$WORK/doppler.log" 2>&1 &
-PIDS+=($!)
+startmock "$DOPPLER_PORT" doppler "$WORK/doppler.log" \
+  node "$HERE/mockdoppler.js" "$DOPPLER_PORT" "$DOPPLER_TOK" "api.token=$TOKEN"
 
-node "$HERE/mockinfisical.js" "$INFISICAL_PORT" "$INF_CLIENT" "$INF_SECRET" \
-  "$INF_WORKSPACE" "$INF_ENV" "api.token=$TOKEN" >"$WORK/infisical.log" 2>&1 &
-PIDS+=($!)
-
-waitport "$API_PORT" api || { cat "$WORK/api.log"; exit 1; }
-waitport "$VAULT_PORT" hashicorp || { cat "$WORK/vault.log"; exit 1; }
-waitport "$VAULT2_PORT" hashicorp2 || { cat "$WORK/vault2.log"; exit 1; }
-waitport "$AWS_PORT" aws || { cat "$WORK/aws.log"; exit 1; }
-waitport "$GCP_PORT" gcp || { cat "$WORK/gcp.log"; exit 1; }
-waitport "$AZURE_PORT" azure || { cat "$WORK/azure.log"; exit 1; }
-waitport "$OP_PORT" onepassword || { cat "$WORK/op.log"; exit 1; }
-waitport "$DOPPLER_PORT" doppler || { cat "$WORK/doppler.log"; exit 1; }
-waitport "$INFISICAL_PORT" infisical || { cat "$WORK/infisical.log"; exit 1; }
+startmock "$INFISICAL_PORT" infisical "$WORK/infisical.log" \
+  node "$HERE/mockinfisical.js" "$INFISICAL_PORT" "$INF_CLIENT" "$INF_SECRET" \
+  "$INF_WORKSPACE" "$INF_ENV" "api.token=$TOKEN"
 
 echo "   api        http://127.0.0.1:$API_PORT"
 echo "   hashicorp  http://127.0.0.1:$VAULT_PORT (and enterprise-style on $VAULT2_PORT)"
@@ -213,6 +222,7 @@ echo
 # Every CLI runs from an empty directory, so a stray .env anywhere in the
 # repo cannot make a run pass by accident. Each .env used is named outright.
 mkdir -p "$WORK/run" "$WORK/dotenv" "$WORK/wrong"
+RUNDIR="$WORK/run"
 
 cat >"$WORK/dotenv/.env" <<EOF
 # written by test/integration.sh
@@ -234,119 +244,28 @@ printf '%s\n' "$TOKEN" >"$WORK/filedir/API_TOKEN"
 # The service-account JWT the kubernetes-auth login presents.
 printf '%s' "$SA_JWT" >"$WORK/jwt"
 
+# A SecretSpec project: the declaration, a backend holding the secret,
+# and an empty backend to miss against. Absolute paths throughout,
+# because every CLI runs from an empty directory and secretspec resolves
+# both its declaration and a dotenv:// backend relative to the cwd.
+mkdir -p "$WORK/ss"
+cat >"$WORK/ss/secretspec.toml" <<'EOF'
+[project]
+name = "sekreto-integration"
+revision = "1.0"
+
+[profiles.default]
+API_TOKEN = { description = "the token the api wants", required = true }
+EOF
+printf 'API_TOKEN=%s\n' "$TOKEN" >"$WORK/ss/.env"
+printf '\n' >"$WORK/ss/empty.env"
+
 # --------------------------------------------------------------- the runs
 
-# How to invoke each port's CLI. A port is skipped, not failed, when it has
-# not been built - so a partial checkout still tests what it has.
-cli_cmd() {
-  case $1 in
-  typescript) echo "node $ROOT/typescript/dist/cli/sekreto-cli.js" ;;
-  javascript) echo "node $ROOT/javascript/cli/sekreto-cli.js" ;;
-  python) echo "python3 $ROOT/python/cli/sekreto_cli.py" ;;
-  ruby) echo "ruby $ROOT/ruby/cli/sekreto_cli.rb" ;;
-  php) echo "php $ROOT/php/cli/sekreto-cli.php" ;;
-  perl) echo "perl -I$ROOT/perl/lib $ROOT/perl/cli/sekreto-cli.pl" ;;
-  go) echo "$ROOT/go/build/sekreto-cli" ;;
-  rust) echo "$ROOT/rust/target/release/sekreto-cli" ;;
-  java) echo "java -cp $ROOT/java/build/classes sekreto.Cli" ;;
-  csharp) echo "dotnet $ROOT/csharp/cli/bin/Release/net8.0/SekretoCli.dll" ;;
-  *) echo "" ;;
-  esac
-}
-
-cli_ready() {
-  local lang=$1
-  case $lang in
-  typescript) [ -f "$ROOT/typescript/dist/cli/sekreto-cli.js" ] ;;
-  javascript) [ -f "$ROOT/javascript/cli/sekreto-cli.js" ] ;;
-  python) [ -f "$ROOT/python/cli/sekreto_cli.py" ] ;;
-  ruby) [ -f "$ROOT/ruby/cli/sekreto_cli.rb" ] ;;
-  php) [ -f "$ROOT/php/cli/sekreto-cli.php" ] ;;
-  perl) [ -f "$ROOT/perl/cli/sekreto-cli.pl" ] ;;
-  go) [ -x "$ROOT/go/build/sekreto-cli" ] ;;
-  rust) [ -x "$ROOT/rust/target/release/sekreto-cli" ] ;;
-  java) [ -f "$ROOT/java/build/classes/sekreto/Cli.class" ] ;;
-  csharp) [ -f "$ROOT/csharp/cli/bin/Release/net8.0/SekretoCli.dll" ] ;;
-  *) false ;;
-  esac
-}
-
-ALL_LANGS="typescript javascript python ruby php perl go rust java csharp"
 LANGS=${*:-$ALL_LANGS}
 
-# Run one CLI once, with one secret source configured, and check the result.
-#
-#   check <lang> <source> <expect: ok|deny> <env assignments...>
-#
-# STORE, when set, is passed as --store: the CLI must then take the secret
-# from that named store rather than from whichever provider answers first.
-check() {
-  local lang=$1 source=$2 expect=$3
-  shift 3
-
-  local cmd
-  cmd=$(cli_cmd "$lang")
-
-  local storeargs=()
-  if [ -n "${STORE:-}" ]; then
-    storeargs=(--store "$STORE")
-  fi
-
-  local out rc
-  out=$(cd "$WORK/run" && env -i \
-    PATH="$PATH" HOME="$HOME" \
-    JAVA_HOME="${JAVA_HOME:-}" DOTNET_CLI_TELEMETRY_OPTOUT=1 \
-    DOTNET_NOLOGO=1 \
-    "$@" \
-    $cmd "$API_URL" --source "$source" "${storeargs[@]}" 2>&1)
-  rc=$?
-
-  local label="$lang/$source"
-  [ -n "${STORE:-}" ] && label="$lang/$source->${STORE}"
-
-  if [ "$expect" = ok ]; then
-    # The API echoes the caller back, so a pass means the whole path worked:
-    # secret read -> bearer token accepted -> response parsed.
-    if [ $rc -eq 0 ] && [ "$out" = "{\"ok\":true,\"lang\":\"$lang\",\"source\":\"$source\",\"store\":\"${STORE:-}\",\"caller\":\"$lang\"}" ]; then
-      pass=$((pass + 1))
-      printf '   %s %-28s\n' "$(green ok)" "$label"
-      return 0
-    fi
-  else
-    # A wrong or absent secret must be refused, and the output must not leak
-    # the real token even so.
-    if [ $rc -ne 0 ] && ! echo "$out" | grep -qF "$TOKEN"; then
-      pass=$((pass + 1))
-      printf '   %s %-28s (denied, as expected)\n' "$(green ok)" "$label"
-      return 0
-    fi
-  fi
-
-  fail=$((fail + 1))
-  FAILED+=("$label")
-  printf '   %s %-28s rc=%s\n' "$(red FAIL)" "$label" "$rc"
-  echo "        $out" | head -5
-  return 1
-}
-
 for lang in $LANGS; do
-  if [ -z "$(cli_cmd "$lang")" ]; then
-    echo "== $lang == unknown language, skipped"
-    continue
-  fi
-
-  if ! cli_ready "$lang"; then
-    if [ -n "${REQUIRE_ALL:-}" ]; then
-      echo "== $lang == $(red "NOT BUILT") (REQUIRE_ALL is set)"
-      fail=$((fail + 1))
-      FAILED+=("$lang/not-built")
-      continue
-    fi
-    echo "== $lang == not built, skipped"
-    continue
-  fi
-
-  echo "== $lang =="
+  port_ready "$lang" || continue
 
   # 1. The secret in an environment variable.
   check "$lang" env ok API_TOKEN="$TOKEN"
@@ -367,6 +286,8 @@ for lang in $LANGS; do
       BORU_COMMAND="$BORU" \
       BORU_HOME="$BORU_HOME_DIR" \
       BORU_VAULT_PASSPHRASE="$BORU_PASSPHRASE"
+  else
+    noted_skip "$lang/boru" "no boru binary"
   fi
 
   # 5. The full chain, with only the HashiCorp vault holding the secret:
@@ -393,6 +314,8 @@ for lang in $LANGS; do
       BORU_COMMAND="$BORU" \
       BORU_HOME="$BORU_HOME_DIR" \
       BORU_VAULT_PASSPHRASE="$BORU_PASSPHRASE"
+  else
+    noted_skip "$lang/chain->boru" "no boru binary"
   fi
 
   # 7. The secret in a mounted-secret directory (a Kubernetes/Docker
@@ -481,37 +404,46 @@ for lang in $LANGS; do
     STORE= check "$lang" boruwire ok \
       BORU_ADDR="http://127.0.0.1:$BORU_SERVE_PORT" \
       BORU_TOKEN="$BORU_WIRE_TOKEN"
+  else
+    noted_skip "$lang/boruwire" "no boru vault serve"
   fi
 
-  # 18. A store that is not in the chain is a mistake, not a miss.
+  # 18. SecretSpec, through its own CLI. Three checks, because the
+  #     interesting part is not the happy read: a declared secret with no
+  #     value must be a MISS so the chain carries on, while a backend
+  #     that does not exist must RAISE. SecretSpec words both as "not
+  #     found", so a port that matches loosely passes the first and fails
+  #     the second - silently falling through to a weaker store.
+  if [ -n "$SECRETSPEC" ]; then
+    STORE= check "$lang" secretspec ok \
+      SECRETSPEC_COMMAND="$SECRETSPEC" \
+      SECRETSPEC_FILE="$WORK/ss/secretspec.toml" \
+      SECRETSPEC_PROVIDER="dotenv://$WORK/ss/.env"
+
+    LABEL="$lang/secretspec-miss" WHY='unknown secret' STORE= check "$lang" secretspec deny \
+      SECRETSPEC_COMMAND="$SECRETSPEC" \
+      SECRETSPEC_FILE="$WORK/ss/secretspec.toml" \
+      SECRETSPEC_PROVIDER="dotenv://$WORK/ss/empty.env"
+
+    LABEL="$lang/secretspec-raise" WHY='secretspec error' STORE= check "$lang" secretspec deny \
+      SECRETSPEC_COMMAND="$SECRETSPEC" \
+      SECRETSPEC_FILE="$WORK/ss/secretspec.toml" \
+      SECRETSPEC_PROVIDER=nosuchbackend
+  else
+    noted_skip "$lang/secretspec" "no secretspec binary"
+  fi
+
+  # 19. A store that is not in the chain is a mistake, not a miss.
   STORE=nosuchstore check "$lang" env deny API_TOKEN="$TOKEN"
 
-  # 19. No secret anywhere: the CLI must fail, not call the API unauthenticated.
+  # 20. No secret anywhere: the CLI must fail, not call the API unauthenticated.
   STORE= check "$lang" env deny SEKRETO_PREFIX=NOSUCH_
 
-  # 20. The wrong secret: the API must refuse it, and the CLI must not print
+  # 21. The wrong secret: the API must refuse it, and the CLI must not print
   #    the real token while complaining.
   STORE= check "$lang" dotenv deny SEKRETO_DOTENV="$WORK/wrong/.env"
 done
 
 # --------------------------------------------------------------- the tally
 
-echo
-# Zero checks is not a pass: if every port was skipped (nothing built, no
-# boru), the suite proved nothing. AGENTS.md tells developers to run this
-# before pushing, so a vacuous green here is worse than a red.
-if [ $pass -eq 0 ] && [ $fail -eq 0 ]; then
-  echo "$(red FAIL) 0 checks ran - nothing was built or exercised"
-  exit 1
-fi
-
-if [ $fail -eq 0 ]; then
-  echo "$(green PASS) $pass checks"
-  exit 0
-fi
-
-echo "$(red FAIL) $fail of $((pass + fail)) checks:"
-for name in "${FAILED[@]}"; do
-  echo "   $name"
-done
-exit 1
+tally

@@ -1,0 +1,211 @@
+# The real secret stores, locally.
+#
+# test/integration.sh runs every port against MOCK servers: fast, hermetic,
+# and a claim - "this is what the real server does". This file is where that
+# claim is checked. Each service here is the vendor's own server, or the
+# closest thing that exists, and test/realstores.sh drives the same CLIs
+# against them.
+#
+# Not every store can be run. Some have no server to run (Doppler is SaaS
+# only), some need a paid account to issue the credential their server
+# demands (1Password Connect), and some have no emulator worth the name
+# (GCP Secret Manager). doc/design/real-stores.md sets out what is real,
+# what is an emulator, and what cannot be done locally at all - read it
+# before adding a service here.
+#
+#   make realstores                      # up, run, down - all of it
+#
+# or, keeping the stack across runs:
+#
+#   docker compose -f test/docker/compose.yaml up -d --wait
+#   SEKRETO_COMPOSE=0 test/realstores.sh
+#   docker compose -f test/docker/compose.yaml down -v
+#
+# SEKRETO_COMPOSE=0 is load-bearing in the second form: without it the
+# harness tears the stack down on its way out and the last line is a
+# no-op on something already gone.
+#
+# Every port is published on LOOPBACK ONLY. These containers hold the test
+# secret in the clear and their credentials are fixed and public; none of
+# them should be reachable from off the machine.
+#
+# The port numbers deliberately avoid test/integration.sh's 82xx block, so
+# the two suites can run at the same time, and avoid each store's own
+# default (Vault's 8200 especially) so that a developer's own running
+# vault is not disturbed and cannot be mistaken for this one.
+
+name: sekreto-realstores
+
+services:
+  # ------------------------------------------------------------ HashiCorp
+  #
+  # The real thing, in dev mode: unsealed, in-memory, one KV v2 mount at
+  # secret/. Dev mode serves plain HTTP, which is why sekreto's checkaddr
+  # allows loopback at all.
+  #
+  # Everything past the default mount - the KV v1 engine, the AppRole
+  # role, the policy that scopes its token - is created by
+  # bootstrap/vault.sh, because it is exactly the part the mock does not
+  # model.
+  vault:
+    # 1.21.4 is the LAST Community Edition 1.x - the line stops there,
+    # and 1.21.5+ exists only as Enterprise. A weekly job pinned behind
+    # it is pinned to something that will never be patched again; the
+    # forward move when this needs one is the 2.x line (2.0.4+), which
+    # behaves identically for everything this suite exercises.
+    image: hashicorp/vault:1.21.4
+    cap_add:
+      - IPC_LOCK
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${SEKRETO_VAULT_TOKEN:-sekreto-root-token}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "127.0.0.1:${SEKRETO_VAULT_PORT:-8300}:8200"
+    healthcheck:
+      # 200 is "initialised, unsealed, active" and nothing else will do:
+      # Vault answers 501 while uninitialised and 503 while sealed, and
+      # both are open ports that a plain TCP probe would call ready.
+      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:8200/v1/sys/health"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 2s
+
+  # ------------------------------------------------------------------ AWS
+  #
+  # LocalStack, for Secrets Manager and SSM Parameter Store. Both are in
+  # the community edition.
+  #
+  # READ doc/design/real-stores.md ON SIGNATURES: LocalStack does not
+  # verify the SigV4 signature, it only parses the Authorization header
+  # for the access key. test/mockaws.js DOES verify it, re-deriving the
+  # signature of every request. So for signing, the mock is the stronger
+  # test and stays the one that guards it; this service proves the rest
+  # of the exchange - the JSON-1.1 envelope, the X-Amz-Target dispatch,
+  # the response shapes, the not-found error types.
+  aws:
+    image: localstack/localstack:4.14.0
+    environment:
+      SERVICES: secretsmanager,ssm
+      DEBUG: "0"
+      EAGER_SERVICE_LOADING: "1"
+    ports:
+      - "127.0.0.1:${SEKRETO_AWS_PORT:-8302}:4566"
+    healthcheck:
+      # -E and a grouped alternation. As a basic regex the alternation
+      # spanned the whole pattern, so `"secretsmanager": "disabled"` with
+      # any other service `running"` matched and the container reported
+      # healthy with Secrets Manager unavailable.
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:4566/_localstack/health | grep -qE '\"secretsmanager\": \"(available|running)\"'"]
+      interval: 3s
+      timeout: 5s
+      retries: 40
+      start_period: 10s
+
+  # ---------------------------------------------------------------- Azure
+  #
+  # lowkey-vault: a Key Vault emulator that also serves a stand-in Entra
+  # token endpoint, so the client-credentials login is exercised rather
+  # than skipped. Microsoft ships no Key Vault emulator of its own -
+  # Azurite is storage only - so this is as close as local gets.
+  azure:
+    image: nagyesta/lowkey-vault:7.3.74
+    environment:
+      # The published port must equal the port lowkey-vault listens on.
+      # It registers each vault under a full URI - https://127.0.0.1:8304 -
+      # and routes by the Host header, so a mapping like 8304:8443 makes
+      # every request arrive for a vault it has never heard of (404,
+      # "Unable to find active vault"). Same number both sides, always.
+      LOWKEY_ARGS: >-
+        --server.port=8304
+        --LOWKEY_VAULT_NAMES=sekreto
+        --LOWKEY_DEBUG_REQUEST_LOG=false
+    ports:
+      - "127.0.0.1:8304:8304"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --no-check-certificate -O- https://127.0.0.1:8304/ping | grep -q pong"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+  # ------------------------------------------------------------ Infisical
+  #
+  # Self-hosted Infisical, with the Postgres and Redis it requires. This
+  # is the real server: the universal-auth (machine identity) login the
+  # provider performs is the real login endpoint, issuing a real JWT.
+  infisical-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: infisical
+      POSTGRES_PASSWORD: infisical
+      POSTGRES_DB: infisical
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infisical"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  infisical-redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  infisical:
+    image: infisical/infisical:v0.164.1
+    depends_on:
+      infisical-db:
+        condition: service_healthy
+      infisical-redis:
+        condition: service_healthy
+    environment:
+      # Fixed, public, and worthless: this instance holds one test secret
+      # and lives for the length of a test run.
+      ENCRYPTION_KEY: 6c1fe4e407b8911c104518103505b218
+      AUTH_SECRET: 5lrMXKKWCVocS/uerPsl7V+TX/aaUaI7iDkgl3tSmLE=
+      DB_CONNECTION_URI: postgres://infisical:infisical@infisical-db:5432/infisical
+      REDIS_URL: redis://infisical-redis:6379
+      SITE_URL: http://127.0.0.1:${SEKRETO_INFISICAL_PORT:-8307}
+      TELEMETRY_ENABLED: "false"
+    ports:
+      - "127.0.0.1:${SEKRETO_INFISICAL_PORT:-8307}:8080"
+    healthcheck:
+      # Generous, and it has to be. A cold Infisical runs its whole
+      # migration set before it answers - table partitioning included -
+      # and on a loaded machine that has taken over three minutes. Too
+      # tight a budget here does not read as "slow": `--wait` gives up,
+      # compose reports the container as failed, and the run looks like
+      # a broken store rather than a busy one.
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/api/status || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 90
+      start_period: 60s
+
+  # ----------------------------------------------------------------- boru
+  #
+  # boru has no published image, so this builds the real binary from
+  # source and runs `boru vault serve` - its provision wire protocol.
+  # There is deliberately no boru mock anywhere in this repo; the binary
+  # is the only thing that speaks boru.
+  boru:
+    build:
+      context: ./boru
+      args:
+        BORU_REF: ${SEKRETO_BORU_REF:-main}
+    environment:
+      BORU_VAULT_PASSPHRASE: ${SEKRETO_BORU_PASSPHRASE:-realstores-passphrase}
+      SEKRETO_TOKEN: ${SEKRETO_TOKEN:-s3cr3t-realstores-token}
+    ports:
+      - "127.0.0.1:${SEKRETO_BORU_PORT:-8308}:8308"
+    healthcheck:
+      # Both: the marker says the entrypoint got as far as granting a
+      # token, and the request says the server is answering now.
+      test: ["CMD-SHELL", "test -f /work/ready && wget -q -S -O /dev/null http://127.0.0.1:8308/ 2>&1 | grep -q 'HTTP/'"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+      start_period: 3s

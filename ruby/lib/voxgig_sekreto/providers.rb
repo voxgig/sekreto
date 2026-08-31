@@ -134,6 +134,21 @@ module VoxgigSekreto
     !value.nil? && '' != value
   end
 
+  # How long any single vault round-trip may take before it is treated
+  # as unreachable. Ports carry the same bound.
+  HTTP_TIMEOUT = 10
+
+  # How much of a response body will be read before the store is treated as
+  # having answered incoherently. Ports carry the same bound.
+  #
+  # Far above anything real - the largest legitimate payload this library
+  # fetches is Doppler's whole-config download, measured in kilobytes. A
+  # bound is needed because the TIMEOUT is not one: ten seconds on a
+  # loopback or datacentre link is gigabytes, and the body is accumulated in
+  # memory before it is parsed. This runs on an application's startup path,
+  # so the failure is the application never starting.
+  HTTP_MAXBODY = 8 * 1024 * 1024
+
   # One JSON round-trip, returning [status, parsed-json-or-nil]. A 404 is
   # a normal answer here, not an exception: callers decide on status
   # first. Network failure is always an error - an unreachable store is a
@@ -145,16 +160,60 @@ module VoxgigSekreto
     headers.each { |key, value| request[key] = value }
     request.body = body unless body.nil?
 
+    # Declared out here: the streaming block below fills it, and a variable
+    # first assigned inside the block would not survive it.
+    text = +''
+
     response = begin
-      Net::HTTP.start(uri.hostname, uri.port, use_ssl: 'https' == uri.scheme) do |http|
-        http.request(request)
+      # The two nils are the proxy address and port: a secrets client dials
+      # the address it was configured with and nowhere else. Left off, this
+      # defaults to :ENV and reads http_proxy. Ruby's resolver does exempt
+      # loopback, so the local dev vault was never exposed - but the GCP and
+      # Azure metadata endpoints are not loopback, and the tokens they return
+      # would have gone through the proxy.
+      #
+      # The timeouts are the canonical port's 10s bound. Left off, Net::HTTP
+      # defaults to 60 - six times that - so a vault that accepted the
+      # connection and then said nothing held an application's startup for a
+      # minute per request. Measured before this: still blocked at 35s where
+      # every other port had given up at 10.
+      # max_retries: 0 because Net::HTTP retries an idempotent request once
+      # by default, which quietly doubled the bound above - measured at 20s
+      # against a silent server, not the 10 the constant says. A vault read
+      # is not something to repeat on its own initiative either: the caller
+      # decides whether a store that could not answer is worth asking again.
+      Net::HTTP.start(uri.hostname, uri.port, nil, nil,
+                      use_ssl: 'https' == uri.scheme,
+                      open_timeout: HTTP_TIMEOUT,
+                      read_timeout: HTTP_TIMEOUT,
+                      write_timeout: HTTP_TIMEOUT,
+                      max_retries: 0) do |http|
+        # Streamed against HTTP_MAXBODY rather than taking response.body,
+        # which buffers whatever arrives. An endless body would otherwise be
+        # accumulated in memory until the deadline, which on a loopback or
+        # datacentre link is gigabytes.
+        http.request(request) do |res|
+          res.read_body do |chunk|
+            text << chunk
+            if HTTP_MAXBODY < text.bytesize
+              raise SekretoError,
+                    'sekreto: oversized response from ' + url.split('?')[0]
+            end
+          end
+          res
+        end
       end
+    rescue SekretoError
+      # An endless body is a store that could not answer, so this propagates
+      # rather than becoming a miss - the latter would fall through to a
+      # weaker store on an attacker's cue.
+      raise
     rescue StandardError => e
       raise SekretoError, 'sekreto: cannot reach ' + url.split('?')[0] + ': ' + e.message
     end
 
     parsed = begin
-      JSON.parse(response.body)
+      JSON.parse(text)
     rescue JSON::ParserError, TypeError
       # A success status promised JSON; a body that does not parse means
       # the store could not answer coherently, and treating it as a miss
@@ -170,6 +229,29 @@ module VoxgigSekreto
     [response.code.to_i, parsed]
   end
 
+  # An address with any userinfo replaced by `[redacted]`, for messages.
+  #
+  # Every refusal below names the address it refused, and one of them fires
+  # precisely because the address carries a credential - so printing it
+  # verbatim wrote the password to stderr and into the logs. It cannot be
+  # cleaned up afterwards either: that password was never resolved as a
+  # secret, so redact() has never seen it and never will. The host is what a
+  # reader needs to identify which chain entry is at fault; the userinfo is
+  # not.
+  def safeaddr(addr)
+    mark = addr.index('://')
+    return addr if mark.nil?
+
+    rest = addr[(mark + 3)..]
+    stop = rest.index(%r{[/?#]})
+    authority = stop.nil? ? rest : rest[0...stop]
+
+    at = authority.rindex('@')
+    return addr if at.nil?
+
+    addr[0...(mark + 3)] + '[redacted]' + addr[(mark + 3 + at)..]
+  end
+
   # Refuse to send a secret-bearing credential in the clear.
   #
   # A vault API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -178,17 +260,67 @@ module VoxgigSekreto
   # anyone on the path, so sekreto will not do it. Loopback stays allowed:
   # that is `vault server -dev`, `boru vault serve`, and this repo's own
   # test harness.
+  #
+  # The address is read by hand, in the same handful of steps in every
+  # port, rather than by each platform's URL parser. That is deliberate.
+  # Twelve parsers disagree about malformed input - where userinfo ends,
+  # whether `0177.0.0.1` is loopback, what an unclosed bracket means - and
+  # a check that answers differently in different ports is not a check.
+  #
+  # The rule this parse obeys, and the reason it can be trusted: it is
+  # never more permissive than the HTTP client that will dial the address.
+  # It ends the authority at `/`, `?` or `#` only, so a client that also
+  # breaks on `\` (WHATWG does) can only ever see a SHORTER host than this
+  # does. It refuses userinfo outright rather than locating its end. It
+  # compares the host literally, so a numeric form no parser here agrees
+  # on is refused rather than guessed at.
   def checkaddr(addr)
-    return if addr.start_with?('https://')
+    scheme =
+      if addr.start_with?('https://')
+        'https://'
+      elsif addr.start_with?('http://')
+        'http://'
+      else
+        raise SekretoError, 'sekreto: not an http(s) address: ' + safeaddr(addr)
+      end
 
-    raise SekretoError, 'sekreto: not an http(s) address: ' + addr unless addr.start_with?('http://')
+    rest = addr[scheme.length..]
+    end_at = rest.index(%r{[/?#]})
+    authority = end_at.nil? ? rest : rest[0...end_at]
 
-    host = addr[7..].split('/')[0].split(':')[0]
+    # Userinfo is refused outright rather than parsed around, and on https
+    # as well as http. No store this library speaks authenticates by
+    # userinfo - they take a token or a signature - so an address carrying
+    # one is a mistake at best. At worst it is the attack this whole
+    # method exists to stop: `http://localhost:8200@evil.example.com/` is
+    # a request to evil.example.com that reads, to anything that splits
+    # the authority on ':', as loopback.
+    if authority.include?('@')
+      raise SekretoError, 'sekreto: refusing an address with embedded credentials: ' + safeaddr(addr)
+    end
 
-    return if ['localhost', '127.0.0.1', '::1', '[::1]'].include?(host)
+    # An opening bracket with no closing one is not an address at all.
+    if authority.start_with?('[') && !authority.include?(']')
+      raise SekretoError, 'sekreto: not a valid http(s) address: ' + safeaddr(addr)
+    end
+
+    return if 'https://' == scheme
+
+    # A bracketed IPv6 literal keeps its brackets. Splitting the authority
+    # on the first colon yields '[', so `http://[::1]:8200` could never
+    # match - which made the '[::1]' entry below unreachable, and refused
+    # a legitimate local vault.
+    host =
+      if authority.start_with?('[')
+        authority[0..authority.index(']')]
+      else
+        authority.split(':')[0].to_s
+      end
+
+    return if ['localhost', '127.0.0.1', '::1', '[::1]'].include?(host.downcase)
 
     raise SekretoError,
-          'sekreto: refusing to send a token in plaintext to ' + addr + ' (use https)'
+          'sekreto: refusing to send a token in plaintext to ' + safeaddr(addr) + ' (use https)'
   end
 
   # HashiCorp Vault.
@@ -400,6 +532,94 @@ module VoxgigSekreto
     why.include?('no alias named')
   end
 
+  # Does this SecretSpec failure mean "no such secret" rather than "I
+  # could not answer"?
+  #
+  # SecretSpec says `Secret 'API_TOKEN' not found` for both a name it does
+  # not declare and one declared with no value, and both are misses: this
+  # store does not hold it, so the chain carries on.
+  #
+  # MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
+  # `Provider backend 'keyring' not found`, which is a store that could
+  # not answer at all - and reading that as a miss is the worst failure
+  # this library has, because the chain then falls through to a weaker
+  # store without saying so. The key is required to appear, so the two
+  # cannot be confused.
+  def secretspecmiss(why, key)
+    why.include?("Secret '" + key + "' not found")
+  end
+
+  # SecretSpec (https://secretspec.dev).
+  #
+  # SecretSpec is a declaration - a `secretspec.toml` naming the secrets a
+  # project needs - plus a chain of its own backends to satisfy them from.
+  # That makes it the same shape as sekreto one level down, and the reason
+  # to support it is the same reason sekreto exists: a project that has
+  # already declared its secrets there should not have to declare them
+  # again here.
+  #
+  # Read through its CLI, as boru is, because that is the interface it
+  # offers a program in another language: `secretspec get API_TOKEN`
+  # prints the value on stdout and nothing else. A sekreto name maps to a
+  # SecretSpec key exactly as it maps to an environment variable -
+  # `api.token` is `API_TOKEN` - which is the convention SecretSpec's own
+  # examples use.
+  #
+  # `backend` selects one of SecretSpec's backends (`--provider`, e.g.
+  # `keyring` or `dotenv://.env`) and is called `backend` here only
+  # because `provider` already means something else in this library.
+  #
+  # A reason is required, not optional: SecretSpec records every read in
+  # an audit log and refuses to read at all without one. sekreto sends
+  # `sekreto` unless told otherwise, so the audit trail says which tool
+  # asked.
+  class SecretspecProvider
+    def initialize(command = nil, file = nil, profile = nil,
+                   backend = nil, reason = nil, prefix = nil)
+      @command = command || 'secretspec'
+      @file = file
+      @profile = profile
+      @backend = backend
+      @reason = reason
+      @prefix = prefix
+    end
+
+    def lookup(name)
+      key = VoxgigSekreto.envkey(name, @prefix)
+
+      args = []
+      args += ['--file', @file] if @file
+      args += ['get', key]
+      args += ['--provider', @backend] if @backend
+      args += ['--profile', @profile] if @profile
+      args += ['--reason', @reason || 'sekreto']
+
+      begin
+        out, err, status = Open3.capture3(@command, *args)
+      rescue SystemCallError => e
+        raise SekretoError, 'sekreto: cannot run ' + @command + ': ' + e.message
+      end
+
+      # The value and one newline, and nothing else. Open3 tags the
+      # child's bytes with the default external encoding, US-ASCII in a
+      # stripped environment - and SecretSpec draws its errors with box
+      # characters, so matching them as ASCII raises. Read both as the
+      # UTF-8 they are.
+      return out.force_encoding('UTF-8').sub(/\n\z/, '') if status.success?
+
+      why = err.to_s.force_encoding('UTF-8').scrub.strip
+
+      return nil if VoxgigSekreto.secretspecmiss(why, key)
+
+      raise SekretoError,
+            'sekreto: secretspec error: ' + (why.empty? ? 'exit ' + status.exitstatus.to_s : why)
+    end
+
+    def describe
+      'secretspec' + (@backend ? ':' + @backend : '')
+    end
+  end
+
   # The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now.
   def awsnow
     Time.now.utc.strftime('%Y%m%dT%H%M%SZ')
@@ -495,7 +715,19 @@ module VoxgigSekreto
         # A binary secret has no fields to address; only the conventional
         # `value` field can mean "the bytes themselves".
         bin = body.is_a?(Hash) ? body['SecretBinary'] : nil
-        return bin.unpack1('m').force_encoding('UTF-8') if bin.is_a?(String) && 'value' == ref['field']
+        if bin.is_a?(String) && 'value' == ref['field']
+          # 'm' skips characters outside the alphabet, so a corrupted
+          # payload decoded to plausible-looking bytes that were then
+          # returned as the secret. 'm0' is strict. A store that answered
+          # incoherently is an error, never a miss.
+          decoded = begin
+            bin.unpack1('m0')
+          rescue ArgumentError
+            raise SekretoError, 'sekreto: aws secretsmanager: undecodable secret'
+          end
+
+          return decoded.force_encoding('UTF-8')
+        end
 
         return nil
       end
@@ -620,7 +852,15 @@ module VoxgigSekreto
       data = body.is_a?(Hash) && body['payload'].is_a?(Hash) ? body['payload']['data'] : nil
       return nil unless data.is_a?(String)
 
-      data.unpack1('m').force_encoding('UTF-8')
+      # See the aws provider: strict, and an undecodable payload is an
+      # error rather than a miss.
+      decoded = begin
+        data.unpack1('m0')
+      rescue ArgumentError
+        raise SekretoError, 'sekreto: gcp: undecodable secret'
+      end
+
+      decoded.force_encoding('UTF-8')
     end
 
     def describe
@@ -971,6 +1211,9 @@ module VoxgigSekreto
     when 'infisical'
       InfisicalProvider.new(opts.call(:addr, :token, :clientid, :clientsecret,
                                       :project, :environment, :path))
+    when 'secretspec'
+      SecretspecProvider.new(get.call(:command), get.call(:file), get.call(:profile),
+                             get.call(:backend), get.call(:reason), get.call(:prefix))
     else raise SekretoError, 'sekreto: unknown provider kind: ' + kind.to_s
     end
   end

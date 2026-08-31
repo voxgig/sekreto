@@ -146,6 +146,7 @@ vite.config.ts.timestamp-*
 go/build/
 rust/target/
 java/build/
+kotlin/build/
 csharp/**/bin/
 csharp/**/obj/
 **/__pycache__/

@@ -27,10 +27,10 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"sync"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -66,10 +66,21 @@ type ProviderSpec struct {
 	VaultNamespace string `json:"vaultnamespace"`
 	// Auth logs hashicorp in for a token instead of being handed one.
 	Auth *AuthSpec `json:"auth"`
+	// Command is the boru / secretspec executable to run (default: the
+	// kind's own name).
+	Command string `json:"command"`
 	// boru
-	Command   string `json:"command"`
 	Namespace string `json:"namespace"`
 	Home      string `json:"home"`
+	// Profile is the secretspec profile to read (--profile).
+	Profile string `json:"profile"`
+	// Backend is which of secretspec's OWN backends to read from
+	// (--provider), e.g. `keyring` or `dotenv://.env`. Named Backend here
+	// because Provider already means a sekreto provider.
+	Backend string `json:"backend"`
+	// Reason is the audit reason recorded for a secretspec read
+	// (--reason). SecretSpec refuses to read without one.
+	Reason string `json:"reason"`
 	// aws: region and credentials; the standard AWS_* environment
 	// variables fill whichever are not given.
 	Region  string `json:"region"`
@@ -154,10 +165,18 @@ func (provider *EnvProvider) Describe() string {
 type DotenvProvider struct {
 	File   string
 	Prefix string
+	// Guards the memoised state below: a Sekreto may resolve from several
+	// goroutines, and a racy map read is either a crash or a zero value - a
+	// MISS where the store does hold the secret, which falls through to a
+	// weaker store.
+	mu     sync.Mutex
 	values map[string]string
 }
 
 func (provider *DotenvProvider) load() (map[string]string, error) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	if nil == provider.values {
 		text, err := os.ReadFile(provider.File)
 		if nil != err {
@@ -276,6 +295,39 @@ var client = &http.Client{
 	CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 		return http.ErrUseLastResponse
 	},
+	// A secrets client dials the address it was configured with and nowhere
+	// else. http.DefaultTransport reads HTTP_PROXY; its resolver exempts
+	// loopback, so the local dev vault was never exposed - but the GCP and
+	// Azure metadata endpoints are not loopback, and the access tokens they
+	// return would have gone through whatever the variable named, which can
+	// read them and substitute its own.
+	Transport: &http.Transport{Proxy: nil},
+}
+
+// maxbody is how much of a response body will be read before the store is
+// treated as having answered incoherently. Ports carry the same bound.
+//
+// Far above anything real - the largest legitimate payload this library
+// fetches is Doppler's whole-config download, measured in kilobytes. A bound
+// is needed because the TIMEOUT is not one: ten seconds on a loopback or
+// datacentre link is gigabytes, and the body is accumulated in memory before
+// it is parsed. This runs on an application's startup path, so the failure is
+// the application never starting.
+const maxbody = 8 * 1024 * 1024
+
+// safeurl is a url with its query string removed, for messages.
+//
+// A query here carries the vault path, the secret name or a filter -
+// `secretPath=/prod/payments/stripe` - which does not belong in a log or a
+// stack trace. Every message in this file goes through it.
+//
+// It exists because the obvious spelling was silently defeated: the messages
+// used to strip the query themselves and then append err.Error(), and a
+// *url.Error prints as `Get "<full url>": <reason>` - putting the query
+// straight back. Stripping in one place, and using it on the wrapped error
+// too, is what makes the intent hold.
+func safeurl(target string) string {
+	return strings.SplitN(target, "?", 2)[0]
 }
 
 // httpjson makes one JSON round-trip, returning the status and decoded
@@ -289,7 +341,7 @@ func httpjson(method string, target string, headers map[string]string, payload s
 
 	request, err := http.NewRequest(method, target, reader)
 	if nil != err {
-		return 0, nil, fail("sekreto: bad url: " + target)
+		return 0, nil, fail("sekreto: bad url: " + safeurl(target))
 	}
 
 	for key, value := range headers {
@@ -298,14 +350,24 @@ func httpjson(method string, target string, headers map[string]string, payload s
 
 	response, err := client.Do(request)
 	if nil != err {
-		return 0, nil, fail("sekreto: cannot reach " +
-			strings.SplitN(target, "?", 2)[0] + ": " + err.Error())
+		// The error is scrubbed too, not just the prefix: *url.Error prints
+		// as `Get "<full url>": <reason>`, so appending it verbatim undid
+		// the stripping on the line above.
+		return 0, nil, fail("sekreto: cannot reach " + safeurl(target) + ": " +
+			strings.ReplaceAll(err.Error(), target, safeurl(target)))
 	}
 	defer response.Body.Close()
 
-	text, err := io.ReadAll(response.Body)
+	// LimitReader, not ReadAll: an endless body would otherwise be
+	// accumulated in memory until the deadline, which on a loopback or
+	// datacentre link is gigabytes. One byte over the bound is enough to
+	// know it was exceeded.
+	text, err := io.ReadAll(io.LimitReader(response.Body, maxbody+1))
 	if nil != err {
-		return response.StatusCode, nil, fail("sekreto: cannot read " + target)
+		return response.StatusCode, nil, fail("sekreto: cannot read " + safeurl(target))
+	}
+	if maxbody < int64(len(text)) {
+		return response.StatusCode, nil, fail("sekreto: oversized response from " + safeurl(target))
 	}
 
 	var body any
@@ -316,7 +378,7 @@ func httpjson(method string, target string, headers map[string]string, payload s
 		// any body - they are decided on status alone.
 		if http.StatusOK == response.StatusCode {
 			return response.StatusCode, nil, fail("sekreto: malformed response from " +
-				strings.SplitN(target, "?", 2)[0])
+				safeurl(target))
 		}
 		body = nil
 	}
@@ -398,6 +460,36 @@ func due(renewat time.Time) bool {
 	return !renewat.IsZero() && !time.Now().Before(renewat)
 }
 
+// safeaddr returns the address with any userinfo replaced by [redacted],
+// for messages.
+//
+// Every refusal below names the address it refused, and one of them fires
+// precisely because the address carries a credential - so printing it
+// verbatim wrote the password to stderr and into the logs. It cannot be
+// cleaned up afterwards either: that password was never resolved as a
+// secret, so Redact has never seen it and never will. The host is what a
+// reader needs to identify which chain entry is at fault; the userinfo is
+// not.
+func safeaddr(addr string) string {
+	mark := strings.Index(addr, "://")
+	if -1 == mark {
+		return addr
+	}
+
+	rest := addr[mark+3:]
+	authority := rest
+	if end := strings.IndexAny(rest, "/?#"); -1 != end {
+		authority = rest[:end]
+	}
+
+	at := strings.LastIndex(authority, "@")
+	if -1 == at {
+		return addr
+	}
+
+	return addr[:mark+3] + "[redacted]" + addr[mark+3+at:]
+}
+
 // checkaddr refuses to send a Vault token in the clear.
 //
 // Vault's API is HTTPS in any real deployment; plaintext is a dev-mode
@@ -405,23 +497,74 @@ func due(renewat time.Time) bool {
 // machine puts both the token and the secret it fetches on the wire for
 // anyone on the path, so sekreto will not do it. Loopback stays allowed:
 // that is `vault server -dev` and this repo's own test harness.
+//
+// The address is read by hand, in the same handful of steps in every port,
+// rather than by each platform's URL parser. That is deliberate. Twelve
+// parsers disagree about malformed input - where userinfo ends, whether
+// 0177.0.0.1 is loopback, what an unclosed bracket means - and a check that
+// answers differently in different ports is not a check.
+//
+// The rule this parse obeys, and the reason it can be trusted: it is never
+// more permissive than the HTTP client that will dial the address. It ends
+// the authority at '/', '?' or '#' only, so a client that also breaks on
+// '\' (WHATWG does) can only ever see a SHORTER host than this does. It
+// refuses userinfo outright rather than locating its end. It compares the
+// host literally, so a numeric form no parser here agrees on is refused
+// rather than guessed at.
 func checkaddr(addr string) error {
+	scheme := ""
 	if strings.HasPrefix(addr, "https://") {
+		scheme = "https://"
+	} else if strings.HasPrefix(addr, "http://") {
+		scheme = "http://"
+	} else {
+		return fail("sekreto: not an http(s) address: " + safeaddr(addr))
+	}
+
+	rest := addr[len(scheme):]
+	end := strings.IndexAny(rest, "/?#")
+	authority := rest
+	if -1 != end {
+		authority = rest[:end]
+	}
+
+	// Userinfo is refused outright rather than parsed around, and on https as
+	// well as http. No store this library speaks authenticates by userinfo -
+	// they take a token or a signature - so an address carrying one is a
+	// mistake at best. At worst it is the attack this whole function exists
+	// to stop: http://localhost:8200@evil.example.com/ is a request to
+	// evil.example.com that reads, to anything that splits the authority on
+	// ':', as loopback.
+	if strings.Contains(authority, "@") {
+		return fail("sekreto: refusing an address with embedded credentials: " + safeaddr(addr))
+	}
+
+	// An opening bracket with no closing one is not an address at all.
+	if strings.HasPrefix(authority, "[") && !strings.Contains(authority, "]") {
+		return fail("sekreto: not a valid http(s) address: " + safeaddr(addr))
+	}
+
+	if "https://" == scheme {
 		return nil
 	}
 
-	if !strings.HasPrefix(addr, "http://") {
-		return fail("sekreto: not an http(s) address: " + addr)
+	// A bracketed IPv6 literal keeps its brackets. Splitting the authority on
+	// the first colon yields "[", so http://[::1]:8200 could never match -
+	// which made the "[::1]" entry below unreachable, and refused a
+	// legitimate local vault.
+	host := authority
+	if strings.HasPrefix(authority, "[") {
+		host = authority[:strings.Index(authority, "]")+1]
+	} else {
+		host = strings.Split(authority, ":")[0]
 	}
 
-	host := strings.Split(strings.Split(strings.TrimPrefix(addr, "http://"), "/")[0], ":")[0]
-
-	switch host {
+	switch strings.ToLower(host) {
 	case "localhost", "127.0.0.1", "::1", "[::1]":
 		return nil
 	}
 
-	return fail("sekreto: refusing to send a token in plaintext to " + addr + " (use https)")
+	return fail("sekreto: refusing to send a token in plaintext to " + safeaddr(addr) + " (use https)")
 }
 
 // HashicorpProvider reads HashiCorp Vault.
@@ -744,6 +887,121 @@ func borumiss(why string) bool {
 	return strings.Contains(why, "no alias named")
 }
 
+// SecretSpecProvider reads SecretSpec (https://secretspec.dev).
+//
+// SecretSpec is a declaration - a secretspec.toml naming the secrets a
+// project needs - plus a chain of its own backends to satisfy them from.
+// That makes it the same shape as sekreto one level down, and the reason to
+// support it is the same reason sekreto exists: a project that has already
+// declared its secrets there should not have to declare them again here.
+//
+// Read through its CLI, as boru is, because that is the interface it offers
+// a program in another language: `secretspec get API_TOKEN` prints the value
+// on stdout and nothing else. A sekreto name maps to a SecretSpec key
+// exactly as it maps to an environment variable - api.token is API_TOKEN -
+// which is the convention SecretSpec's own examples use.
+//
+// Backend selects one of SecretSpec's backends (--provider, e.g. `keyring`
+// or `dotenv://.env`) and is called Backend here only because Provider
+// already means something else in this library.
+//
+// A reason is required, not optional: SecretSpec records every read in an
+// audit log and refuses to read at all without one. sekreto sends `sekreto`
+// unless told otherwise, so the audit trail says which tool asked.
+type SecretSpecProvider struct {
+	Command string
+	File    string
+	Profile string
+	Backend string
+	Reason  string
+	Prefix  string
+}
+
+func (provider *SecretSpecProvider) command() string {
+	if "" == provider.Command {
+		return "secretspec"
+	}
+	return provider.Command
+}
+
+func (provider *SecretSpecProvider) Lookup(name string) (string, bool, error) {
+	key, err := EnvKey(name, provider.Prefix)
+	if nil != err {
+		return "", false, err
+	}
+
+	args := []string{}
+	if "" != provider.File {
+		args = append(args, "--file", provider.File)
+	}
+	args = append(args, "get", key)
+	if "" != provider.Backend {
+		args = append(args, "--provider", provider.Backend)
+	}
+	if "" != provider.Profile {
+		args = append(args, "--profile", provider.Profile)
+	}
+	reason := provider.Reason
+	if "" == reason {
+		reason = "sekreto"
+	}
+	args = append(args, "--reason", reason)
+
+	run := exec.Command(provider.command(), args...)
+
+	var out, errout bytes.Buffer
+	run.Stdout = &out
+	run.Stderr = &errout
+
+	runerr := run.Run()
+
+	if nil == runerr {
+		// The value and one newline, and nothing else.
+		return strings.TrimSuffix(out.String(), "\n"), true, nil
+	}
+
+	var exiterr *exec.ExitError
+	if !errors.As(runerr, &exiterr) {
+		return "", false, fail("sekreto: cannot run " + provider.command() + ": " + runerr.Error())
+	}
+
+	why := strings.TrimSpace(errout.String())
+
+	if secretspecmiss(why, key) {
+		return "", false, nil
+	}
+
+	if "" == why {
+		why = "exit " + strconv.Itoa(exiterr.ExitCode())
+	}
+
+	return "", false, fail("sekreto: secretspec error: " + why)
+}
+
+func (provider *SecretSpecProvider) Describe() string {
+	if "" != provider.Backend {
+		return "secretspec:" + provider.Backend
+	}
+	return "secretspec"
+}
+
+// secretspecmiss reports whether a SecretSpec failure means "no such secret"
+// rather than "I could not answer".
+//
+// SecretSpec says `Secret 'API_TOKEN' not found` for both a name it does not
+// declare and one declared with no value, and both are misses: this store
+// does not hold it, so the chain carries on.
+//
+// MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
+// `Provider backend 'keyring' not found`, which is a store that could not
+// answer at all - and reading that as a miss is the worst failure this
+// library has, because the chain then falls through to a weaker store
+// without saying so. The key is required to appear, so the two cannot be
+// confused.
+func secretspecmiss(why string, key string) bool {
+	return strings.Contains(why, "Secret '"+key+"' not found")
+}
+
 // awsnow is the YYYYMMDDTHHMMSSZ timestamp SigV4 wants, for now.
 func awsnow() string {
 	return time.Now().UTC().Format("20060102T150405Z")
@@ -904,7 +1162,13 @@ func (provider *AwsSecretsProvider) Lookup(name string) (string, bool, error) {
 		// `value` field can mean "the bytes themselves".
 		bin, is := dig(body, "SecretBinary").(string)
 		if is && "value" == ref.Field {
-			decoded, _ := base64.StdEncoding.DecodeString(bin)
+			// The error was discarded, so a corrupted payload decoded to
+			// whatever came before the bad byte and was returned as the
+			// secret. A store that answered incoherently is an error.
+			decoded, err := base64.StdEncoding.DecodeString(bin)
+			if nil != err {
+				return "", false, fail("sekreto: aws secretsmanager: undecodable secret")
+			}
 			return string(decoded), true, nil
 		}
 		return "", false, nil
@@ -1100,7 +1364,11 @@ func (provider *GcpSecretsProvider) Lookup(name string) (string, bool, error) {
 		return "", false, nil
 	}
 
-	decoded, _ := base64.StdEncoding.DecodeString(data)
+	// See the aws provider: an undecodable payload is an error, not a miss.
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if nil != err {
+		return "", false, fail("sekreto: gcp: undecodable secret")
+	}
 	return string(decoded), true, nil
 }
 
@@ -1249,7 +1517,7 @@ func (provider *AzureSecretsProvider) Lookup(name string) (string, bool, error) 
 
 	if http.StatusOK != status {
 		return "", false, fail("sekreto: azure error: " + strconv.Itoa(status) + ": " +
-			strings.SplitN(target, "?", 2)[0])
+			safeurl(target))
 	}
 
 	value := dig(body, "value")
@@ -1271,9 +1539,14 @@ func (provider *AzureSecretsProvider) Describe() string {
 // `value`. A vault that cannot be found is an error - config names it, so
 // its absence is a broken store, not a missing secret.
 type OnePasswordProvider struct {
-	Addr      string
-	Token     string
-	Vault     string
+	Addr  string
+	Token string
+	Vault string
+	// Guards the memoised state below: a Sekreto may resolve from several
+	// goroutines, and a racy map read is either a crash or a zero value - a
+	// MISS where the store does hold the secret, which falls through to a
+	// weaker store.
+	mu        sync.Mutex
 	vaultid   string
 	havevault bool
 }
@@ -1320,18 +1593,22 @@ func (provider *OnePasswordProvider) Lookup(name string) (string, bool, error) {
 		return "", false, err
 	}
 
+	provider.mu.Lock()
 	if !provider.havevault {
 		vaultid, err := provider.resolvevault(addr)
 		if nil != err {
+			provider.mu.Unlock()
 			return "", false, err
 		}
 		provider.vaultid = vaultid
 		provider.havevault = true
 	}
+	vaultid := provider.vaultid
+	provider.mu.Unlock()
 
 	filter := uriescape(`title eq "` + name + `"`)
 	status, body, err := httpget(
-		addr+"/v1/vaults/"+provider.vaultid+"/items?filter="+filter, provider.auth())
+		addr+"/v1/vaults/"+vaultid+"/items?filter="+filter, provider.auth())
 	if nil != err {
 		return "", false, err
 	}
@@ -1348,7 +1625,7 @@ func (provider *OnePasswordProvider) Lookup(name string) (string, bool, error) {
 
 	itemid := digtext(found[0], "id")
 	status, body, err = httpget(
-		addr+"/v1/vaults/"+provider.vaultid+"/items/"+itemid, provider.auth())
+		addr+"/v1/vaults/"+vaultid+"/items/"+itemid, provider.auth())
 	if nil != err {
 		return "", false, err
 	}
@@ -1397,10 +1674,18 @@ type DopplerProvider struct {
 	Project string
 	Config  string
 	Addr    string
-	values  map[string]string
+	// Guards the memoised state below: a Sekreto may resolve from several
+	// goroutines, and a racy map read is either a crash or a zero value - a
+	// MISS where the store does hold the secret, which falls through to a
+	// weaker store.
+	mu     sync.Mutex
+	values map[string]string
 }
 
 func (provider *DopplerProvider) load() (map[string]string, error) {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+
 	if nil != provider.values {
 		return provider.values, nil
 	}
@@ -1704,6 +1989,15 @@ func MakeProvider(spec *ProviderSpec) (Provider, error) {
 			Project:      spec.Project,
 			Environment:  spec.Environment,
 			Path:         spec.Path,
+		}, nil
+	case "secretspec":
+		return &SecretSpecProvider{
+			Command: spec.Command,
+			File:    spec.File,
+			Profile: spec.Profile,
+			Backend: spec.Backend,
+			Reason:  spec.Reason,
+			Prefix:  spec.Prefix,
 		}, nil
 	default:
 		return nil, fail("sekreto: unknown provider kind: " + spec.Kind)

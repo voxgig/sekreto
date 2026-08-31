@@ -28,6 +28,20 @@ validname: set: [
   { in: 'A.B', out: false }
   { in: 'a/b', out: false }
   { in: 'a$b', out: false }
+
+  # A CONTROL CHARACTER, and specifically a trailing newline.
+  #
+  # `^[a-z0-9_]+$` is not the check it looks like: in Python, PCRE, Perl
+  # and .NET, `$` also matches BEFORE a final newline, so four of the
+  # twelve ports accepted `api.token\n` while the canonical rejected it.
+  # No injection follows - every port passes an argv array, and `/` and
+  # `..` are still refused - but `envkey` then produces the key
+  # `API_TOKEN\n`, so those ports look for a differently named file and
+  # a differently named variable than the other eight. A name is either
+  # valid everywhere or nowhere.
+  { in: 'api.token\n', out: false }
+  { in: 'api\n.token', out: false }
+  { in: 'api.token\r', out: false }
 ]
 
 

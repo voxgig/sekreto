@@ -173,14 +173,26 @@ function unescape(text) {
  *
  * Only values of four characters or more are replaced: shorter ones are
  * too likely to appear in ordinary text, and redacting them would make
- * logs unreadable without making them safer. */
+ * logs unreadable without making them safer.
+ *
+ * Longest first, which is not a detail. Replacing in the order the values
+ * arrived meant a shorter secret that prefixes a longer one ate the prefix
+ * and left the rest in the log: with `db.pass` = `abcd` from the
+ * environment and `api.token` = `abcd1234` from the vault, and the
+ * environment resolved first, `token=abcd1234` came out as
+ * `token=[redacted]1234`. Longest first makes the longer secret match
+ * before anything can eat its head.
+ */
 function redact(text, values) {
   let out = 'string' === typeof text ? text : ''
 
-  for (const value of values || []) {
-    if ('string' !== typeof value || 4 > value.length) {
-      continue
-    }
+  const usable = (values || []).filter(
+    (value) => 'string' === typeof value && 4 <= value.length,
+  )
+
+  // A copy: `values` belongs to the caller (it is `seen` when called
+  // through Sekreto.redact), and sorting in place would reorder it.
+  for (const value of [...usable].sort((left, right) => right.length - left.length)) {
     out = out.split(value).join('[redacted]')
   }
 
@@ -317,6 +329,28 @@ class Sekreto {
     }
 
     return out
+  }
+
+  /** What a Sekreto shows of itself when something prints it.
+   *
+   * `console.log(sekreto)` and `JSON.stringify(sekreto)` both reach
+   * `cache` and `seen`, which between them hold every value this chain
+   * has ever resolved - so one ordinary logging call writes every secret
+   * to the log.
+   *
+   * `JSON.stringify` is the one that bites hardest, because a structured
+   * logger serialises its whole context object without anyone writing a
+   * line about secrets: `logger.info({ secrets: sekreto }, 'ready')`.
+   *
+   * Both hooks are needed. `toJSON` covers `JSON.stringify` and
+   * everything built on it; the inspect symbol covers `console.log`,
+   * `util.inspect` and the REPL. Neither reaches a value. */
+  toJSON() {
+    return { stores: this.stores() }
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')]() {
+    return 'Sekreto { stores: [ ' + this.stores().join(', ') + ' ] }'
   }
 
   /** A description of each provider, in resolution order. */

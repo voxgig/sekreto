@@ -327,6 +327,142 @@
               "name": "api.token",
               "store": "hashicorp"
             }
+          },
+          {
+            "err": "sekreto: not an http(s) address: ftp://[redacted]@vault.example.com/",
+            "in": {
+              "chain": [
+                {
+                  "addr": "ftp://svc:hunter2@vault.example.com/",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: refusing an address with embedded credentials: http://[redacted]@evil.example.com/",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://localhost:8200@evil.example.com/",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: refusing an address with embedded credentials: http://[redacted]@evil.example.com/",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://127.0.0.1@evil.example.com/",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: refusing an address with embedded credentials: http://[redacted]@evil.example.com/",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://a@127.0.0.1@evil.example.com/",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: refusing an address with embedded credentials: https://[redacted]@vault.example.com",
+            "in": {
+              "chain": [
+                {
+                  "addr": "https://user:pass@vault.example.com",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "unsupported kv version",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://localhost:8200/a@b",
+                  "kind": "hashicorp",
+                  "kv": 3,
+                  "token": "t"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "unsupported kv version",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://[::1]:8200",
+                  "kind": "hashicorp",
+                  "kv": 3,
+                  "token": "t"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "unsupported kv version",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://LOCALHOST:8200",
+                  "kind": "hashicorp",
+                  "kv": 3,
+                  "token": "t"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: refusing to send a token in plaintext to http://[::ffff:127.0.0.1]:8200 (use https)",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://[::ffff:127.0.0.1]:8200",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
+          },
+          {
+            "err": "sekreto: not a valid http(s) address: http://[::1",
+            "in": {
+              "chain": [
+                {
+                  "addr": "http://[::1",
+                  "kind": "hashicorp"
+                }
+              ],
+              "name": "api.token",
+              "store": "hashicorp"
+            }
           }
         ]
       },
@@ -509,6 +645,36 @@
               ]
             },
             "out": ""
+          },
+          {
+            "in": {
+              "text": "token=abcd1234",
+              "values": [
+                "abcd",
+                "abcd1234"
+              ]
+            },
+            "out": "token=[redacted]"
+          },
+          {
+            "in": {
+              "text": "token=abcd1234",
+              "values": [
+                "abcd1234",
+                "abcd"
+              ]
+            },
+            "out": "token=[redacted]"
+          },
+          {
+            "in": {
+              "text": "pass=abcd token=abcd1234",
+              "values": [
+                "abcd",
+                "abcd1234"
+              ]
+            },
+            "out": "pass=[redacted] token=[redacted]"
           }
         ]
       },
@@ -857,6 +1023,10 @@
                 {
                   "addr": "http://127.0.0.1:8200",
                   "kind": "boru"
+                },
+                {
+                  "backend": "keyring",
+                  "kind": "secretspec"
                 }
               ]
             },
@@ -869,7 +1039,8 @@
               "onepassword:dev",
               "doppler:app/prd",
               "infisical:w1/prod",
-              "boru:http://127.0.0.1:8200"
+              "boru:http://127.0.0.1:8200",
+              "secretspec:keyring"
             ]
           }
         ]
@@ -1178,6 +1349,18 @@
           },
           {
             "in": "a$b",
+            "out": false
+          },
+          {
+            "in": "api.token\n",
+            "out": false
+          },
+          {
+            "in": "api\n.token",
+            "out": false
+          },
+          {
+            "in": "api.token\r",
             "out": false
           }
         ]
