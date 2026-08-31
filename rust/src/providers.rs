@@ -14,6 +14,7 @@
 //!
 //! A port of typescript/src/Providers.ts, which is canonical.
 
+use std::fmt;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::env;
@@ -38,7 +39,11 @@ pub trait Provider {
 }
 
 /// hashicorp: log in for a token instead of being handed one.
-#[derive(Clone, Debug, Default)]
+///
+/// No `Debug` derive: `secretid` and `jwt` are credentials, and
+/// `tracing::error!(?spec, ...)` is the idiomatic thing to write. See the
+/// hand-written impl below.
+#[derive(Clone, Default)]
 pub struct AuthSpec {
     /// `kubernetes` or `approle`.
     pub method: String,
@@ -59,7 +64,10 @@ pub struct AuthSpec {
 
 /// The declarative form of a provider, as used in config and in the shared
 /// spec. Absent fields are empty strings (or zero, or None).
-#[derive(Clone, Debug, Default)]
+///
+/// No `Debug` derive: `token`, `secret` and `clientsecret` are credentials.
+/// See the hand-written impl below.
+#[derive(Clone, Default)]
 pub struct ProviderSpec {
     pub kind: String,
     /// The store name `Sekreto::getfrom` addresses. Defaults to `kind`.
@@ -316,6 +324,50 @@ pub fn safeaddr(addr: &str) -> String {
     match authority.rfind('@') {
         Some(at) => format!("{}[redacted]{}", &addr[..mark + 3], &addr[mark + 3 + at..]),
         None => addr.to_string(),
+    }
+}
+
+/// Printed without its credentials.
+///
+/// A derived `Debug` puts the Vault token, the AWS secret access key and
+/// the Azure client secret into whatever formatted it - and
+/// `tracing::error!(?spec, "chain build failed")` is exactly what someone
+/// writes when a chain will not build. Fields that hold a credential
+/// report whether they are set, never what they are.
+impl fmt::Debug for AuthSpec {
+    fn fmt(&self, form: &mut fmt::Formatter<'_>) -> fmt::Result {
+        form.debug_struct("AuthSpec")
+            .field("method", &self.method)
+            .field("mount", &self.mount)
+            .field("role", &self.role)
+            .field("jwtfile", &self.jwtfile)
+            .field("roleid", &self.roleid)
+            .field("jwt", &setornot(self.jwt.as_deref().unwrap_or("")))
+            .field("secretid", &setornot(&self.secretid))
+            .finish()
+    }
+}
+
+impl fmt::Debug for ProviderSpec {
+    fn fmt(&self, form: &mut fmt::Formatter<'_>) -> fmt::Result {
+        form.debug_struct("ProviderSpec")
+            .field("kind", &self.kind)
+            .field("name", &self.name)
+            .field("addr", &self.addr)
+            .field("token", &setornot(&self.token))
+            .field("secret", &setornot(&self.secret))
+            .field("clientsecret", &setornot(&self.clientsecret))
+            .field("auth", &self.auth)
+            .finish_non_exhaustive()
+    }
+}
+
+/// What a credential field reports about itself.
+fn setornot(value: &str) -> &'static str {
+    if value.is_empty() {
+        "[unset]"
+    } else {
+        "[set]"
     }
 }
 

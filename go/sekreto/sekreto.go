@@ -444,6 +444,20 @@ func (sek *Sekreto) Sources() []string {
 
 // Stores names each store that can be named by GetFrom, in resolution order
 // and without repeats.
+// String is what a Sekreto shows of itself when something prints it.
+//
+// fmt reflects into unexported fields, so %v and %+v reach cache and seen,
+// which between them hold every value this chain has ever resolved - one
+// ordinary log line writes every secret out. GoString covers %#v the same
+// way. Neither reaches a value.
+func (sek *Sekreto) String() string {
+	return "Sekreto{stores: [" + strings.Join(sek.Stores(), " ") + "]}"
+}
+
+func (sek *Sekreto) GoString() string {
+	return sek.String()
+}
+
 func (sek *Sekreto) Stores() []string {
 	out := []string{}
 

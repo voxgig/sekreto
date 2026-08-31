@@ -49,7 +49,24 @@ data class AuthSpec(
     /** approle: the role and secret ids. */
     val roleid: String? = null,
     val secretid: String? = null,
-)
+) {
+    /**
+     * Printed without its credentials.
+     *
+     * A `data class` generates a `toString` that prints every field, so
+     * `logger.error("bad chain: $specs")` - which is what someone writes
+     * when a chain will not build - would put the service-account JWT and
+     * the AppRole secret id in the log. Fields that hold a credential
+     * report whether they are set, never what they are.
+     */
+    override fun toString(): String =
+        "AuthSpec(method=$method, mount=$mount, role=$role, jwtfile=$jwtfile, " +
+            "roleid=$roleid, jwt=${setornot(jwt)}, secretid=${setornot(secretid)})"
+}
+
+/** What a credential field reports about itself. */
+internal fun setornot(value: String?): String =
+    if (value.isNullOrEmpty()) "[unset]" else "[set]"
 
 /**
  * The declarative form of a provider, as used in config and in the shared
@@ -118,7 +135,16 @@ data class ProviderSpec(
     /** infisical: the environment slug and secret path. */
     val environment: String? = null,
     val path: String? = null,
-)
+) {
+    /**
+     * Printed without its credentials. See AuthSpec.toString: the generated
+     * one would put the Vault token, the AWS secret access key and the
+     * Azure client secret into whatever formatted it.
+     */
+    override fun toString(): String =
+        "ProviderSpec(kind=$kind, name=$name, addr=$addr, token=${setornot(token)}, " +
+            "secret=${setornot(secret)}, clientsecret=${setornot(clientsecret)}, auth=$auth)"
+}
 
 object Providers {
 

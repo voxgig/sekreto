@@ -339,6 +339,29 @@ export class Sekreto {
     return out
   }
 
+  /** What a Sekreto shows of itself when something prints it.
+   *
+   * `console.log(sekreto)` and `JSON.stringify(sekreto)` both reach
+   * `cache` and `seen`, which between them hold every value this chain
+   * has ever resolved — so one ordinary logging call writes every secret
+   * to the log. `private` is a compile-time fiction: at run time the
+   * fields are ordinary and enumerable.
+   *
+   * `JSON.stringify` is the one that bites hardest, because a structured
+   * logger serialises its whole context object without anyone writing a
+   * line about secrets: `logger.info({ secrets: sekreto }, 'ready')`.
+   *
+   * Both hooks are needed. `toJSON` covers `JSON.stringify` and
+   * everything built on it; the inspect symbol covers `console.log`,
+   * `util.inspect` and the REPL. Neither reaches a value. */
+  toJSON(): object {
+    return { stores: this.stores() }
+  }
+
+  [Symbol.for('nodejs.util.inspect.custom')](): string {
+    return 'Sekreto { stores: [ ' + this.stores().join(', ') + ' ] }'
+  }
+
   /** A description of each provider, in resolution order. */
   sources(): string[] {
     return this.entries.map((entry) => entry.provider.describe())

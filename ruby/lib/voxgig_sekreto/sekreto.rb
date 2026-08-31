@@ -262,6 +262,17 @@ module VoxgigSekreto
 
     # The name of each store that can be named by `getfrom`, in resolution
     # order and without repeats.
+    # What a Sekreto shows of itself when something prints it.
+    #
+    # `p sekreto` and `sekreto.inspect` reach @cache and @seen, which
+    # between them hold every value this chain has ever resolved - so one
+    # ordinary logging call writes every secret out. `inspect` is also
+    # what Rails error pages and most exception reporters call on locals,
+    # so this leaks on the path where a process is already in trouble.
+    def inspect
+      "#<VoxgigSekreto::Sekreto stores=[#{stores.join(', ')}]>"
+    end
+
     def stores
       @entries.map { |store, _provider| store }.uniq
     end

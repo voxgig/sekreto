@@ -410,6 +410,21 @@ class Sekreto
      *
      * @return array<int, string>
      */
+    /**
+     * What a Sekreto shows of itself when something prints it.
+     *
+     * `var_dump`, `print_r` and `var_export` all reach private properties,
+     * and $cache and $seen between them hold every value this chain has
+     * ever resolved - so one ordinary debugging call writes every secret
+     * out.
+     *
+     * @return array<string, mixed>
+     */
+    public function __debugInfo(): array
+    {
+        return ['stores' => $this->stores()];
+    }
+
     public function stores(): array
     {
         $out = [];
