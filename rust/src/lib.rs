@@ -21,7 +21,7 @@ pub use crate::providers::{
     makechain, makeprovider, AuthSpec, AwsParamsProvider, AwsSecretsProvider,
     AzureSecretsProvider, BoruProvider, DopplerProvider, DotenvProvider, EnvProvider,
     FileProvider, GcpSecretsProvider, HashicorpProvider, InfisicalProvider, MemoryProvider,
-    OnePasswordProvider, Provider, ProviderSpec,
+    OnePasswordProvider, Provider, ProviderSpec, SecretSpecProvider,
 };
 pub use crate::sekreto::{
     awsparam, envkey, flatname, parsedotenv, redact, validname, vaultref, Answer, Sekreto,

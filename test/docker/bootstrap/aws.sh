@@ -34,14 +34,17 @@ KEYID=${AWS_ACCESS_KEY_ID:-test}
 
 ENDPOINT=${ENDPOINT%/}
 
+# The body goes in on STDIN. Nothing here is worth hiding against
+# LocalStack, but doc/design/real-stores.md advertises pointing this at a
+# real account, and /proc/*/cmdline is world-readable.
 call() {
   local target=$1 body=$2
-  curl -sS -X POST "$ENDPOINT/" \
+  printf '%s' "$body" | curl -sS -X POST "$ENDPOINT/" \
     -H 'content-type: application/x-amz-json-1.1' \
     -H "x-amz-target: $target" \
     -H "x-amz-date: 20260101T000000Z" \
     -H "Authorization: AWS4-HMAC-SHA256 Credential=$KEYID/20260101/$REGION/x/aws4_request, SignedHeaders=host, Signature=unchecked-by-localstack" \
-    -d "$body"
+    --data @-
 }
 
 echo "aws: seeding $ENDPOINT" >&2
@@ -63,7 +66,18 @@ esac
 
 # Parameter Store carries flat strings, so the name becomes the path:
 # `api.token` is `/api/token`.
-call AmazonSSM.PutParameter \
-  "{\"Name\":\"/api/token\",\"Value\":\"$SECRET\",\"Type\":\"SecureString\",\"Overwrite\":true}" >/dev/null
+param=$(call AmazonSSM.PutParameter \
+  "{\"Name\":\"/api/token\",\"Value\":\"$SECRET\",\"Type\":\"SecureString\",\"Overwrite\":true}")
+
+# Checked, because curl exits 0 on a 400 and an unseeded store answers
+# every read with a miss - which then fails every port for a reason that
+# has nothing to do with the port.
+case $param in
+*'"Version"'*) ;;
+*)
+  echo "aws: seeding the ssm parameter failed: $(printf '%s' "$param" | head -c 200)" >&2
+  exit 1
+  ;;
+esac
 
 echo "aws: seeded secretsmanager api and ssm /api/token" >&2

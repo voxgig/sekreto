@@ -8,7 +8,8 @@
 // Usage: dotnet SekretoCli.dll <api-url> [--source <source>] [--store <name>]
 //
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-//          gcpsecrets azuresecrets onepassword doppler infisical chain
+//          gcpsecrets azuresecrets onepassword doppler infisical
+//          secretspec chain
 //
 // Each source's configuration arrives in the environment variables its
 // own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -122,6 +123,16 @@ internal static class Program
             "config", Environment.GetEnvironmentVariable("DOPPLER_CONFIG"),
             "addr", Environment.GetEnvironmentVariable("DOPPLER_ADDR"));
 
+        // SecretSpec's own environment variables where it has them, so a
+        // shell already set up for secretspec needs nothing further.
+        var secretspecspec = Spec(
+            "kind", "secretspec",
+            "command", EnvOr("SECRETSPEC_COMMAND", "secretspec"),
+            "file", Environment.GetEnvironmentVariable("SECRETSPEC_FILE"),
+            "profile", Environment.GetEnvironmentVariable("SECRETSPEC_PROFILE"),
+            "backend", Environment.GetEnvironmentVariable("SECRETSPEC_PROVIDER"),
+            "reason", Environment.GetEnvironmentVariable("SECRETSPEC_REASON"));
+
         var infisicalspec = Spec(
             "kind", "infisical",
             "addr", Environment.GetEnvironmentVariable("INFISICAL_ADDR"),
@@ -149,6 +160,7 @@ internal static class Program
             case "onepassword": chain.Add(onepasswordspec); break;
             case "doppler": chain.Add(dopplerspec); break;
             case "infisical": chain.Add(infisicalspec); break;
+            case "secretspec": chain.Add(secretspecspec); break;
             default:
                 // The default: the chain an app would actually ship with -
                 // local overrides first, shared vaults last.

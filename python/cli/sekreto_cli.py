@@ -9,7 +9,8 @@
 # Usage: sekreto_cli.py <api-url> [--source <source>] [--store <name>]
 #
 # Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-#          gcpsecrets azuresecrets onepassword doppler infisical chain
+#          gcpsecrets azuresecrets onepassword doppler infisical
+#          secretspec chain
 #
 # Each source's configuration arrives in the environment variables its
 # own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -113,6 +114,17 @@ def chainfor(source):
         'addr': env.get('DOPPLER_ADDR'),
     }
 
+    # SecretSpec's own environment variables where it has them, so a
+    # shell already set up for secretspec needs nothing further.
+    secretspecspec = {
+        'kind': 'secretspec',
+        'command': env.get('SECRETSPEC_COMMAND') or 'secretspec',
+        'file': env.get('SECRETSPEC_FILE'),
+        'profile': env.get('SECRETSPEC_PROFILE'),
+        'backend': env.get('SECRETSPEC_PROVIDER'),
+        'reason': env.get('SECRETSPEC_REASON'),
+    }
+
     infisicalspec = {
         'kind': 'infisical',
         'addr': env.get('INFISICAL_ADDR'),
@@ -138,6 +150,7 @@ def chainfor(source):
         'onepassword': [onepasswordspec],
         'doppler': [dopplerspec],
         'infisical': [infisicalspec],
+        'secretspec': [secretspecspec],
     }
 
     found = bysource.get(source)

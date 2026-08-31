@@ -8,7 +8,8 @@
 //! Usage: sekreto-cli <api-url> [--source <source>] [--store <name>]
 //!
 //! Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-//!          gcpsecrets azuresecrets onepassword doppler infisical chain
+//!          gcpsecrets azuresecrets onepassword doppler infisical
+//!          secretspec chain
 //!
 //! Each source's configuration arrives in the environment variables its
 //! own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -132,6 +133,17 @@ fn chainfor(source: &str) -> Vec<ProviderSpec> {
         ..ProviderSpec::of("doppler")
     };
 
+    // SecretSpec's own environment variables where it has them, so a
+    // shell already set up for secretspec needs nothing further.
+    let secretspecspec = ProviderSpec {
+        command: envor("SECRETSPEC_COMMAND", "secretspec"),
+        file: envor("SECRETSPEC_FILE", ""),
+        profile: envor("SECRETSPEC_PROFILE", ""),
+        backend: envor("SECRETSPEC_PROVIDER", ""),
+        reason: envor("SECRETSPEC_REASON", ""),
+        ..ProviderSpec::of("secretspec")
+    };
+
     let infisicalspec = ProviderSpec {
         addr: envor("INFISICAL_ADDR", ""),
         token: envor("INFISICAL_TOKEN", ""),
@@ -157,6 +169,7 @@ fn chainfor(source: &str) -> Vec<ProviderSpec> {
         "onepassword" => vec![onepasswordspec],
         "doppler" => vec![dopplerspec],
         "infisical" => vec![infisicalspec],
+        "secretspec" => vec![secretspecspec],
         // The default: the chain an app would actually ship with - local
         // overrides first, shared vaults last.
         _ => vec![envspec, dotenvspec, hashicorpspec, boruspec],

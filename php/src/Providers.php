@@ -592,6 +592,119 @@ function borumiss(string $why): bool
     return str_contains($why, 'no alias named');
 }
 
+/**
+ * SecretSpec (https://secretspec.dev).
+ *
+ * SecretSpec is a declaration - a `secretspec.toml` naming the secrets a
+ * project needs - plus a chain of its own backends to satisfy them from.
+ * That makes it the same shape as sekreto one level down, and the reason
+ * to support it is the same reason sekreto exists: a project that has
+ * already declared its secrets there should not have to declare them
+ * again here.
+ *
+ * Read through its CLI, as boru is, because that is the interface it
+ * offers a program in another language: `secretspec get API_TOKEN` prints
+ * the value on stdout and nothing else. A sekreto name maps to a
+ * SecretSpec key exactly as it maps to an environment variable -
+ * `api.token` is `API_TOKEN` - which is the convention SecretSpec's own
+ * examples use.
+ *
+ * `backend` selects one of SecretSpec's backends (`--provider`, e.g.
+ * `keyring` or `dotenv://.env`) and is called `backend` here only because
+ * `provider` already means something else in this library.
+ *
+ * A reason is required, not optional: SecretSpec records every read in an
+ * audit log and refuses to read at all without one. sekreto sends
+ * `sekreto` unless told otherwise, so the audit trail says which tool
+ * asked.
+ */
+class SecretspecProvider implements Provider
+{
+    private string $command;
+
+    public function __construct(
+        ?string $command = null,
+        private ?string $file = null,
+        private ?string $profile = null,
+        private ?string $backend = null,
+        private ?string $reason = null,
+        private ?string $prefix = null
+    ) {
+        $this->command = $command ?? 'secretspec';
+    }
+
+    public function lookup(string $name): ?string
+    {
+        $key = Name::envkey($name, $this->prefix);
+
+        $cmd = escapeshellarg($this->command);
+        if ($this->file) {
+            $cmd .= ' --file ' . escapeshellarg($this->file);
+        }
+        $cmd .= ' get ' . escapeshellarg($key);
+        if ($this->backend) {
+            $cmd .= ' --provider ' . escapeshellarg($this->backend);
+        }
+        if ($this->profile) {
+            $cmd .= ' --profile ' . escapeshellarg($this->profile);
+        }
+        $cmd .= ' --reason ' . escapeshellarg($this->reason ?: 'sekreto');
+
+        $descriptors = [1 => ['pipe', 'w'], 2 => ['pipe', 'w']];
+        $process = @proc_open($cmd, $descriptors, $pipes);
+
+        if (!is_resource($process)) {
+            throw new SekretoError('sekreto: cannot run ' . $this->command);
+        }
+
+        $out = stream_get_contents($pipes[1]);
+        $err = stream_get_contents($pipes[2]);
+        fclose($pipes[1]);
+        fclose($pipes[2]);
+        $status = proc_close($process);
+
+        if (0 === $status) {
+            // The value and one newline, and nothing else.
+            return preg_replace('/\n\z/', '', $out, 1);
+        }
+
+        $why = trim($err);
+
+        if (secretspecmiss($why, $key)) {
+            return null;
+        }
+
+        throw new SekretoError(
+            'sekreto: secretspec error: ' . ('' === $why ? 'exit ' . $status : $why)
+        );
+    }
+
+    public function describe(): string
+    {
+        return 'secretspec' . ($this->backend ? ':' . $this->backend : '');
+    }
+}
+
+/**
+ * Does this SecretSpec failure mean "no such secret" rather than "I could
+ * not answer"?
+ *
+ * SecretSpec says `Secret 'API_TOKEN' not found` for both a name it does
+ * not declare and one declared with no value, and both are misses: this
+ * store does not hold it, so the chain carries on.
+ *
+ * MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
+ * `Provider backend 'keyring' not found`, which is a store that could not
+ * answer at all - and reading that as a miss is the worst failure this
+ * library has, because the chain then falls through to a weaker store
+ * without saying so. The key is required to appear, so the two cannot be
+ * confused.
+ */
+function secretspecmiss(string $why, string $key): bool
+{
+    return str_contains($why, "Secret '" . $key . "' not found");
+}
+
 /** The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now. */
 function awsnow(): string
 {
@@ -1352,6 +1465,14 @@ function makeprovider(array $spec): Provider
         'onepassword' => new OnePasswordProvider($spec),
         'doppler' => new DopplerProvider($spec),
         'infisical' => new InfisicalProvider($spec),
+        'secretspec' => new SecretspecProvider(
+            $spec['command'] ?? null,
+            $spec['file'] ?? null,
+            $spec['profile'] ?? null,
+            $spec['backend'] ?? null,
+            $spec['reason'] ?? null,
+            $spec['prefix'] ?? null
+        ),
         default => throw new SekretoError(
             'sekreto: unknown provider kind: ' . (null === $kind ? '' : (string) $kind)
         ),

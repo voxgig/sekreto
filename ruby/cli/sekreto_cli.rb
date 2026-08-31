@@ -10,7 +10,8 @@
 # Usage: ruby sekreto_cli.rb <api-url> [--source <source>] [--store <name>]
 #
 # Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-#          gcpsecrets azuresecrets onepassword doppler infisical chain
+#          gcpsecrets azuresecrets onepassword doppler infisical
+#          secretspec chain
 #
 # Each source's configuration arrives in the environment variables its
 # own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -112,6 +113,17 @@ def chainfor(source)
     'addr' => ENV.fetch('DOPPLER_ADDR', nil)
   }
 
+  # SecretSpec's own environment variables where it has them, so a
+  # shell already set up for secretspec needs nothing further.
+  secretspecspec = {
+    'kind' => 'secretspec',
+    'command' => ENV['SECRETSPEC_COMMAND'] || 'secretspec',
+    'file' => ENV.fetch('SECRETSPEC_FILE', nil),
+    'profile' => ENV.fetch('SECRETSPEC_PROFILE', nil),
+    'backend' => ENV.fetch('SECRETSPEC_PROVIDER', nil),
+    'reason' => ENV.fetch('SECRETSPEC_REASON', nil)
+  }
+
   infisicalspec = {
     'kind' => 'infisical',
     'addr' => ENV.fetch('INFISICAL_ADDR', nil),
@@ -137,6 +149,7 @@ def chainfor(source)
   when 'onepassword' then [onepasswordspec]
   when 'doppler' then [dopplerspec]
   when 'infisical' then [infisicalspec]
+  when 'secretspec' then [secretspecspec]
   else
     # The default: the chain an app would actually ship with - local
     # overrides first, shared vaults last.

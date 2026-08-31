@@ -11,7 +11,8 @@
  * Usage: php sekreto-cli.php <api-url> [--source <source>] [--store <name>]
  *
  * Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
- *          gcpsecrets azuresecrets onepassword doppler infisical chain
+ *          gcpsecrets azuresecrets onepassword doppler infisical
+ *          secretspec chain
  *
  * Each source's configuration arrives in the environment variables its
  * own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -116,6 +117,17 @@ function chainfor(string $source): array
         'addr' => getenv('DOPPLER_ADDR') ?: null,
     ];
 
+    // SecretSpec's own environment variables where it has them, so a
+    // shell already set up for secretspec needs nothing further.
+    $secretspecspec = [
+        'kind' => 'secretspec',
+        'command' => getenv('SECRETSPEC_COMMAND') ?: 'secretspec',
+        'file' => getenv('SECRETSPEC_FILE') ?: null,
+        'profile' => getenv('SECRETSPEC_PROFILE') ?: null,
+        'backend' => getenv('SECRETSPEC_PROVIDER') ?: null,
+        'reason' => getenv('SECRETSPEC_REASON') ?: null,
+    ];
+
     $infisicalspec = [
         'kind' => 'infisical',
         'addr' => getenv('INFISICAL_ADDR') ?: null,
@@ -141,6 +153,7 @@ function chainfor(string $source): array
         'onepassword' => [$onepasswordspec],
         'doppler' => [$dopplerspec],
         'infisical' => [$infisicalspec],
+        'secretspec' => [$secretspecspec],
         // The default: the chain an app would actually ship with - local
         // overrides first, shared vaults last.
         default => [$envspec, $dotenvspec, $hashicorpspec, $boruspec],

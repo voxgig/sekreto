@@ -512,6 +512,22 @@ A secret SecretSpec does not hold — undeclared, or declared with no
 value — is a **miss**, so the chain carries on. A backend that does not
 exist, or a keyring that will not open, is an **error**.
 
+The two are easy to confuse and expensive to get wrong, because
+SecretSpec words both as "not found":
+
+```
+$ secretspec get API_TOKEN --provider env      # nothing in the environment
+Secret 'API_TOKEN' not found                   # -> a miss, try the next store
+
+$ secretspec get API_TOKEN --provider keyring  # a build without that backend
+Provider backend 'keyring' not found           # -> an error, do NOT fall through
+```
+
+sekreto matches the whole phrase, key included, so the second cannot be
+read as the first. Reading it as a miss would send the chain on to a
+weaker store without saying so — and a secretspec built without a backend
+compiled in, or a typo in `backend`, produces exactly that message.
+
 `describe()` → `secretspec`, or `secretspec:<backend>`
 
 ---
