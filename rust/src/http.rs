@@ -16,9 +16,9 @@
 //! keep-alive, no client certificates.
 
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use rustls::pki_types::{CertificateDer, ServerName};
 use rustls::{ClientConfig, ClientConnection, RootCertStore, StreamOwned};
@@ -73,9 +73,14 @@ const TIMEOUT: Duration = Duration::from_secs(10);
 /// this port and Zig were the two that did not.
 ///
 /// `connect_timeout` is the bounded one, and it takes a resolved SocketAddr
-/// rather than a name, so the resolution has to happen here. A name can
-/// resolve to several addresses (A and AAAA both, commonly) and the
-/// unbounded call walks them in turn; so does this, each with its own bound.
+/// rather than a name, so the resolution has to happen here.
+///
+/// The bound is on the WHOLE attempt, not on each address. A name commonly
+/// resolves to several - a dual-stack host answers with both an A and an
+/// AAAA - and giving each the full ten seconds would make the real bound
+/// ten seconds times however many addresses the name cares to return, which
+/// is not a bound at all when the name is the attacker's. Each attempt gets
+/// what is left of the one deadline.
 ///
 /// The bound does NOT cover the resolution itself, which std offers no way
 /// to bound - a DNS server that hangs still hangs. The connect is the part
@@ -88,9 +93,30 @@ fn connect(host: &str, port: u16, url: &str) -> Result<TcpStream, String> {
         .to_socket_addrs()
         .map_err(|err| unreachable(err.to_string()))?;
 
+    connectall(addrs, TIMEOUT).map_err(unreachable)
+}
+
+/// Walk resolved addresses under one shared deadline.
+///
+/// Split out from `connect` so the deadline can be tested without waiting
+/// the real ten seconds.
+fn connectall(
+    addrs: impl Iterator<Item = SocketAddr>,
+    budget: Duration,
+) -> Result<TcpStream, String> {
+    let start = Instant::now();
     let mut last = None;
+
     for addr in addrs {
-        match TcpStream::connect_timeout(&addr, TIMEOUT) {
+        let left = budget.saturating_sub(start.elapsed());
+        if left.is_zero() {
+            return Err(match last {
+                Some(err) => format!("{}", err),
+                None => "timed out".to_string(),
+            });
+        }
+
+        match TcpStream::connect_timeout(&addr, left) {
             Ok(stream) => return Ok(stream),
             Err(err) => last = Some(err),
         }
@@ -98,10 +124,10 @@ fn connect(host: &str, port: u16, url: &str) -> Result<TcpStream, String> {
 
     // No address at all is not the same failure as every address refusing,
     // but both are "could not reach", which is what the caller acts on.
-    Err(unreachable(match last {
+    Err(match last {
         Some(err) => err.to_string(),
         None => "no address".to_string(),
-    }))
+    })
 }
 
 /// A url without its query string, for messages.
@@ -451,4 +477,58 @@ pub fn urlencode(text: &str) -> String {
     }
 
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const BUDGET: Duration = Duration::from_millis(300);
+
+    fn hole(last: u8) -> SocketAddr {
+        format!("10.255.255.{}:8200", last).parse().unwrap()
+    }
+
+    /// Several unreachable addresses must share one deadline, not each get
+    /// their own: a name that resolves to N of them would otherwise cost
+    /// N times the bound, and the name can be the attacker's.
+    ///
+    /// This needs addresses that SWALLOW a SYN rather than refuse it, and
+    /// whether any given address does is the network's business, not this
+    /// crate's. So the single-address case is measured first: if it comes
+    /// back fast the addresses are being refused, there is nothing to time,
+    /// and the test says so instead of passing on a technicality.
+    #[test]
+    fn addresses_share_one_deadline() {
+        let start = Instant::now();
+        let alone = connectall(std::iter::once(hole(1)), BUDGET);
+        let one = start.elapsed();
+
+        assert!(alone.is_err(), "10.255.255.1 must not connect");
+
+        if one < BUDGET / 2 {
+            eprintln!(
+                "skipped: 10.255.255.1 answered in {:?}, so it is refused here \
+                 rather than blackholed and there is no blocking to bound",
+                one
+            );
+            return;
+        }
+
+        let start = Instant::now();
+        let three = connectall([hole(1), hole(2), hole(3)].into_iter(), BUDGET);
+        let took = start.elapsed();
+
+        assert!(three.is_err(), "10.255.255.0/24 must not connect");
+
+        // Three at 300ms each is 900ms; one shared deadline is 300ms. The
+        // slack is for a loaded machine, and is still far below per-address.
+        assert!(
+            took < BUDGET * 2,
+            "three addresses took {:?} against a {:?} budget: \
+             the deadline is being handed out per address, not shared",
+            took,
+            BUDGET
+        );
+    }
 }
