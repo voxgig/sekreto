@@ -24,10 +24,11 @@ const Allocator = std.mem.Allocator;
 
 pub const Header = std.http.Header;
 
-/// How long connecting to a vault may take before it is treated as
-/// unreachable. Ports carry the same bound.
+/// How long reaching a vault may take before it is treated as unreachable.
+/// Ports carry the same bound.
 ///
-/// Applied to the SOCKET, because std will not apply it for us.
+/// Applied TWICE, in two different ways, because std applies it neither
+/// time and the two halves of a request fail differently.
 ///
 /// `ConnectTcpOptions` has a `timeout` field and `connectTcpOptions` never
 /// reads it: in Zig 0.16 the whole of `std/http/Client.zig` mentions
@@ -38,11 +39,17 @@ pub const Header = std.http.Header;
 /// 35s against a server that accepted and went silent, where every other
 /// port gave up at 10.
 ///
-/// So the bound is set with SO_RCVTIMEO / SO_SNDTIMEO on the connection's
-/// own socket, which does hold. Being a socket option it bounds each read
-/// and each write, not the request as a whole - the same shape as every
-/// port here except Go, whose deadline is total. A server dribbling one
-/// byte at a time can still outlast it; a server that says nothing cannot.
+///   - The CONNECT is bounded by racing it against a sleep of this length
+///     and cancelling the loser: see `dial`. Nothing shorter works, because
+///     until the connect returns there is no socket to bound.
+///   - Everything AFTER the connect is bounded by `Watchdog`, which shuts
+///     the socket down once this long has passed.
+///
+/// The watchdog's bound is TOTAL - it is wall-clock from the moment the
+/// connection is up, not a per-read timer that a trickle of bytes resets.
+/// That makes this port and Go the only two of the twelve that cut a server
+/// answering 200 and then dribbling its body one byte at a time; measured
+/// at 10.05s here against 30s-and-still-going for the other ten.
 pub const CONNECT_TIMEOUT_MS = 10_000;
 
 /// How much of a response body will be read before the store is treated as
@@ -87,6 +94,103 @@ const Watchdog = struct {
         self.stream.shutdown(self.io, .both) catch {};
     }
 };
+
+/// Connect, but give up after CONNECT_TIMEOUT_MS.
+///
+/// The watchdog cannot do this job: it works by shutting a socket down, and
+/// during a connect there is no socket it can reach - `connectTcpOptions`
+/// creates one internally and returns only once it is up. Against an
+/// address that swallows SYNs that is however long the kernel retries,
+/// which on Linux is a little over two minutes. Measured: still blocked at
+/// 40s, where ten of the twelve ports gave up at 10.
+///
+/// So the connect is raced against a sleep, and the loser is cancelled.
+/// `Io.Threaded` signals a thread that is blocked in a cancelable syscall,
+/// so the cancel really does unblock a stuck connect rather than waiting
+/// for it - measured cutting at the deadline to the millisecond.
+///
+/// A connect that lands in the same instant as the deadline is the case to
+/// get right: its connection is already in the client's pool, marked used,
+/// and `Client.deinit` ASSERTS that pool is empty. Dropping it would turn a
+/// slow vault into a panic, which is the same trade this port already
+/// refused once (see the note at the connect site). So the cancel is
+/// drained and anything it hands back is closed.
+fn dial(
+    client: *std.http.Client,
+    io: std.Io,
+    host: std.Io.net.HostName,
+    port: u16,
+    protocol: std.http.Client.Protocol,
+) !*std.http.Client.Connection {
+    const Race = union(enum) {
+        reached: std.http.Client.ConnectTcpError!*std.http.Client.Connection,
+        expired: void,
+    };
+
+    const task = struct {
+        fn connect(
+            c: *std.http.Client,
+            h: std.Io.net.HostName,
+            p: u16,
+            proto: std.http.Client.Protocol,
+        ) std.http.Client.ConnectTcpError!*std.http.Client.Connection {
+            return c.connectTcpOptions(.{ .host = h, .port = p, .protocol = proto });
+        }
+
+        fn countdown(i: std.Io) void {
+            i.sleep(.fromMilliseconds(CONNECT_TIMEOUT_MS), .awake) catch {};
+        }
+    };
+
+    const direct: std.http.Client.ConnectTcpOptions =
+        .{ .host = host, .port = port, .protocol = protocol };
+
+    var slots: [2]Race = undefined;
+    var race: std.Io.Select(Race) = .init(io, &slots);
+
+    // No spare unit of concurrency to race with. Connecting unbounded is
+    // worse than connecting bounded and better than not connecting, so the
+    // bound is what gets dropped.
+    race.concurrent(.reached, task.connect, .{ client, host, port, protocol }) catch
+        return client.connectTcpOptions(direct);
+
+    // The connect is already running and must be awaited either way, so
+    // from here every path goes through the select.
+    race.concurrent(.expired, task.countdown, .{io}) catch {};
+
+    // Cancel whatever is left, closing a connection that arrived too late
+    // rather than leaving it in the pool for `Client.deinit` to assert on.
+    // Draining in a loop is what the Select contract asks of a task that
+    // allocates, and the connect is one.
+    const drain = struct {
+        fn all(r: *std.Io.Select(Race), c: *std.http.Client, i: std.Io) void {
+            while (r.cancel()) |late| switch (late) {
+                .reached => |result| if (result) |connection| {
+                    connection.closing = true;
+                    c.connection_pool.release(connection, i);
+                } else |_| {},
+                .expired => {},
+            };
+        }
+    };
+
+    const first = race.await() catch {
+        drain.all(&race, client, io);
+        return error.Canceled;
+    };
+
+    switch (first) {
+        .reached => |result| {
+            // Only the countdown is left, and it holds nothing.
+            race.cancelDiscard();
+            return result;
+        },
+        .expired => {
+            drain.all(&race, client, io);
+            return error.ConnectTimeout;
+        },
+    }
+}
 
 /// What one round-trip returns. `body` is null when the response carried no
 /// JSON - only possible for a non-200, which is decided on status alone.
@@ -197,15 +301,12 @@ fn roundtrip(
         client.now = now;
     }
 
-    const connection = try client.connectTcpOptions(.{
-        .host = host,
-        .port = port,
-        .protocol = protocol,
-    });
+    const connection = try dial(client, io, host, port, protocol);
 
-    // The bound std would not apply. See CONNECT_TIMEOUT_MS: the `timeout`
-    // field on ConnectTcpOptions is declared and never read, so this port
-    // had none at all.
+    // The bound std would not apply, for the rest of the request. See
+    // CONNECT_TIMEOUT_MS: the `timeout` field on ConnectTcpOptions is
+    // declared and never read, so this port had none at all; `dial` above
+    // covers the connect, and this covers everything after it.
     //
     // Enforced with a watchdog rather than SO_RCVTIMEO. The socket option
     // is the obvious move and it is wrong here: it makes recv return EAGAIN,
