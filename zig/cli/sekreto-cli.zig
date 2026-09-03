@@ -17,6 +17,7 @@
 
 const std = @import("std");
 const sekreto = @import("sekreto");
+const plugins = @import("sekretoplugins");
 
 const ProviderSpec = sekreto.ProviderSpec;
 
@@ -44,7 +45,7 @@ fn chainfor(
         .dir = if (0 != get(env, "SEKRETO_FILEDIR").len) get(env, "SEKRETO_FILEDIR") else "/run/secrets",
     };
 
-    const auth: ?sekreto.providers.Auth = if (0 == get(env, "VAULT_AUTH").len) null else .{
+    const auth: ?sekreto.Auth = if (0 == get(env, "VAULT_AUTH").len) null else .{
         .method = get(env, "VAULT_AUTH"),
         .role = get(env, "VAULT_ROLE"),
         .jwtfile = get(env, "VAULT_JWT_FILE"),
@@ -245,7 +246,12 @@ fn run(init: std.process.Init) !u8 {
     const config = sekreto.Config{ .io = io, .env = init.environ_map };
     const specs = try chainfor(alloc, init.environ_map, source);
 
-    var secrets = switch (try sekreto.Sekreto.init(alloc, config, specs, true)) {
+    // The full set: this CLI is the one caller that may be asked for any
+    // kind, so it links every plugin. An app links the ones it configures.
+    var secrets = switch (try sekreto.Sekreto.init(alloc, config, .{
+        .providers = specs,
+        .plugins = &plugins.ALL,
+    })) {
         .err => |message| {
             complain(io, message);
             return 2;
@@ -269,7 +275,7 @@ fn run(init: std.process.Init) !u8 {
 
     const bearer = try std.fmt.allocPrint(alloc, "Bearer {s}", .{token});
 
-    const res = switch (try sekreto.http.fetchjson(alloc, io, .GET, url, &.{
+    const res = switch (try plugins.httpjson.fetchjson(alloc, io, .GET, url, &.{
         .{ .name = "authorization", .value = bearer },
         .{ .name = "x-sekreto-lang", .value = LANG },
     }, null)) {
@@ -290,7 +296,7 @@ fn run(init: std.process.Init) !u8 {
         return 1;
     }
 
-    const caller = sekreto.http.jstr(sekreto.http.jget(res.body, "caller")) orelse "unknown";
+    const caller = plugins.httpjson.jstr(plugins.httpjson.jget(res.body, "caller")) orelse "unknown";
 
     var buffer: [4096]u8 = undefined;
     var stdout = std.Io.File.stdout().writer(io, &buffer);
