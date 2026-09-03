@@ -48,7 +48,13 @@ secrets.close()        # every store deactivated and unloaded, in reverse
 |---|---|---|
 | the core | `voxgig_sekreto` | `Sekreto`, the name helpers, the four built-in providers, `providerplugin`, `checkaddr` |
 | one plugin | `voxgig_sekreto.plugins.<name>` | the definition (`hashicorp`, `awssecrets` + `awsparams` + `sigv4`, …) and its provider class |
-| every plugin | `voxgig_sekreto.plugins` | `ALL`, and everything each module exports |
+| every plugin | `voxgig_sekreto.plugins` | `ALL` — built when first read, which imports every plugin |
+
+Importing one plugin imports only that plugin: the package initializer
+imports none of them, and `ALL` is assembled on demand. One trap, because
+each module is named after the definition it holds: `from
+voxgig_sekreto.plugins import hashicorp` is the *module*, and `Sekreto`
+refuses it by name, saying to import the definition from it.
 
 A kind that was not passed in is refused by name, with the plugin to pass.
 A custom store is `providerplugin(kind, make)`; see

@@ -15,6 +15,7 @@
 # docs/design/plugin-providers.md.
 
 import re
+import types
 
 from voxgig_plugin import check_tag, format_ref, make_catalog, make_host
 
@@ -204,6 +205,26 @@ def storename(provider):
     return provider.describe().split(':')[0]
 
 
+def _definition(plugin):
+    """A plugin entry, checked to be a definition before the catalog sees it.
+
+    Every plugin module is named after the definition it holds, so `from
+    voxgig_sekreto.plugins import hashicorp` hands back the MODULE, and a
+    module in the catalog would fail deep inside voxgig/plugin with a
+    message about a definition name. Refused here instead, naming the
+    import that was meant.
+    """
+    if isinstance(plugin, types.ModuleType):
+        name = plugin.__name__.rsplit('.', 1)[-1]
+        raise SekretoError(
+            'sekreto: not a plugin definition: the module ' + plugin.__name__
+            + ' - import the definition it holds: from ' + plugin.__name__
+            + ' import ' + name)
+    if not isinstance(plugin, dict):
+        raise SekretoError('sekreto: not a plugin definition: ' + repr(plugin))
+    return plugin
+
+
 def _unknownkind(kind, catalog):
     """The message for a kind the catalog does not hold.
 
@@ -257,7 +278,7 @@ class Sekreto:
         # the voxgig/plugin host every spec'd provider is an instance of.
         # Read it for introspection - `host.list()` names each store's ref
         # and status - and nothing on it advances the chain.
-        self.catalog = make_catalog(BUILTINS + list(opts.get('plugins') or []))
+        self.catalog = make_catalog(BUILTINS + [_definition(p) for p in opts.get('plugins') or []])
         self.host = make_host({'catalog': self.catalog})
 
         # (store, provider) pairs, in chain order. A provider handed in

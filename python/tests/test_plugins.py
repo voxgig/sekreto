@@ -38,6 +38,9 @@ class TestPlugins(unittest.TestCase):
 
     def test_the_full_set_holds_every_kind(self):
         self.assertEqual(sorted(d['name'] for d in ALL), PLUGINS)
+        for name in PLUGINS:
+            module = 'aws' if name.startswith('aws') else name
+            self.assertIn(module, dir(sys.modules['voxgig_sekreto.plugins']))
         self.assertEqual([d['name'] for d in BUILTINS], KINDS['builtin'])
         self.assertEqual(sorted(KINDS['plugin']), PLUGINS)
 
@@ -190,21 +193,56 @@ class TestPlugins(unittest.TestCase):
         self.assertIsNone(secrets.try_('api.token'))
         self.assertEqual(secrets.redact('token=tok01'), 'token=[redacted]')
 
-    # The core imports no plugin: importing voxgig_sekreto brings in the
-    # chain, the built-ins and voxgig_plugin, and not one module under
-    # plugins/. Checked in a fresh interpreter, because this one has
-    # imported them all (above) on purpose.
-    def test_the_core_imports_no_plugin(self):
-        code = (
-            "import sys; import voxgig_sekreto; "
-            "print(sorted(m for m in sys.modules if m.startswith('voxgig_sekreto')))"
-        )
+    # What an import pulls in, checked in a fresh interpreter because this
+    # one has imported everything (above) on purpose.
+    def fresh(self, code):
+        code = ("import sys; " + code + "; "
+                "print(sorted(m for m in sys.modules if m.startswith('voxgig_sekreto')))")
         path = os.pathsep.join([os.path.join(HERE, '..'), os.path.join(pluginhome(), 'python')])
-        out = subprocess.run(
+        return subprocess.run(
             [sys.executable, '-c', code], capture_output=True, text=True, check=True,
             env={**os.environ, 'PYTHONPATH': path},
         ).stdout.strip()
-        self.assertEqual(out, "['voxgig_sekreto', 'voxgig_sekreto.addr', 'voxgig_sekreto.providers', 'voxgig_sekreto.sekreto']")
+
+    # The core imports no plugin: importing voxgig_sekreto brings in the
+    # chain, the built-ins and voxgig_plugin, and not one module under
+    # plugins/.
+    def test_the_core_imports_no_plugin(self):
+        self.assertEqual(
+            self.fresh("import voxgig_sekreto"),
+            "['voxgig_sekreto', 'voxgig_sekreto.addr', 'voxgig_sekreto.providers', 'voxgig_sekreto.sekreto']")
+
+    # ...and one plugin imports only itself. The package initializer used
+    # to import all ten so it could re-export them, which made the
+    # single-plugin import execute it first and load every network client
+    # behind it - the whole set, for a consumer that named exactly one.
+    def test_one_plugin_imports_only_itself(self):
+        self.assertEqual(
+            self.fresh("from voxgig_sekreto.plugins.hashicorp import hashicorp"),
+            "['voxgig_sekreto', 'voxgig_sekreto.addr', 'voxgig_sekreto.plugins', "
+            "'voxgig_sekreto.plugins.hashicorp', 'voxgig_sekreto.plugins.httpjson', "
+            "'voxgig_sekreto.providers', 'voxgig_sekreto.sekreto']")
+
+    # The full set is built on demand, and reaching it imports everything.
+    def test_the_full_set_is_built_on_demand(self):
+        before = self.fresh("import voxgig_sekreto.plugins")
+        self.assertNotIn('plugins.hashicorp', before)
+        after = self.fresh("from voxgig_sekreto.plugins import ALL")
+        for name in ['hashicorp', 'boru', 'aws', 'gcpsecrets', 'azuresecrets',
+                     'onepassword', 'doppler', 'infisical', 'secretspec', 'sigv4', 'httpjson']:
+            self.assertIn("'voxgig_sekreto.plugins." + name + "'", after)
+
+    # `from voxgig_sekreto.plugins import hashicorp` is the MODULE, and a
+    # module is refused by name, saying what to import instead.
+    def test_a_module_passed_as_a_plugin_is_refused(self):
+        from voxgig_sekreto.plugins import hashicorp as module
+        self.assertIsInstance(module, type(sys))
+        with self.assertRaises(SekretoError) as caught:
+            Sekreto({'plugins': [module], 'providers': []})
+        self.assertEqual(
+            str(caught.exception),
+            'sekreto: not a plugin definition: the module voxgig_sekreto.plugins.hashicorp'
+            ' - import the definition it holds: from voxgig_sekreto.plugins.hashicorp import hashicorp')
 
 
 if __name__ == '__main__':

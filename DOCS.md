@@ -310,7 +310,7 @@ byte for byte, because the spec pins those messages. Any other error a
 |---|---|---|---|---|
 | typescript | `typescript/plugins/` | `@voxgig/plugin` (npm) | `import { hashicorp } from '@voxgig/sekreto/plugins/hashicorp'` | `import { allplugins } from '@voxgig/sekreto/plugins'` |
 | go | `go/plugins/<kind>/` | `github.com/voxgig/plugin/go` (module proxy) | `import ".../go/plugins/hashicorp"` → `hashicorp.Plugin` | `import ".../go/plugins"` → `plugins.All()` |
-| python | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git, until it is on PyPI) | `from voxgig_sekreto.plugins.hashicorp import hashicorp` | `from voxgig_sekreto.plugins import ALL` |
+| python | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git, until it is on PyPI) | `from voxgig_sekreto.plugins.hashicorp import hashicorp` | `from voxgig_sekreto.plugins import ALL` (built on demand) |
 | the other nine ports | — | — | a `kind` switch over every kind, until voxgig/plugin has their language | |
 
 In Go the split is a *linking* boundary: a plugin package not imported
@@ -318,8 +318,13 @@ is not in the binary, and the core package imports no `net/http`, no
 `crypto` and no `os/exec`. In TypeScript it is a *bundling* one: the
 core reaches no plugin module, so a bundler drops what a chain does not
 name. In Python, where importing is neither, it governs which kinds a
-`Sekreto` can name and what `import voxgig_sekreto` pulls in — the core,
-the four built-ins and `voxgig_plugin`, and no module under `plugins/`.
+`Sekreto` can name and what an import pulls in: `import voxgig_sekreto`
+brings the core, the four built-ins and `voxgig_plugin`, and no module
+under `plugins/`; importing one plugin brings that plugin alone, because
+the package initializer imports none of them and `ALL` is assembled only
+when read. (Each module is named after the definition it holds, so
+`from voxgig_sekreto.plugins import hashicorp` is the module, not the
+definition; `Sekreto` refuses a module by name and says what to import.)
 
 ---
 

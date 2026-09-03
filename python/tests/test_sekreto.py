@@ -32,7 +32,8 @@ from voxgig_sekreto import (  # noqa: E402
 #
 # `sigv4` lives with the aws plugin - it is the crypto edge, and only the
 # two aws kinds use it (docs/design/plugin-providers.md).
-from voxgig_sekreto.plugins import ALL, sigv4  # noqa: E402
+from voxgig_sekreto.plugins import ALL  # noqa: E402
+from voxgig_sekreto.plugins.aws import sigv4  # noqa: E402
 
 
 def specfile(name):

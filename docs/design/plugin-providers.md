@@ -96,7 +96,7 @@ has:
 |---|---|---|---|
 | typescript | `typescript/plugins/`, one module per plugin, `index.ts` the full set (`allplugins`) | bundling: `src/` reaches nothing under `plugins/` | `@voxgig/plugin` from npm |
 | go | `go/plugins/<kind>/`, one package per plugin, `plugins` the full set (`All()`) | linking: `sekreto/` imports no `net/http`, `crypto`, `os/exec`; an unimported package is not in the binary | `github.com/voxgig/plugin/go` from the module proxy |
-| python | `python/voxgig_sekreto/plugins/`, one module per plugin, the package the full set (`ALL`) | importing: `import voxgig_sekreto` pulls in the core, the built-ins and `voxgig_plugin`, and no module under `plugins/` | `voxgig-plugin` from git, until it is on PyPI |
+| python | `python/voxgig_sekreto/plugins/`, one module per plugin, the package the full set (`ALL`, assembled on demand through a module `__getattr__` so that importing one plugin imports one) | importing: `import voxgig_sekreto` pulls in the core, the built-ins and `voxgig_plugin`, and no module under `plugins/`; one plugin pulls in itself | `voxgig-plugin` from git, until it is on PyPI |
 
 The shared HTTP helper — bounded, redirect-refusing, proxy-ignoring —
 lives under `plugins/` too (`httpjson`), because a chain of built-ins
