@@ -35,7 +35,10 @@ ten stay one.
    way that language takes a dependency — npm for typescript, the module
    proxy for go, git for python until it is on PyPI (and, for a python
    checkout that has not pip-installed it, `make deps` fetches a shallow
-   clone the tests and CLI find). That is the whole list. voxgig/omni is not on it: it drives the tests and no shipped
+   clone the tests and CLI find), and for zig, which has no registry, a
+   checkout named on the command line as the module `plugin` — found
+   where omni is found, or fetched by `make deps`, and needed by the
+   library itself, not only the tests. That is the whole list. voxgig/omni is not on it: it drives the tests and no shipped
    manifest may name it (`tools/omni_isolation.py` proves that).
 
    The exception is **cryptographic transport**, and it is a principle
@@ -100,9 +103,21 @@ ten stay one.
    - **A port adopts the architecture only once voxgig/plugin has its
      language.** Until then it keeps the `kind` switch with the same
      fourteen kinds — javascript, ruby, php, perl, rust, java, csharp
-     and kotlin can move now; zig waits for a plugin port. The
-     propagation order, and what each port owes, is
+     and kotlin can move now; zig has moved (plugin's P6 gave it a
+     port, and that port now builds on the toolchain this one uses).
+     The propagation order, and what each port owes, is
      [`docs/design/plugin-providers.md`](./docs/design/plugin-providers.md).
+   - **In zig the core cannot reach the plugins even by mistake.** A
+     module's imports are confined to its root's directory; `sekreto` is
+     rooted at `zig/src/sekreto.zig`, `zig/plugins/` is outside it, and
+     the compiler refuses the import. What the compiler cannot see —
+     the HTTP client, crypto, a child process — `make check-core` greps
+     for. The plugin host cannot carry a pointer, so a definition's
+     `define` exports the INDEX of the provider it built and
+     `Sekreto.init` reads it back; the allocator and process config it
+     needs travel through a module-global set for the duration of
+     `init`, the same shape plugin's own zig port uses for its error
+     slot, and neither claims thread safety.
 
    Deferring a builtin (`nodemod`) is not the same thing and does not
    replace it: deferring stops a Node module being EVALUATED at import,

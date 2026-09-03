@@ -154,9 +154,26 @@ split confusing to use.
 
 ## Consequences accepted
 
-- **Port coverage gates propagation.** plugin has seventeen ports;
-  sekreto has twelve. Eleven overlap. zig has no plugin port and keeps
-  the switch until one exists — checked again when plugin's P6 lands.
+- **Port coverage gates propagation.** plugin has twenty-three ports;
+  sekreto has twelve, and all twelve overlap since plugin's P6 gave zig
+  a port. That port was written for zig 0.13 while this one is on 0.16,
+  and one `zig build-exe` cannot mix toolchains, so plugin's zig port
+  now builds on both: a comptime switch on the compiler version selects
+  the managed list, the file I/O and the environment access, and its own
+  CI stays on 0.13 while sekreto compiles it on 0.16. It also gained a
+  consumer root (`zig/src/plugin.zig`), because zig confines a module's
+  imports to its root's directory and a host cannot reach `host.zig`,
+  `value.zig` and `types.zig` through three roots in one directory.
+- **Zig's core cannot reach the plugins even by accident**, for the same
+  reason: `src/` is the `sekreto` module's root and `plugins/` is outside
+  it. The plugin value model carries numbers and strings, not pointers,
+  so a definition's `define` exports the index of the provider it built
+  and `Sekreto.init` reads it back; the allocator and process config
+  `define` needs travel through a module-global set for the duration of
+  `init` (the shape plugin's zig port uses for its error slot), and the
+  port claims no thread safety across constructions. `Provider` became
+  a vtable, since a tagged union of every kind is a core that links every
+  kind.
 - **Python's dependency is from git.** voxgig/plugin's python port was
   not packaged at all; it now carries a `pyproject.toml`, and sekreto
   declares it from git until it is on PyPI. A checkout that has not
@@ -183,8 +200,8 @@ split confusing to use.
 
 ## Propagation order
 
-typescript (canonical) ✅ → go ✅, python ✅ → javascript, ruby, php,
-perl, rust, java, csharp, kotlin (plugin ports exist; the same layout —
-built-ins in the core, one plugin per module or package under
+typescript (canonical) ✅ → go ✅, python ✅ → zig ✅ → javascript, ruby,
+php, perl, rust, java, csharp, kotlin (plugin ports exist; the same
+layout — built-ins in the core, one plugin per module or package under
 `plugins/`, a full set, a `plugins` option, the `sekreto_error` bridge,
-and the three seam tests) → zig, when voxgig/plugin has it.
+and the three seam tests).

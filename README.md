@@ -107,7 +107,7 @@ clients are loaded differs.
 | [java](java/) | switch — pending | | exists |
 | [csharp](csharp/) | switch — pending | | exists |
 | [kotlin](kotlin/) | switch — pending | | exists |
-| [zig](zig/) | switch — **no plugin port yet** | | not yet — check again |
+| [zig](zig/) | ✅ | `zig/plugins/` | plugin's zig port as a named module — a checkout, found or fetched by `make deps` |
 
 **typescript** — one import per plugin, or the full set from
 `@voxgig/sekreto/plugins`:
@@ -179,6 +179,32 @@ prod = secrets.getfrom('prod', 'api.token')
 secrets.host.list()   # {'env': 'live', 'hashicorp$prod': 'live', 'awssecrets': 'live'}
 ```
 
+**zig** — the plugins module rooted at one plugin file, or at
+`plugins/all.zig` for the full set; voxgig/plugin's zig port is a
+checkout named as the module `plugin` (`make deps` fetches one):
+
+```zig
+const sekreto = @import("sekreto");
+const plugins = @import("sekretoplugins");
+
+var secrets = switch (try sekreto.Sekreto.init(alloc, config, .{
+    .plugins = &.{ plugins.hashicorp, plugins.awssecrets },
+    .providers = &.{
+        .{ .kind = "env" },
+        .{ .kind = "hashicorp", .name = "prod", .addr = vaultaddr, .token = vaulttoken },
+        .{ .kind = "awssecrets", .region = "eu-west-1" },
+    },
+})) {
+    .err => |message| return fail(message),
+    .ok => |made| made,
+};
+defer secrets.deinit();
+
+const token = try secrets.get("api.token");              // the chain answers
+const prod = try secrets.getfrom("prod", "api.token");   // one store answers
+sekreto.plugin.host.list(secrets.host);   // { awssecrets: "live", env: "live", "hashicorp$prod": "live" }
+```
+
 A kind that was not passed in is refused by name, and the message says
 what to pass:
 
@@ -187,9 +213,9 @@ sekreto: unknown provider kind: doppler (available: dotenv, env, file, hashicorp
  - doppler is a sekreto plugin, not built in: pass it in the plugins option
 ```
 
-A custom store is one call — `providerplugin(kind, make)` in typescript
-and python, `sekreto.ProviderPlugin` in go — and joins the chain like any
-shipped plugin. See [DOCS.md](DOCS.md#plugins).
+A custom store is one call — `providerplugin(kind, make)` in typescript,
+python and zig (at comptime there), `sekreto.ProviderPlugin` in go — and
+joins the chain like any shipped plugin. See [DOCS.md](DOCS.md#plugins).
 
 ## Languages
 

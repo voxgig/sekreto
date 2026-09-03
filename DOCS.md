@@ -221,18 +221,18 @@ no socket, no TLS, no crypto and no child process. Every other kind is a
 definition in the port's `plugins/` folder, which the calling project
 hands to `Sekreto` at construction.
 
-| plugin | kinds | needs | typescript | go | python |
-|---|---|---|---|---|---|
-| `hashicorp` | `hashicorp` | HTTPS, fs | `@voxgig/sekreto/plugins/hashicorp` → `hashicorp` | `plugins/hashicorp` → `hashicorp.Plugin` | `voxgig_sekreto.plugins.hashicorp` → `hashicorp` |
-| `boru` | `boru` | child process, or HTTPS | `…/plugins/boru` → `boru` | `plugins/boru` → `boru.Plugin` | `…plugins.boru` → `boru` |
-| `aws` | `awssecrets`, `awsparams` | HTTPS, HMAC-SHA256 | `…/plugins/aws` → `awssecrets`, `awsparams` | `plugins/aws` → `aws.Secrets`, `aws.Params` | `…plugins.aws` → `awssecrets`, `awsparams` |
-| `gcpsecrets` | `gcpsecrets` | HTTPS | `…/plugins/gcpsecrets` → `gcpsecrets` | `plugins/gcpsecrets` → `gcpsecrets.Plugin` | `…plugins.gcpsecrets` → `gcpsecrets` |
-| `azuresecrets` | `azuresecrets` | HTTPS | `…/plugins/azuresecrets` → `azuresecrets` | `plugins/azuresecrets` → `azuresecrets.Plugin` | `…plugins.azuresecrets` → `azuresecrets` |
-| `onepassword` | `onepassword` | HTTPS | `…/plugins/onepassword` → `onepassword` | `plugins/onepassword` → `onepassword.Plugin` | `…plugins.onepassword` → `onepassword` |
-| `doppler` | `doppler` | HTTPS | `…/plugins/doppler` → `doppler` | `plugins/doppler` → `doppler.Plugin` | `…plugins.doppler` → `doppler` |
-| `infisical` | `infisical` | HTTPS | `…/plugins/infisical` → `infisical` | `plugins/infisical` → `infisical.Plugin` | `…plugins.infisical` → `infisical` |
-| `secretspec` | `secretspec` | child process | `…/plugins/secretspec` → `secretspec` | `plugins/secretspec` → `secretspec.Plugin` | `…plugins.secretspec` → `secretspec` |
-| *the full set* | all ten | everything | `@voxgig/sekreto/plugins` → `allplugins` | `plugins` → `plugins.All()` | `voxgig_sekreto.plugins` → `ALL` |
+| plugin | kinds | needs | typescript | go | python | zig |
+|---|---|---|---|---|---|---|
+| `hashicorp` | `hashicorp` | HTTPS, fs | `@voxgig/sekreto/plugins/hashicorp` → `hashicorp` | `plugins/hashicorp` → `hashicorp.Plugin` | `voxgig_sekreto.plugins.hashicorp` → `hashicorp` | `plugins/hashicorp.zig` → `hashicorp` |
+| `boru` | `boru` | child process, or HTTPS | `…/plugins/boru` → `boru` | `plugins/boru` → `boru.Plugin` | `…plugins.boru` → `boru` | `plugins/boru.zig` → `boru` |
+| `aws` | `awssecrets`, `awsparams` | HTTPS, HMAC-SHA256 | `…/plugins/aws` → `awssecrets`, `awsparams` | `plugins/aws` → `aws.Secrets`, `aws.Params` | `…plugins.aws` → `awssecrets`, `awsparams` | `plugins/aws.zig` → `awssecrets`, `awsparams` |
+| `gcpsecrets` | `gcpsecrets` | HTTPS | `…/plugins/gcpsecrets` → `gcpsecrets` | `plugins/gcpsecrets` → `gcpsecrets.Plugin` | `…plugins.gcpsecrets` → `gcpsecrets` | `plugins/gcpsecrets.zig` → `gcpsecrets` |
+| `azuresecrets` | `azuresecrets` | HTTPS | `…/plugins/azuresecrets` → `azuresecrets` | `plugins/azuresecrets` → `azuresecrets.Plugin` | `…plugins.azuresecrets` → `azuresecrets` | `plugins/azuresecrets.zig` → `azuresecrets` |
+| `onepassword` | `onepassword` | HTTPS | `…/plugins/onepassword` → `onepassword` | `plugins/onepassword` → `onepassword.Plugin` | `…plugins.onepassword` → `onepassword` | `plugins/onepassword.zig` → `onepassword` |
+| `doppler` | `doppler` | HTTPS | `…/plugins/doppler` → `doppler` | `plugins/doppler` → `doppler.Plugin` | `…plugins.doppler` → `doppler` | `plugins/doppler.zig` → `doppler` |
+| `infisical` | `infisical` | HTTPS | `…/plugins/infisical` → `infisical` | `plugins/infisical` → `infisical.Plugin` | `…plugins.infisical` → `infisical` | `plugins/infisical.zig` → `infisical` |
+| `secretspec` | `secretspec` | child process | `…/plugins/secretspec` → `secretspec` | `plugins/secretspec` → `secretspec.Plugin` | `…plugins.secretspec` → `secretspec` | `plugins/secretspec.zig` → `secretspec` |
+| *the full set* | all ten | everything | `@voxgig/sekreto/plugins` → `allplugins` | `plugins` → `plugins.All()` | `voxgig_sekreto.plugins` → `ALL` | `plugins/all.zig` → `ALL` |
 
 The full set is for the CLI, the conformance suite, and an app whose
 chain is decided at run time. Reaching one plugin through it reaches
@@ -274,6 +274,13 @@ var Plugin = sekreto.ProviderPlugin("mystore", func(spec *sekreto.ProviderSpec) 
 mystore = providerplugin('mystore', lambda spec: MyStore(spec.get('addr')))
 ```
 
+```zig
+fn make(alloc: Allocator, config: sekreto.Config, spec: sekreto.ProviderSpec) Allocator.Error!sekreto.Answer(sekreto.Provider) {
+    return .{ .ok = try sekreto.provide(alloc, MyStore, .{ .config = config, .addr = spec.addr }) };
+}
+pub const mystore = sekreto.providerplugin("mystore", make);
+```
+
 A plugin that names a built-in kind replaces it — how a host substitutes
 an implementation, and never an accident, because the four names are
 documented.
@@ -311,11 +318,19 @@ byte for byte, because the spec pins those messages. Any other error a
 | typescript | `typescript/plugins/` | `@voxgig/plugin` (npm) | `import { hashicorp } from '@voxgig/sekreto/plugins/hashicorp'` | `import { allplugins } from '@voxgig/sekreto/plugins'` |
 | go | `go/plugins/<kind>/` | `github.com/voxgig/plugin/go` (module proxy) | `import ".../go/plugins/hashicorp"` → `hashicorp.Plugin` | `import ".../go/plugins"` → `plugins.All()` |
 | python | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git, until it is on PyPI) | `from voxgig_sekreto.plugins.hashicorp import hashicorp` | `from voxgig_sekreto.plugins import ALL` (built on demand) |
-| the other nine ports | — | — | a `kind` switch over every kind, until voxgig/plugin has their language | |
+| zig | `zig/plugins/` | plugin's zig port, a checkout named on the command line as the module `plugin` | `-Msekretoplugins=plugins/hashicorp.zig` → `plugins.hashicorp` | `-Msekretoplugins=plugins/all.zig` → `plugins.ALL` |
+| the other eight ports | — | — | a `kind` switch over every kind, until voxgig/plugin has their language | |
 
 In Go the split is a *linking* boundary: a plugin package not imported
 is not in the binary, and the core package imports no `net/http`, no
-`crypto` and no `os/exec`. In TypeScript it is a *bundling* one: the
+`crypto` and no `os/exec`. In Zig it is the *compiler's* boundary: a
+module's imports are confined to its root's directory, so the `sekreto`
+module (rooted at `src/sekreto.zig`) cannot import `plugins/` at all,
+and a plugins module rooted at one plugin file compiles that plugin and
+the shared HTTP helper and nothing else. A custom kind is a comptime
+`sekreto.providerplugin(kind, make)` where `make` answers
+`sekreto.provide(alloc, MyStore, .{ ... })` or the message of its
+refusal. In TypeScript it is a *bundling* one: the
 core reaches no plugin module, so a bundler drops what a chain does not
 name. In Python, where importing is neither, it governs which kinds a
 `Sekreto` can name and what an import pulls in: `import voxgig_sekreto`

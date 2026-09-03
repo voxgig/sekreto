@@ -10,10 +10,19 @@
 //!
 //! Only this file names omni. The library and the CLI never do, so a
 //! checkout with no omni beside it still builds both (omni register 4.13).
+//!
+//! After the fourteen groups comes the plugin seam - what the spec cannot
+//! see, pinned here as the other ports pin it in their own suites: the
+//! built-ins need no plugin, an unloaded kind is refused by name, the full
+//! set holds every kind, a refusal comes back out of the host as itself.
 
 const std = @import("std");
 const omni = @import("omni");
 const sekreto = @import("sekreto");
+const plugins = @import("sekretoplugins");
+
+const plugin = sekreto.plugin;
+const pv = plugin.value;
 
 const Json = omni.Json;
 const ProviderSpec = sekreto.ProviderSpec;
@@ -96,7 +105,7 @@ fn specof(entry: omni.Maybe) !ProviderSpec {
 
     if (omni.jget(entry, "values")) |values| {
         if (.object == values) {
-            var pairs: std.ArrayList(sekreto.providers.KeyValue) = .empty;
+            var pairs: std.ArrayList(sekreto.KeyValue) = .empty;
             var it = values.object.iterator();
             while (it.next()) |pair| {
                 try pairs.append(ALLOC, .{
@@ -143,7 +152,12 @@ fn chainof(args: []const Json) !Chain {
         }
     }
 
-    return switch (try sekreto.Sekreto.init(ALLOC, CONFIG, specs.items, true)) {
+    // Every plugin, to every chain the spec builds: the spec names kinds
+    // freely, and which are built in is not its concern.
+    return switch (try sekreto.Sekreto.init(ALLOC, CONFIG, .{
+        .providers = specs.items,
+        .plugins = &plugins.ALL,
+    })) {
         .err => |message| .{ .err = message },
         .ok => |made| .{ .ok = made },
     };
@@ -250,7 +264,7 @@ fn callRedact(_: *const omni.Subject, args: []const Json) omni.SubjectResult {
 fn callSigv4(_: *const omni.Subject, args: []const Json) omni.SubjectResult {
     const entry: omni.Maybe = if (0 < args.len) args[0] else null;
 
-    var headers: std.ArrayList(sekreto.sigv4.Pair) = .empty;
+    var headers: std.ArrayList(plugins.sigv4.Pair) = .empty;
 
     if (omni.jget(entry, "headers")) |given| {
         if (.object == given) {
@@ -264,7 +278,7 @@ fn callSigv4(_: *const omni.Subject, args: []const Json) omni.SubjectResult {
         }
     }
 
-    const signed = sekreto.sigv4.sign(ALLOC, .{
+    const signed = plugins.sigv4.sign(ALLOC, .{
         .method = field(entry, "method"),
         .url = field(entry, "url"),
         .headers = headers.items,
@@ -384,6 +398,412 @@ const TRYFROM = omni.Subject{ .call = callTryfrom };
 const SOURCES = omni.Subject{ .call = callSources };
 const STORES = omni.Subject{ .call = callStores };
 
+// ---- the plugin seam -------------------------------------------------
+//
+// Not omni groups: the spec runs the same in every port, and these are
+// about what THIS port links and refuses. Each check answers null, or the
+// reason it failed. The same eight the go and python suites pin.
+
+const Allocator = std.mem.Allocator;
+const Provider = sekreto.Provider;
+const Found = sekreto.Found;
+const KeyValue = sekreto.KeyValue;
+
+fn build(options: sekreto.Options) !sekreto.Answer(*sekreto.Sekreto) {
+    return sekreto.Sekreto.init(ALLOC, CONFIG, options);
+}
+
+fn joined(list: []const []const u8) ![]const u8 {
+    return std.mem.join(ALLOC, " ", list);
+}
+
+/// Every instance ref on the host, sorted, space-joined - how the other
+/// ports read `host.list()` in their seam tests.
+fn refs(secrets: *sekreto.Sekreto) ![]const u8 {
+    return joined(pv.keys(plugin.host.list(secrets.host)));
+}
+
+/// Is every instance on the host live?
+fn alllive(secrets: *sekreto.Sekreto) bool {
+    const list = plugin.host.list(secrets.host);
+    for (pv.keys(list)) |ref| {
+        if (!std.mem.eql(u8, "live", pv.asStr(pv.get(list, ref)))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+fn names(secrets: *sekreto.Sekreto) ![]const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    for (pv.items(secrets.catalog.names())) |name| {
+        try out.append(ALLOC, pv.asStr(name));
+    }
+    return joined(out.items);
+}
+
+fn mismatch(comptime what: []const u8, want: []const u8, got: []const u8) ![]const u8 {
+    return std.fmt.allocPrint(ALLOC, what ++ ": want `{s}`, got `{s}`", .{ want, got });
+}
+
+/// A chain of the four built-ins, with no plugin passed in: it builds,
+/// it answers, and the host and the catalog hold exactly those four.
+fn seamBuiltins() !?[]const u8 {
+    const secrets = switch (try build(.{ .providers = &.{
+        .{ .kind = "memory", .values = &.{.{ .key = "API_TOKEN", .value = "tok01" }} },
+        .{ .kind = "env" },
+        .{ .kind = "dotenv", .file = "/nonexistent-sekreto-test/.env" },
+        .{ .kind = "file", .dir = "/nonexistent-sekreto-test" },
+    } })) {
+        .err => |message| return message,
+        .ok => |made| made,
+    };
+    defer secrets.deinit();
+
+    switch (try secrets.get("api.token")) {
+        .err => |message| return message,
+        .ok => |value| if (!std.mem.eql(u8, "tok01", value)) return try mismatch("get", "tok01", value),
+    }
+
+    const stores = try joined(try secrets.stores(ALLOC));
+    if (!std.mem.eql(u8, "memory env dotenv file", stores)) return try mismatch("stores", "memory env dotenv file", stores);
+
+    const catalog = try names(secrets);
+    if (!std.mem.eql(u8, "dotenv env file memory", catalog)) return try mismatch("catalog", "dotenv env file memory", catalog);
+
+    const list = try refs(secrets);
+    if (!std.mem.eql(u8, "dotenv env file memory", list)) return try mismatch("host", "dotenv env file memory", list);
+    if (!alllive(secrets)) return "an instance is not live";
+
+    return null;
+}
+
+/// A plugin kind that was not passed in is refused, naming the fix; a
+/// kind nobody ships is a typo and gets no hint.
+fn seamUnknownKind() !?[]const u8 {
+    const want = "sekreto: unknown provider kind: hashicorp (available: dotenv, env, file, memory)" ++
+        " - hashicorp is a sekreto plugin, not built in: pass it in the plugins option";
+    switch (try build(.{ .providers = &.{.{ .kind = "hashicorp", .addr = "https://v", .token = "t" }} })) {
+        .err => |message| if (!std.mem.eql(u8, want, message)) return try mismatch("unknown kind", want, message),
+        .ok => |made| {
+            made.deinit();
+            return "an unloaded kind was accepted";
+        },
+    }
+
+    const typo = "sekreto: unknown provider kind: vualt (available: dotenv, env, file, memory)";
+    switch (try build(.{ .providers = &.{.{ .kind = "vualt" }} })) {
+        .err => |message| if (!std.mem.eql(u8, typo, message)) return try mismatch("typo", typo, message),
+        .ok => |made| {
+            made.deinit();
+            return "a typo was accepted";
+        },
+    }
+
+    return null;
+}
+
+/// Two providers MAY share a store name - a directed read walks both, and
+/// the spec pins it - but an instance ref may not, so the second gets a
+/// numbered tag from the host and keeps its store name. And a store name
+/// must be a valid plugin tag.
+fn seamStoreNames() !?[]const u8 {
+    const secrets = switch (try build(.{ .providers = &.{
+        .{ .kind = "memory" },
+        .{ .kind = "memory", .values = &.{.{ .key = "API_TOKEN", .value = "second" }} },
+        .{ .kind = "memory", .name = "pair" },
+        .{ .kind = "memory", .name = "pair", .values = &.{.{ .key = "API_TOKEN", .value = "pair2" }} },
+    } })) {
+        .err => |message| return message,
+        .ok => |made| made,
+    };
+    defer secrets.deinit();
+
+    const stores = try joined(try secrets.stores(ALLOC));
+    if (!std.mem.eql(u8, "memory pair", stores)) return try mismatch("stores", "memory pair", stores);
+
+    const list = try refs(secrets);
+    if (!std.mem.eql(u8, "memory memory$1 memory$2 memory$pair", list)) return try mismatch("refs", "memory memory$1 memory$2 memory$pair", list);
+
+    switch (try secrets.getfrom("memory", "api.token")) {
+        .err => |message| return message,
+        .ok => |value| if (!std.mem.eql(u8, "second", value)) return try mismatch("memory", "second", value),
+    }
+    switch (try secrets.getfrom("pair", "api.token")) {
+        .err => |message| return message,
+        .ok => |value| if (!std.mem.eql(u8, "pair2", value)) return try mismatch("pair", "pair2", value),
+    }
+
+    const want = "sekreto: invalid store name: my store";
+    switch (try build(.{ .providers = &.{.{ .kind = "memory", .name = "my store" }} })) {
+        .err => |message| if (!std.mem.eql(u8, want, message)) return try mismatch("store name", want, message),
+        .ok => |made| {
+            made.deinit();
+            return "an invalid store name was accepted";
+        },
+    }
+
+    return null;
+}
+
+const PLUGIN_KINDS = [_][]const u8{
+    "awsparams",  "awssecrets", "azuresecrets", "boru",        "doppler",
+    "gcpsecrets", "hashicorp",  "infisical",    "onepassword", "secretspec",
+};
+
+fn lessStr(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.order(u8, a, b) == .lt;
+}
+
+/// The full set holds every kind, and every kind - built in or plugin -
+/// builds from a spec. Naming a kind is not enough: a kind can be in the
+/// catalog and still fail to build, and construction is what the CLI does
+/// before any network.
+fn seamFullSet() !?[]const u8 {
+    var got: std.ArrayList([]const u8) = .empty;
+    for (plugins.ALL) |definition| {
+        try got.append(ALLOC, definition.name);
+    }
+    std.mem.sort([]const u8, got.items, {}, lessStr);
+    const shipped = try joined(got.items);
+    const want = try joined(&PLUGIN_KINDS);
+    if (!std.mem.eql(u8, want, shipped)) return try mismatch("full set", want, shipped);
+
+    var kinds: std.ArrayList([]const u8) = .empty;
+    try kinds.appendSlice(ALLOC, &sekreto.KINDS.builtin);
+    try kinds.appendSlice(ALLOC, &sekreto.KINDS.plugin);
+    std.mem.sort([]const u8, kinds.items, {}, lessStr);
+    const all = try joined(kinds.items);
+    const fourteen = "awsparams awssecrets azuresecrets boru doppler dotenv env file gcpsecrets hashicorp infisical memory onepassword secretspec";
+    if (!std.mem.eql(u8, fourteen, all)) return try mismatch("KINDS", fourteen, all);
+
+    var chain: std.ArrayList(ProviderSpec) = .empty;
+    for (kinds.items) |kind| {
+        try chain.append(ALLOC, .{
+            .kind = kind,
+            .addr = "http://127.0.0.1:8200",
+            .token = "t",
+            .dir = "/tmp",
+            .file = "/tmp/.env",
+        });
+    }
+
+    const secrets = switch (try build(.{ .providers = chain.items, .plugins = &plugins.ALL })) {
+        .err => |message| return message,
+        .ok => |made| made,
+    };
+    defer secrets.deinit();
+
+    const stores = try joined(try secrets.stores(ALLOC));
+    if (!std.mem.eql(u8, all, stores)) return try mismatch("stores", all, stores);
+    if (!alllive(secrets)) return "an instance is not live";
+
+    return null;
+}
+
+/// One plugin is enough for a chain that names only it - and a kind that
+/// was not passed in is refused, naming the fix.
+fn seamOnePlugin() !?[]const u8 {
+    const secrets = switch (try build(.{
+        .plugins = &.{plugins.hashicorp},
+        .providers = &.{
+            .{ .kind = "memory", .values = &.{.{ .key = "API_TOKEN", .value = "tok01" }} },
+            .{ .kind = "hashicorp", .name = "prod", .addr = "https://vault.example.com", .token = "t" },
+        },
+    })) {
+        .err => |message| return message,
+        .ok => |made| made,
+    };
+    defer secrets.deinit();
+
+    const stores = try joined(try secrets.stores(ALLOC));
+    if (!std.mem.eql(u8, "memory prod", stores)) return try mismatch("stores", "memory prod", stores);
+
+    const sources = try joined(try secrets.sources(ALLOC));
+    if (!std.mem.eql(u8, "memory hashicorp:https://vault.example.com/secret", sources)) {
+        return try mismatch("sources", "memory hashicorp:https://vault.example.com/secret", sources);
+    }
+
+    switch (try secrets.get("api.token")) {
+        .err => |message| return message,
+        .ok => |value| if (!std.mem.eql(u8, "tok01", value)) return try mismatch("get", "tok01", value),
+    }
+
+    // The plugin host is what the chain is made of, and it reads like
+    // the chain: the kind, or kind$store for a named store.
+    const list = try refs(secrets);
+    if (!std.mem.eql(u8, "hashicorp$prod memory", list)) return try mismatch("host", "hashicorp$prod memory", list);
+    if (!alllive(secrets)) return "an instance is not live";
+
+    const catalog = try names(secrets);
+    if (!std.mem.eql(u8, "dotenv env file hashicorp memory", catalog)) return try mismatch("catalog", "dotenv env file hashicorp memory", catalog);
+
+    const want = "sekreto: unknown provider kind: doppler (available: dotenv, env, file, hashicorp, memory)" ++
+        " - doppler is a sekreto plugin, not built in: pass it in the plugins option";
+    switch (try build(.{ .plugins = &.{plugins.hashicorp}, .providers = &.{.{ .kind = "doppler", .token = "t" }} })) {
+        .err => |message| if (!std.mem.eql(u8, want, message)) return try mismatch("unknown kind", want, message),
+        .ok => |made| {
+            made.deinit();
+            return "an unloaded kind was accepted";
+        },
+    }
+
+    return null;
+}
+
+/// A custom kind is one `providerplugin` call: a provider that answers to
+/// SHOUTED names, and refuses a spec with no values.
+const Shouty = struct {
+    values: []const KeyValue,
+
+    pub fn lookup(self: *Shouty, alloc: Allocator, name: []const u8) Allocator.Error!Found {
+        const loud = try std.ascii.allocUpperString(alloc, name);
+        for (self.values) |pair| {
+            if (std.mem.eql(u8, pair.key, loud)) {
+                return .{ .ok = pair.value };
+            }
+        }
+        return .{ .ok = null };
+    }
+
+    pub fn describe(_: *Shouty, alloc: Allocator) Allocator.Error![]const u8 {
+        return alloc.dupe(u8, "shouty");
+    }
+
+    pub fn deinit(_: *Shouty, _: Allocator) void {}
+};
+
+fn makeshouty(alloc: Allocator, config: sekreto.Config, spec: ProviderSpec) Allocator.Error!sekreto.Answer(Provider) {
+    _ = config;
+    if (0 == spec.values.len) {
+        return .{ .err = try sekreto.fail(alloc, "sekreto: shouty: no values", .{}) };
+    }
+    return .{ .ok = try sekreto.provide(alloc, Shouty, .{ .values = spec.values }) };
+}
+
+const SHOUTY = sekreto.providerplugin("shouty", makeshouty);
+const LOUDMEMORY = sekreto.providerplugin("memory", makeshouty);
+
+/// A provider that refuses its own configuration answers with a message
+/// from inside the plugin's `define`. The spec pins that message byte for
+/// byte, so it must come back out of the host as itself - not wrapped as
+/// plugin_define_failed, and not as the host's wording of it. Both for a
+/// shipped kind and for a custom one.
+fn seamRefusal() !?[]const u8 {
+    const kv = "sekreto: hashicorp: unsupported kv version: 3";
+    switch (try build(.{ .plugins = &plugins.ALL, .providers = &.{.{ .kind = "hashicorp", .addr = "https://v", .token = "t", .kv = 3 }} })) {
+        .err => |message| if (!std.mem.eql(u8, kv, message)) return try mismatch("kv", kv, message),
+        .ok => |made| {
+            made.deinit();
+            return "kv: 3 was accepted";
+        },
+    }
+
+    const secrets = switch (try build(.{
+        .plugins = &.{SHOUTY},
+        .providers = &.{.{ .kind = "shouty", .values = &.{.{ .key = "API.TOKEN", .value = "loud" }} }},
+    })) {
+        .err => |message| return message,
+        .ok => |made| made,
+    };
+    defer secrets.deinit();
+
+    switch (try secrets.get("api.token")) {
+        .err => |message| return message,
+        .ok => |value| if (!std.mem.eql(u8, "loud", value)) return try mismatch("shouty", "loud", value),
+    }
+
+    const want = "sekreto: shouty: no values";
+    switch (try build(.{ .plugins = &.{SHOUTY}, .providers = &.{.{ .kind = "shouty" }} })) {
+        .err => |message| if (!std.mem.eql(u8, want, message)) return try mismatch("refusal", want, message),
+        .ok => |made| {
+            made.deinit();
+            return "a refusal was accepted";
+        },
+    }
+
+    return null;
+}
+
+/// `close` tears the chain down - the host empties, every read reports
+/// the secret unknown - and keeps redaction, which must outlive the chain
+/// because the log it protects does.
+fn seamClose() !?[]const u8 {
+    const secrets = switch (try build(.{ .providers = &.{
+        .{ .kind = "memory", .values = &.{.{ .key = "API_TOKEN", .value = "tok01secret" }} },
+    } })) {
+        .err => |message| return message,
+        .ok => |made| made,
+    };
+    defer secrets.deinit();
+
+    switch (try secrets.get("api.token")) {
+        .err => |message| return message,
+        .ok => {},
+    }
+
+    secrets.close();
+
+    const list = try refs(secrets);
+    if (0 != list.len) return try mismatch("host after close", "", list);
+
+    switch (try secrets.get("api.token")) {
+        .err => |message| if (!std.mem.eql(u8, "sekreto: unknown secret: api.token", message)) return try mismatch("get after close", "sekreto: unknown secret: api.token", message),
+        .ok => return "a closed chain answered",
+    }
+
+    const redacted = try secrets.redactText(ALLOC, "token=tok01secret");
+    if (!std.mem.eql(u8, "token=[redacted]", redacted)) return try mismatch("redact after close", "token=[redacted]", redacted);
+
+    return null;
+}
+
+/// A plugin that names a built-in kind replaces it - how a host
+/// substitutes an implementation, and never an accident.
+fn seamReplace() !?[]const u8 {
+    const secrets = switch (try build(.{
+        .plugins = &.{LOUDMEMORY},
+        .providers = &.{.{ .kind = "memory", .values = &.{.{ .key = "API.TOKEN", .value = "replaced" }} }},
+    })) {
+        .err => |message| return message,
+        .ok => |made| made,
+    };
+    defer secrets.deinit();
+
+    switch (try secrets.get("api.token")) {
+        .err => |message| return message,
+        .ok => |value| if (!std.mem.eql(u8, "replaced", value)) return try mismatch("replaced memory", "replaced", value),
+    }
+
+    const catalog = try names(secrets);
+    if (!std.mem.eql(u8, "dotenv env file memory", catalog)) return try mismatch("catalog", "dotenv env file memory", catalog);
+
+    return null;
+}
+
+const Seam = struct { name: []const u8, check: *const fn () anyerror!?[]const u8 };
+
+const SEAMS = [_]Seam{
+    .{ .name = "plugins/builtins", .check = seamBuiltins },
+    .{ .name = "plugins/unknownkind", .check = seamUnknownKind },
+    .{ .name = "plugins/storenames", .check = seamStoreNames },
+    .{ .name = "plugins/fullset", .check = seamFullSet },
+    .{ .name = "plugins/oneplugin", .check = seamOnePlugin },
+    .{ .name = "plugins/refusal", .check = seamRefusal },
+    .{ .name = "plugins/close", .check = seamClose },
+    .{ .name = "plugins/replace", .check = seamReplace },
+};
+
+fn runseams() void {
+    for (SEAMS) |seam| {
+        if (!wanted(seam.name)) {
+            continue;
+        }
+        const failure = seam.check() catch |err| @errorName(err);
+        report(seam.name, failure);
+    }
+}
+
 // ---- harness ---------------------------------------------------------
 
 fn report(name: []const u8, failure: ?[]const u8) void {
@@ -450,6 +870,9 @@ pub fn main(init: std.process.Init) !void {
     try rungroup(&pack, "tryfrom", &TRYFROM, .{});
     try rungroup(&pack, "sigv4", &SIGV4, .{});
     try rungroup(&pack, "redact", &REDACT, .{});
+
+    // ...and the plugin seam, which is this port's own.
+    runseams();
 
     std.debug.print("\n{d} passed, {d} failed\n", .{ PASSCOUNT, FAILCOUNT });
 

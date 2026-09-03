@@ -1,4 +1,11 @@
-//! One JSON round-trip, for the providers that talk to a vault over HTTP.
+//! One JSON round-trip, for the plugins that talk to a vault over HTTP -
+//! and the small helpers every plugin shares: address trimming, the
+//! environment fallback, token expiry, escaping, and JSON writing.
+//!
+//! FOR WRITING A PLUGIN, NEVER FOR THE CORE. Nothing under `src/` reaches
+//! this file: it is the HTTP client, and what makes a kind built in is
+//! that it needs no socket. A port of go/plugins/httpjson, which serves
+//! the same nine plugins there.
 //!
 //! std ships both an HTTP client and TLS (std.crypto.tls), so this port
 //! needs neither a third-party crate nor a hand-rolled protocol: the whole
@@ -19,6 +26,8 @@
 //!     decided on status alone.
 
 const std = @import("std");
+
+const sekreto = @import("sekreto");
 
 const Allocator = std.mem.Allocator;
 
@@ -407,4 +416,117 @@ pub fn jnum(value: ?std.json.Value) ?i64 {
         .number_string, .string => |found| std.fmt.parseInt(i64, found, 10) catch null,
         else => null,
     };
+}
+
+// ---- the helpers a plugin shares -------------------------------------
+
+/// A base URL with one trailing slash removed, so paths join cleanly.
+pub fn trimslash(addr: []const u8) []const u8 {
+    if (0 != addr.len and '/' == addr[addr.len - 1]) {
+        return addr[0 .. addr.len - 1];
+    }
+    return addr;
+}
+
+/// The configured value, or the first non-empty of the named environment
+/// variables. Those names are the ecosystem's own convention, so a pod or a
+/// CI job that already has them set should just work.
+pub fn firstof(config: sekreto.Config, given: []const u8, names: []const []const u8) []const u8 {
+    if (0 != given.len) {
+        return given;
+    }
+
+    for (names) |name| {
+        if (config.env.get(name)) |value| {
+            if (0 != value.len) {
+                return value;
+            }
+        }
+    }
+
+    return "";
+}
+
+/// Now, in milliseconds since the epoch. Token expiry is the only clock
+/// this library reads.
+pub fn nowms(io: std.Io) i64 {
+    const stamp = std.Io.Timestamp.now(io, .real);
+    return @intCast(@divTrunc(stamp.nanoseconds, std.time.ns_per_ms));
+}
+
+/// Never: a configured token is kept for the life of the process.
+pub const NEVER: i64 = std.math.maxInt(i64);
+
+/// When a lease of `seconds` should be renewed - a minute early, because a
+/// long-running process must not keep presenting a token the vault already
+/// expired.
+pub fn renewafter(io: std.Io, seconds: ?i64) i64 {
+    const lease = seconds orelse return NEVER;
+    if (0 >= lease) {
+        return NEVER;
+    }
+    return nowms(io) + 1000 * @max(lease - 60, 1);
+}
+
+/// Percent-escape one query-string value.
+pub fn escape(alloc: Allocator, text: []const u8) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+
+    for (text) |ch| {
+        const plain = ('A' <= ch and 'Z' >= ch) or ('a' <= ch and 'z' >= ch) or
+            ('0' <= ch and '9' >= ch) or '-' == ch or '_' == ch or '.' == ch or '~' == ch;
+
+        if (plain) {
+            try out.append(alloc, ch);
+        } else {
+            try out.appendSlice(alloc, try std.fmt.allocPrint(alloc, "%{X:0>2}", .{ch}));
+        }
+    }
+
+    return out.items;
+}
+
+/// One JSON string literal. The bodies this library sends are flat maps of
+/// strings, so a full writer would be more machinery than the job needs.
+pub fn jsonstring(alloc: Allocator, text: []const u8) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.append(alloc, '"');
+
+    for (text) |ch| {
+        switch (ch) {
+            '"' => try out.appendSlice(alloc, "\\\""),
+            '\\' => try out.appendSlice(alloc, "\\\\"),
+            '\n' => try out.appendSlice(alloc, "\\n"),
+            '\r' => try out.appendSlice(alloc, "\\r"),
+            '\t' => try out.appendSlice(alloc, "\\t"),
+            else => {
+                if (0x20 > ch) {
+                    try out.appendSlice(alloc, try std.fmt.allocPrint(alloc, "\\u{x:0>4}", .{ch}));
+                } else {
+                    try out.append(alloc, ch);
+                }
+            },
+        }
+    }
+
+    try out.append(alloc, '"');
+    return out.items;
+}
+
+/// A flat JSON object of string fields.
+pub fn jsonobject(alloc: Allocator, fields: []const sekreto.KeyValue) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.append(alloc, '{');
+
+    for (fields, 0..) |field, at| {
+        if (0 < at) {
+            try out.append(alloc, ',');
+        }
+        try out.appendSlice(alloc, try jsonstring(alloc, field.key));
+        try out.append(alloc, ':');
+        try out.appendSlice(alloc, try jsonstring(alloc, field.value));
+    }
+
+    try out.append(alloc, '}');
+    return out.items;
 }

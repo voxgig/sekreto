@@ -9,6 +9,15 @@
 //! ../../typescript/src/Sekreto.ts, and ../../spec/sekreto.json is the
 //! behavioural contract every port runs.
 //!
+//! THE CORE REACHES NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR
+//! SIGNS A REQUEST. The four built-in kinds - env, memory, dotenv, file -
+//! read at most a local file; every other kind is a voxgig/plugin
+//! definition under ../plugins/, and a chain may name one only if the
+//! calling project handed it in through `Options.plugins`. In zig that is
+//! the compiler's rule as much as this library's: a module's imports are
+//! confined to its root's directory, this file is the root of `sekreto`,
+//! and `../plugins/` is outside it. See docs/design/plugin-providers.md.
+//!
 //! Zig has no exceptions, and its error values carry no payload, so a
 //! failure is RETURNED as a message - the shape voxgig/omni's own Zig port
 //! uses. That also keeps the distinction this library cares about most
@@ -22,20 +31,42 @@
 //! what it returns (value or message) comes from that allocator. `Sekreto`
 //! owns one allocator for what outlives a lookup (the cache, the redaction
 //! list, the last failure message) and runs each lookup inside an arena it
-//! resets afterwards, so repeated lookups do not grow the heap.
+//! resets afterwards, so repeated lookups do not grow the heap. What the
+//! plugin host holds - definitions, instances, option maps - lives in
+//! voxgig/plugin's own arena, which is never freed: construction is paid
+//! for once per chain, and a process that builds chains in a loop should
+//! know it.
 
 const std = @import("std");
 
-pub const providers = @import("providers.zig");
-pub const sigv4 = @import("sigv4.zig");
-pub const http = @import("http.zig");
+/// voxgig/plugin, the one dependency: the host every chain is made of.
+/// Re-exported so a caller can introspect `Sekreto.host` - `list`,
+/// `instance`, `exports` - without wiring the module in a second time.
+pub const plugin = @import("plugin");
 
-pub const Provider = providers.Provider;
-pub const ProviderSpec = providers.ProviderSpec;
-pub const Config = providers.Config;
-pub const checkaddr = providers.checkaddr;
+pub const provider = @import("provider.zig");
+pub const builtins = @import("builtins.zig");
+pub const addr = @import("addr.zig");
+
+pub const Provider = provider.Provider;
+pub const ProviderSpec = provider.ProviderSpec;
+pub const KeyValue = provider.KeyValue;
+pub const Auth = provider.Auth;
+pub const Config = provider.Config;
+pub const Definition = provider.Definition;
+pub const providerplugin = provider.providerplugin;
+pub const provide = provider.provide;
+pub const adapt = provider.adapt;
+pub const PROVIDER_EXPORT = provider.PROVIDER_EXPORT;
+pub const ERROR_CODE = provider.ERROR_CODE;
+pub const BUILTINS = builtins.BUILTINS;
+pub const KINDS = builtins.KINDS;
+pub const checkaddr = addr.checkaddr;
+pub const safeaddr = addr.safeaddr;
 
 const Allocator = std.mem.Allocator;
+const pv = plugin.value;
+const pt = plugin.types;
 
 /// What a fallible call returns: the value, or the message of a failure.
 ///
@@ -359,9 +390,22 @@ fn replaceall(
     return out.items;
 }
 
-/// One provider in the chain, under the store name it answers to.
+/// Decode standard base64 - GCP payloads and AWS binary secrets.
+pub fn unbase64(alloc: Allocator, text: []const u8) Allocator.Error!?[]const u8 {
+    const decoder = std.base64.standard.Decoder;
+
+    const size = decoder.calcSizeForSlice(text) catch return null;
+    const out = try alloc.alloc(u8, size);
+    decoder.decode(out, text) catch return null;
+
+    return out;
+}
+
+/// One provider in the chain, under the store name it answers to, and the
+/// ref of the plugin instance that built it.
 const Entry = struct {
     store: []const u8,
+    ref: []const u8,
     provider: Provider,
 };
 
@@ -378,32 +422,157 @@ const Cached = struct {
     value: []const u8,
 };
 
-/// The store name a provider answers to when its spec does not say.
+/// What `Sekreto.init` takes.
+pub const Options = struct {
+    /// The chain, in resolution order: each entry names a kind to build -
+    /// a built-in, or a plugin passed in `plugins`.
+    providers: []const ProviderSpec = &.{},
+    /// The provider kinds beyond the built-ins that `providers` may name,
+    /// as voxgig/plugin definitions. Static and explicit: the calling
+    /// project imports the plugins it needs and passes them here, and a
+    /// kind it did not pass is unknown to this Sekreto.
+    plugins: []const Definition = &.{},
+    /// Cache resolved values (default: true).
+    cache: bool = true,
+};
+
+/// A slice with nothing in it, for a closed chain: `[]Entry` cannot be
+/// made from an empty literal without discarding const.
+var noentries: [0]Entry = .{};
+
+/// The message for a kind the catalog does not hold.
 ///
-/// `describe()` opens with the provider's kind - `hashicorp:...`,
-/// `dotenv:...`, plain `env` - so the kind is the natural default, and a
-/// custom provider gets a sensible name without implementing anything extra.
-fn storename(alloc: Allocator, provider: Provider, spec: ProviderSpec) Allocator.Error![]const u8 {
-    if (0 != spec.name.len) {
-        return alloc.dupe(u8, spec.name);
+/// A kind sekreto has never heard of is a typo; a kind that exists as a
+/// plugin but was not passed in is the split working as designed and
+/// telling you what to pass. Collapsing the two was the first thing that
+/// made the split confusing to use.
+fn unknownkind(alloc: Allocator, kind: []const u8, catalog: *plugin.catalog.Catalog) Allocator.Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(alloc);
+
+    try out.appendSlice(alloc, "sekreto: unknown provider kind: ");
+    try out.appendSlice(alloc, kind);
+    try out.appendSlice(alloc, " (available: ");
+    for (pv.items(catalog.names()), 0..) |name, at| {
+        if (0 < at) {
+            try out.appendSlice(alloc, ", ");
+        }
+        try out.appendSlice(alloc, pv.asStr(name));
+    }
+    try out.appendSlice(alloc, ")");
+
+    for (KINDS.plugin) |known| {
+        if (std.mem.eql(u8, known, kind)) {
+            try out.appendSlice(alloc, " - ");
+            try out.appendSlice(alloc, kind);
+            try out.appendSlice(alloc, " is a sekreto plugin, not built in: pass it in the plugins option");
+            break;
+        }
     }
 
-    // describe() may or may not have allocated - `env` and `memory` answer
-    // with a literal - so the store name is copied out and the description
-    // released through the same allocator that could have made it.
-    const described = try provider.describe(alloc);
-    defer alloc.free(described);
-
-    const cut = std.mem.indexOfScalar(u8, described, ':') orelse described.len;
-    return alloc.dupe(u8, described[0..cut]);
+    return out.toOwnedSlice(alloc);
 }
 
-/// Free a partly-built chain: the providers made so far, their store names,
-/// and the list itself.
-fn release(alloc: Allocator, entries: *std.ArrayList(Entry)) void {
+/// The parked plugin error, as a message the caller owns. A sekreto
+/// failure that crossed the plugin boundary comes back out as itself,
+/// byte for byte; anything else is the host's report, as the host words
+/// it, and not sekreto's to rewrite.
+fn unwrap(alloc: Allocator) Allocator.Error![]const u8 {
+    const err = pt.take();
+    const cause = pv.get(err.details, "cause");
+
+    if (std.mem.eql(u8, ERROR_CODE, err.code) and pv.isStr(cause)) {
+        return alloc.dupe(u8, pv.asStr(cause));
+    }
+
+    return alloc.dupe(u8, err.message);
+}
+
+/// One definition into the catalog: a copy the host can keep, since the
+/// catalog holds pointers and the caller's slice is its own.
+fn register(alloc: Allocator, catalog: *plugin.catalog.Catalog, definition: Definition) Allocator.Error!?[]const u8 {
+    const copy = pv.arena().create(Definition) catch return error.OutOfMemory;
+    copy.* = definition;
+    catalog.add(copy) catch return try unwrap(alloc);
+    return null;
+}
+
+/// One chain entry, as a plugin instance.
+///
+/// The instance is `kind` for a store named after its kind and
+/// `kind$store` otherwise - `hashicorp$prod` - so `host.list()` reads like
+/// the chain. A store name that is already taken gets a numbered tag from
+/// the host instead, because two providers MAY share a store name (a
+/// directed read walks both) and an instance ref may not.
+fn declare(
+    alloc: Allocator,
+    host: *plugin.host.Host,
+    catalog: *plugin.catalog.Catalog,
+    b: *provider.Building,
+    spec: ProviderSpec,
+) Allocator.Error!Answer(Entry) {
+    const kind = spec.kind;
+
+    if (!catalog.has(kind)) {
+        return .{ .err = try unknownkind(alloc, kind, catalog) };
+    }
+
+    const store = if (0 != spec.name.len) spec.name else kind;
+
+    if (!plugin.ref.checktag(pv.vstr(store))) {
+        return .{ .err = try fail(alloc, "sekreto: invalid store name: {s}", .{store}) };
+    }
+
+    var ref: []const u8 = kind;
+    if (!std.mem.eql(u8, store, kind)) {
+        ref = plugin.ref.formatref(pv.vstr(kind), pv.vstr(store)) catch return .{ .err = try unwrap(alloc) };
+    }
+    const taken = plugin.host.instance(host, ref) catch return .{ .err = try unwrap(alloc) };
+    if (null != taken) {
+        ref = plugin.host.autotag(host, kind) catch return .{ .err = try unwrap(alloc) };
+    }
+
+    // `load` runs the definition's `define`, which builds the provider
+    // from the spec; `activate` takes the instance live. Nothing is
+    // contacted by either: a provider opens nothing until its first
+    // lookup.
+    _ = plugin.host.load(host, ref, .{ .options = provider.optionsof(spec) }) catch {
+        if (b.oom) {
+            _ = pt.take();
+            return error.OutOfMemory;
+        }
+        return .{ .err = try unwrap(alloc) };
+    };
+    _ = plugin.host.activate(host, ref) catch return .{ .err = try unwrap(alloc) };
+
+    const key = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ ref, PROVIDER_EXPORT });
+    defer alloc.free(key);
+
+    const exported = plugin.host.exports(host, key) catch return .{ .err = try unwrap(alloc) };
+    if (!pv.isNum(exported)) {
+        return .{ .err = try fail(alloc, "sekreto: plugin {s} exported no provider", .{kind}) };
+    }
+    const index: usize = @intFromFloat(pv.asNum(exported));
+
+    return .{ .ok = .{
+        .store = try alloc.dupe(u8, store),
+        .ref = try alloc.dupe(u8, ref),
+        .provider = b.made.items[index],
+    } };
+}
+
+/// Undo a chain that could not be finished: the host closed, every
+/// provider built so far released, every store name freed.
+fn teardown(alloc: Allocator, host: *plugin.host.Host, b: *provider.Building, entries: *std.ArrayList(Entry)) void {
+    plugin.host.close(host) catch {
+        _ = pt.take();
+    };
+    for (b.made.items) |made| {
+        made.deinit(alloc);
+    }
     for (entries.items) |entry| {
-        entry.provider.deinit(alloc);
         alloc.free(entry.store);
+        alloc.free(entry.ref);
     }
     entries.deinit(alloc);
 }
@@ -417,6 +586,13 @@ fn release(alloc: Allocator, entries: *std.ArrayList(Entry)) void {
 /// secret is part of what you mean.
 pub const Sekreto = struct {
     alloc: Allocator,
+    /// The voxgig/plugin host every chain entry is an instance of. Read it
+    /// for introspection - `plugin.host.list(secrets.host)` names each
+    /// store's ref and status - and nothing on it advances the chain.
+    host: *plugin.host.Host,
+    /// The definitions this Sekreto can build: the built-ins plus what
+    /// `Options.plugins` handed in.
+    catalog: *plugin.catalog.Catalog,
     entries: []Entry,
     docache: bool,
     cache: std.ArrayList(Cached),
@@ -433,7 +609,11 @@ pub const Sekreto = struct {
     // free it and a retry loop cannot accumulate them.
     lasterr: ?[]const u8,
 
-    /// Build a chain from declarative provider specs.
+    /// Build a chain: a catalog of the built-in kinds plus the plugins, a
+    /// voxgig/plugin host, and one instance of the right kind per chain
+    /// entry. It fails on a kind the catalog does not hold, a store name
+    /// that is not a valid tag, or a provider that refuses its own
+    /// configuration.
     ///
     /// Heap-allocated, not returned by value: the scratch arena hands out an
     /// allocator that points at its own address, so a Sekreto that moved
@@ -442,40 +622,56 @@ pub const Sekreto = struct {
     /// A failure here hands back a message the CALLER owns - there is no
     /// Sekreto yet to own it. Once there is one, every message a lookup
     /// returns belongs to the Sekreto and is freed by `deinit`.
-    pub fn init(
-        alloc: Allocator,
-        config: Config,
-        specs: []const ProviderSpec,
-        docache: bool,
-    ) Allocator.Error!Answer(*Sekreto) {
-        var entries: std.ArrayList(Entry) = .empty;
+    pub fn init(alloc: Allocator, config: Config, options: Options) Allocator.Error!Answer(*Sekreto) {
+        // Built-ins first, then the plugins, into one catalog: a plugin
+        // that names a built-in kind replaces it, which is how a host
+        // substitutes an implementation and never an accident, because the
+        // four names are documented.
+        const catalog = plugin.catalog.makecatalog();
+        for (BUILTINS) |definition| {
+            if (try register(alloc, catalog, definition)) |message| {
+                return .{ .err = message };
+            }
+        }
+        for (options.plugins) |definition| {
+            if (try register(alloc, catalog, definition)) |message| {
+                return .{ .err = message };
+            }
+        }
 
+        const host = plugin.host.makehost(.{ .catalog = catalog });
+
+        var b = provider.Building{ .alloc = alloc, .config = config };
+        provider.building = &b;
+        defer provider.building = null;
+        defer b.made.deinit(alloc);
+
+        var entries: std.ArrayList(Entry) = .empty;
         // A chain that cannot be built is not left half-built. `errdefer`
         // covers running out of memory; the `.err` arm covers a spec this
-        // library refuses (an unknown kind, an unsupported kv version),
-        // which is a returned value rather than a Zig error and so is not
-        // an errdefer's business.
-        errdefer release(alloc, &entries);
+        // library refuses, which is a returned value rather than a Zig
+        // error and so is not an errdefer's business.
+        errdefer teardown(alloc, host, &b, &entries);
 
-        for (specs) |spec| {
-            const provider = switch (try providers.makeprovider(alloc, config, spec)) {
+        for (options.providers) |spec| {
+            switch (try declare(alloc, host, catalog, &b, spec)) {
                 .err => |message| {
-                    release(alloc, &entries);
+                    teardown(alloc, host, &b, &entries);
                     return .{ .err = message };
                 },
-                .ok => |made| made,
-            };
-            try entries.append(alloc, .{
-                .store = try storename(alloc, provider, spec),
-                .provider = provider,
-            });
+                .ok => |entry| try entries.append(alloc, entry),
+            }
         }
 
         const self = try alloc.create(Sekreto);
+        errdefer alloc.destroy(self);
+
         self.* = .{
             .alloc = alloc,
+            .host = host,
+            .catalog = catalog,
             .entries = try entries.toOwnedSlice(alloc),
-            .docache = docache,
+            .docache = options.cache,
             .cache = .empty,
             .seen = .empty,
             .scratch = std.heap.ArenaAllocator.init(alloc),
@@ -485,22 +681,35 @@ pub const Sekreto = struct {
         return .{ .ok = self };
     }
 
-    pub fn deinit(self: *Sekreto) void {
+    /// Tear the chain down: every plugin instance is deactivated and
+    /// unloaded, in reverse, releasing whatever a provider acquired at
+    /// activation, and every provider is freed. Afterwards there is
+    /// nothing to read from - `get` reports every secret unknown - and the
+    /// cache is dropped, though `redactText` still knows every value that
+    /// was ever resolved. Idempotent.
+    pub fn close(self: *Sekreto) void {
+        plugin.host.close(self.host) catch {
+            _ = pt.take();
+        };
+
         for (self.entries) |entry| {
             entry.provider.deinit(self.alloc);
             self.alloc.free(entry.store);
+            self.alloc.free(entry.ref);
         }
         self.alloc.free(self.entries);
+        self.entries = &noentries;
+
+        self.refresh();
+    }
+
+    pub fn deinit(self: *Sekreto) void {
+        self.close();
 
         for (self.seen.items) |value| {
             self.alloc.free(value);
         }
         self.seen.deinit(self.alloc);
-
-        for (self.cache.items) |entry| {
-            self.alloc.free(entry.store);
-            self.alloc.free(entry.name);
-        }
         self.cache.deinit(self.alloc);
 
         if (self.lasterr) |message| {
