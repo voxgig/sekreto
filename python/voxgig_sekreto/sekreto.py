@@ -6,8 +6,18 @@
 # line of its own code.
 #
 # A port of typescript/src/Sekreto.ts, which is canonical.
+#
+# THE CORE IMPORTS NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR
+# SIGNS A REQUEST. The four built-in kinds - env, memory, dotenv, file -
+# read at most a local file; every other kind is a voxgig/plugin
+# definition under plugins/, and a chain may name one only if the calling
+# project handed it in through `plugins`. See
+# docs/design/plugin-providers.md.
 
 import re
+import types
+
+from voxgig_plugin import check_tag, format_ref, make_catalog, make_host
 
 
 class SekretoError(Exception):
@@ -183,17 +193,66 @@ def redact(text, values):
     return out
 
 
-def storename(provider, spec=None):
-    """The store name a provider answers to when its spec does not say.
+def storename(provider):
+    """The store name a live provider answers to.
 
     `describe()` opens with the provider's kind - `hashicorp:...`,
     `dotenv:...`, plain `env` - so the kind is the natural default, and a
     custom provider gets a sensible name without implementing anything
-    extra.
+    extra. A spec'd provider's store is its `name` or its `kind`, decided
+    before the provider exists.
     """
-    if spec and spec.get('name'):
-        return spec['name']
     return provider.describe().split(':')[0]
+
+
+def _definition(plugin):
+    """A plugin entry, checked to be a definition before the catalog sees it.
+
+    Every plugin module is named after the definition it holds, so `from
+    voxgig_sekreto.plugins import hashicorp` hands back the MODULE, and a
+    module in the catalog would fail deep inside voxgig/plugin with a
+    message about a definition name. Refused here instead, naming the
+    import that was meant.
+    """
+    if isinstance(plugin, types.ModuleType):
+        name = plugin.__name__.rsplit('.', 1)[-1]
+        raise SekretoError(
+            'sekreto: not a plugin definition: the module ' + plugin.__name__
+            + ' - import the definition it holds: from ' + plugin.__name__
+            + ' import ' + name)
+    if not isinstance(plugin, dict):
+        raise SekretoError('sekreto: not a plugin definition: ' + repr(plugin))
+    return plugin
+
+
+def _unknownkind(kind, catalog):
+    """The message for a kind the catalog does not hold.
+
+    A kind sekreto has never heard of is a typo; a kind that exists as a
+    plugin but was not passed in is the split working as designed and
+    telling you what to pass. Collapsing the two was the first thing that
+    made the split confusing to use.
+    """
+    from .providers import KINDS
+
+    message = ('sekreto: unknown provider kind: ' + str(kind)
+               + ' (available: ' + ', '.join(catalog.names()) + ')')
+    if kind in KINDS['plugin']:
+        message += (' - ' + str(kind)
+                    + ' is a sekreto plugin, not built in: pass it in the plugins option')
+    return message
+
+
+def _unwrap(err):
+    """A SekretoError that crossed the plugin boundary comes back out as
+    itself, byte for byte. Anything else is not sekreto's to rewrite."""
+    from .providers import ERROR_CODE
+
+    details = getattr(err, 'details', None)
+    if ERROR_CODE == getattr(err, 'code', None) and isinstance(details, dict) \
+            and isinstance(details.get('cause'), str):
+        return SekretoError(details['cause'])
+    return err
 
 
 class Sekreto:
@@ -206,17 +265,31 @@ class Sekreto:
     """
 
     def __init__(self, options=None):
-        from .providers import makeprovider
+        from .providers import BUILTINS
 
         opts = options or {}
 
+        # Built-ins first, then the plugins, into one catalog: a plugin
+        # that names a built-in kind replaces it, which is how a host
+        # substitutes an implementation and never an accident, because the
+        # four names are documented.
+        #
+        # `catalog` is the definitions this Sekreto can build; `host` is
+        # the voxgig/plugin host every spec'd provider is an instance of.
+        # Read it for introspection - `host.list()` names each store's ref
+        # and status - and nothing on it advances the chain.
+        self.catalog = make_catalog(BUILTINS + [_definition(p) for p in opts.get('plugins') or []])
+        self.host = make_host({'catalog': self.catalog})
+
+        # (store, provider) pairs, in chain order. A provider handed in
+        # live is backed by no instance; a spec'd one is an instance of
+        # its kind on the host.
         self.entries = []
         for entry in opts.get('providers') or []:
             if callable(getattr(entry, 'lookup', None)):
                 self.entries.append((storename(entry), entry))
             else:
-                provider = makeprovider(entry)
-                self.entries.append((storename(provider, entry), provider))
+                self.entries.append(self._declare(entry))
 
         self.docache = False is not opts.get('cache', True)
 
@@ -229,6 +302,43 @@ class Sekreto:
         # otherwise `cache: False` would silently disable redact() and leak
         # secrets to logs.
         self.seen = []
+
+    def _declare(self, spec):
+        """One chain entry, as a plugin instance.
+
+        The instance is `kind` for a store named after its kind and
+        `kind$store` otherwise - `hashicorp$prod` - so `host.list()` reads
+        like the chain. A store name that is already taken gets a numbered
+        tag from the host instead, because two providers MAY share a store
+        name (a directed read walks both) and an instance ref may not.
+        """
+        from .providers import PROVIDER_EXPORT
+
+        kind = spec.get('kind') if isinstance(spec, dict) else None
+
+        if kind is None or not self.catalog.has(kind):
+            raise SekretoError(_unknownkind(kind, self.catalog))
+
+        store = spec.get('name') or kind
+
+        if not check_tag(store):
+            raise SekretoError('sekreto: invalid store name: ' + str(store))
+
+        ref = kind if store == kind else format_ref(kind, store)
+        if self.host.instance(ref) is not None:
+            ref = self.host.autotag(kind)
+
+        try:
+            # `load` runs the definition's `define`, which builds the
+            # provider from the spec; `activate` takes the instance live.
+            # Nothing is contacted by either: a provider opens nothing
+            # until its first lookup.
+            self.host.load(ref, {'options': spec})
+            self.host.activate(ref)
+        except Exception as err:
+            raise _unwrap(err) from None
+
+        return (store, self.host.exports(ref + '/' + PROVIDER_EXPORT))
 
     def get(self, name):
         """The secret, or a SekretoError if no provider has it."""
@@ -324,6 +434,16 @@ class Sekreto:
 
     def refresh(self):
         """Drop cached values, so the next `get` asks the providers again."""
+        self.cache.clear()
+
+    def close(self):
+        """Tear the chain down: every plugin instance is deactivated and
+        unloaded, in reverse, releasing whatever a provider acquired at
+        activation. Afterwards there is nothing to read from - `get`
+        reports every secret unknown - and the cache is dropped, though
+        `redact` still knows every value that was ever resolved."""
+        self.host.close()
+        self.entries = []
         self.cache.clear()
 
 

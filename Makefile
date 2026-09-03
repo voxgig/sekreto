@@ -97,8 +97,15 @@ check: test integration omni-isolation
 # to run its tests. After editing an aontu source, run `make spec` and
 # commit the regenerated JSON — CI's spec-freshness check fails on a stale
 # artifact.
+# Both targets also unify each spec source with omni's spec-format shape
+# (spec/def/omni-spec.aon, a copy of omni's) and prove the shape can go
+# red. It runs AFTER the build rather than inside it: unifying the shape
+# into the build would drop an optional key holding an empty container
+# (omni's spec/def/omni-spec.aon says why), and the artifact must stay
+# byte-exact. `spec` runs it too, and not only `spec-check`, because CI's
+# spec-freshness job runs `make spec`.
 spec:
-	@cd tools && npm install --no-audit --no-fund --silent && npm run --silent build-spec
+	@cd tools && npm install --no-audit --no-fund --silent && npm run --silent build-spec && npm run --silent check-spec-shape
 
 spec-check:
-	@cd tools && npm install --no-audit --no-fund --silent && npm run --silent build-spec-check
+	@cd tools && npm install --no-audit --no-fund --silent && npm run --silent build-spec-check && npm run --silent check-spec-shape

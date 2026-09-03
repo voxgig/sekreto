@@ -8,14 +8,17 @@ and it does not have to change when the answer changes. Moving from
 `.env` in development to a vault in production is a config change, not a
 code change.
 
-The same library is available in ten languages, all behaving identically,
-because they all run the same shared test spec through
+The same library is available in twelve languages, all behaving
+identically, because they all run the same shared test spec through
 [voxgig/omni](https://github.com/voxgig/omni).
 
-```js
-const { Sekreto } = require('@voxgig/sekreto-js')
+```ts
+import { Sekreto } from '@voxgig/sekreto'
+import { hashicorp } from '@voxgig/sekreto/plugins/hashicorp'
+import { boru } from '@voxgig/sekreto/plugins/boru'
 
 const secrets = new Sekreto({
+  plugins: [hashicorp, boru],                              // the stores this app can reach
   providers: [
     { kind: 'env' },                                       // local overrides
     { kind: 'dotenv', file: '.env' },                      // developer machines
@@ -43,6 +46,150 @@ meaning a particular one. `stores()` lists what can be named. Naming a store
 that is not in the chain raises rather than missing: `try` already means
 "this store may not have it", so it cannot also mean "this store may not
 exist" without hiding a typo.
+
+## Built in, or a plugin
+
+Every port has the same **four built-in provider kinds** — the ones that
+read at most a local file, and need no socket, no TLS, no crypto and no
+child process:
+
+| kind | reads |
+|---|---|
+| `memory` | literal values, given as options — for tests and defaults |
+| `env` | environment variables |
+| `dotenv` | a plaintext `.env` file |
+| `file` | a directory of one-secret-per-file entries — a mounted Kubernetes or Docker secret |
+
+A chain of those works with nothing else loaded. **Everything that opens
+a socket, signs a request or spawns a process is a plugin**: each store
+client is a [voxgig/plugin](https://github.com/voxgig/plugin) definition
+in the port's `plugins/` folder, and the calling project hands the ones
+it needs to `Sekreto` at construction — statically, in code, so a build
+carries exactly the store clients it configures and a chain of `[dotenv,
+env]` carries no AWS request signing and no HTTP vault client at all.
+
+| plugin | kinds | needs |
+|---|---|---|
+| `hashicorp` | `hashicorp` | HTTPS (and the filesystem, for a kubernetes JWT) |
+| `boru` | `boru` | a child process, or HTTPS in wire mode |
+| `aws` | `awssecrets`, `awsparams` | HTTPS and HMAC-SHA256 — the one crypto dependency, kept out of the core |
+| `gcpsecrets` | `gcpsecrets` | HTTPS |
+| `azuresecrets` | `azuresecrets` | HTTPS |
+| `onepassword` | `onepassword` | HTTPS |
+| `doppler` | `doppler` | HTTPS |
+| `infisical` | `infisical` | HTTPS |
+| `secretspec` | `secretspec` | a child process |
+
+The plugin mechanism is voxgig/plugin's, not sekreto's own: a provider
+kind is a plugin *definition*, a configured store is an *instance*
+addressed by name and tag (`hashicorp$prod`), and `secrets.host` is the
+plugin host they live on. The design, and what each port owes it, is
+[`docs/design/plugin-providers.md`](docs/design/plugin-providers.md).
+
+### Per language
+
+A port adopts the plugin architecture once voxgig/plugin has a port of
+its language to stand on. Until then it ships every kind in one module
+behind a `kind` switch, with the same four built-ins and the same ten
+plugin kinds — the *set* is identical everywhere; only how the store
+clients are loaded differs.
+
+| | plugin architecture | plugins live in | voxgig/plugin port |
+|---|---|---|---|
+| [typescript](typescript/) *(canonical)* | ✅ | `typescript/plugins/` | `@voxgig/plugin` |
+| [go](go/) | ✅ | `go/plugins/<kind>/` | `github.com/voxgig/plugin/go` |
+| [python](python/) | ✅ | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git) |
+| [javascript](javascript/) | switch — pending | | exists |
+| [ruby](ruby/) | switch — pending | | exists |
+| [php](php/) | switch — pending | | exists |
+| [perl](perl/) | switch — pending | | exists |
+| [rust](rust/) | switch — pending | | exists |
+| [java](java/) | switch — pending | | exists |
+| [csharp](csharp/) | switch — pending | | exists |
+| [kotlin](kotlin/) | switch — pending | | exists |
+| [zig](zig/) | switch — **no plugin port yet** | | not yet — check again |
+
+**typescript** — one import per plugin, or the full set from
+`@voxgig/sekreto/plugins`:
+
+```ts
+import { Sekreto } from '@voxgig/sekreto'
+import { hashicorp } from '@voxgig/sekreto/plugins/hashicorp'
+import { awssecrets } from '@voxgig/sekreto/plugins/aws'
+
+const secrets = new Sekreto({
+  plugins: [hashicorp, awssecrets],
+  providers: [
+    { kind: 'env' },
+    { kind: 'hashicorp', name: 'prod', addr: process.env.VAULT_ADDR, token: process.env.VAULT_TOKEN },
+    { kind: 'awssecrets', region: 'eu-west-1' },
+  ],
+})
+
+const token = await secrets.get('api.token')     // the chain answers
+const prod = await secrets.getfrom('prod', 'api.token')   // one store answers
+secrets.host.list()   // { env: 'live', 'hashicorp$prod': 'live', awssecrets: 'live' }
+```
+
+**go** — one package per plugin, linked only when imported, or all of
+them from `plugins`:
+
+```go
+import (
+    plugin "github.com/voxgig/plugin/go/plugin"
+
+    "github.com/voxgig/sekreto/go/plugins/aws"
+    "github.com/voxgig/sekreto/go/plugins/hashicorp"
+    "github.com/voxgig/sekreto/go/sekreto"
+)
+
+secrets, err := sekreto.New(&sekreto.Options{
+    Plugins: []plugin.Definition{hashicorp.Plugin, aws.Secrets},
+    Providers: []*sekreto.ProviderSpec{
+        {Kind: "env"},
+        {Kind: "hashicorp", Name: "prod", Addr: os.Getenv("VAULT_ADDR"), Token: os.Getenv("VAULT_TOKEN")},
+        {Kind: "awssecrets", Region: "eu-west-1"},
+    },
+})
+
+token, err := secrets.Get("api.token")
+prod, err := secrets.GetFrom("prod", "api.token")
+secrets.Host().List()   // map[env:live hashicorp$prod:live awssecrets:live]
+```
+
+**python** — one module per plugin, or `ALL` from
+`voxgig_sekreto.plugins`:
+
+```python
+from voxgig_sekreto import Sekreto
+from voxgig_sekreto.plugins.hashicorp import hashicorp
+from voxgig_sekreto.plugins.aws import awssecrets
+
+secrets = Sekreto({
+    'plugins': [hashicorp, awssecrets],
+    'providers': [
+        {'kind': 'env'},
+        {'kind': 'hashicorp', 'name': 'prod', 'addr': os.environ['VAULT_ADDR'], 'token': os.environ['VAULT_TOKEN']},
+        {'kind': 'awssecrets', 'region': 'eu-west-1'},
+    ],
+})
+
+token = secrets.get('api.token')
+prod = secrets.getfrom('prod', 'api.token')
+secrets.host.list()   # {'env': 'live', 'hashicorp$prod': 'live', 'awssecrets': 'live'}
+```
+
+A kind that was not passed in is refused by name, and the message says
+what to pass:
+
+```
+sekreto: unknown provider kind: doppler (available: dotenv, env, file, hashicorp, memory)
+ - doppler is a sekreto plugin, not built in: pass it in the plugins option
+```
+
+A custom store is one call — `providerplugin(kind, make)` in typescript
+and python, `sekreto.ProviderPlugin` in go — and joins the chain like any
+shipped plugin. See [DOCS.md](DOCS.md#plugins).
 
 ## Languages
 
@@ -74,6 +221,10 @@ port carries a small one of its own rather than taking on a package. TLS is
 the line: hand-rolling it for a secrets library would be far worse than
 depending on a well-audited crate.
 
+The one **Voxgig** dependency is [voxgig/plugin](https://github.com/voxgig/plugin),
+which itself has none: the ports that have adopted the plugin
+architecture take its port of their language, and nothing else.
+
 ## Secret names
 
 A name is dot-separated lowercase segments: `api.token`, `db.pass.main`.
@@ -87,22 +238,22 @@ One name, one secret, whichever provider answers:
 
 ## Providers
 
-| kind | store name | reads |
-|---|---|---|
-| `env` | `env` | environment variables, optionally prefixed |
-| `dotenv` | `dotenv` | a `.env` file, parsed once |
-| `memory` | `memory` | literal values — for tests and defaults |
-| `file` | `file` | a directory of one-secret-per-file entries — a mounted Kubernetes/Docker secret |
-| `hashicorp` | `hashicorp` | HashiCorp Vault (and OpenBao), KV v2 or v1, namespaces, kubernetes/approle logins |
-| `boru` | `boru` | a [boru](https://github.com/boru-lang/boru) vault — the `boru` CLI, or `boru vault serve` over its wire protocol |
-| `awssecrets` | `awssecrets` | AWS Secrets Manager, SigV4-signed in-tree |
-| `awsparams` | `awsparams` | AWS SSM Parameter Store, SigV4-signed in-tree |
-| `gcpsecrets` | `gcpsecrets` | GCP Secret Manager; on-platform auth via the metadata server |
-| `azuresecrets` | `azuresecrets` | Azure Key Vault; client-credential or managed-identity auth |
-| `onepassword` | `onepassword` | 1Password, through a Connect server |
-| `doppler` | `doppler` | Doppler, one bulk download per config |
-| `infisical` | `infisical` | Infisical, token or universal-auth machine identity |
-| `secretspec` | `secretspec` | [SecretSpec](https://secretspec.dev), through its CLI — whatever backend it is configured with |
+| kind | | store name | reads |
+|---|---|---|---|
+| `env` | built in | `env` | environment variables, optionally prefixed |
+| `dotenv` | built in | `dotenv` | a `.env` file, parsed once |
+| `memory` | built in | `memory` | literal values — for tests and defaults |
+| `file` | built in | `file` | a directory of one-secret-per-file entries — a mounted Kubernetes/Docker secret |
+| `hashicorp` | plugin | `hashicorp` | HashiCorp Vault (and OpenBao), KV v2 or v1, namespaces, kubernetes/approle logins |
+| `boru` | plugin | `boru` | a [boru](https://github.com/boru-lang/boru) vault — the `boru` CLI, or `boru vault serve` over its wire protocol |
+| `awssecrets` | plugin `aws` | `awssecrets` | AWS Secrets Manager, SigV4-signed in-tree |
+| `awsparams` | plugin `aws` | `awsparams` | AWS SSM Parameter Store, SigV4-signed in-tree |
+| `gcpsecrets` | plugin | `gcpsecrets` | GCP Secret Manager; on-platform auth via the metadata server |
+| `azuresecrets` | plugin | `azuresecrets` | Azure Key Vault; client-credential or managed-identity auth |
+| `onepassword` | plugin | `onepassword` | 1Password, through a Connect server |
+| `doppler` | plugin | `doppler` | Doppler, one bulk download per config |
+| `infisical` | plugin | `infisical` | Infisical, token or universal-auth machine identity |
+| `secretspec` | plugin | `secretspec` | [SecretSpec](https://secretspec.dev), through its CLI — whatever backend it is configured with |
 
 The store name is what `getfrom` addresses. It defaults to the kind and can
 be set with `name`, so two boru vaults can be `personal` and `team`.

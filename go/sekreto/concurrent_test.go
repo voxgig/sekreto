@@ -16,11 +16,14 @@ import (
 // value Redact hands straight back into the log, which is the failure this
 // guards. Run under `-race`, which the Makefile does.
 func TestConcurrentResolveKeepsEverySecret(t *testing.T) {
-	sek := New(&Options{Providers: []Provider{&MemoryProvider{Values: map[string]string{
+	sek, err := New(&Options{Providers: []*ProviderSpec{{Kind: "memory", Values: map[string]string{
 		"A_ONE":   "value-one-aaaa",
 		"A_TWO":   "value-two-bbbb",
 		"A_THREE": "value-three-cc",
 	}}}})
+	if nil != err {
+		t.Fatal(err)
+	}
 
 	names := []string{"a.one", "a.two", "a.three"}
 

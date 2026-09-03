@@ -30,10 +30,12 @@ const GUARDED = /^node:(fs|path|child_process|crypto)$/
 
 const SRC = join(__dirname, '..', 'src')
 
-// A platform-dependent provider now lives in its OWN module, and is not
-// on the core surface at all - importing the core cannot reach it. That
-// is the point of the core/plugin split: deferring the builtin stopped
-// the module being EVALUATED, but the code was still in the build. See
+// The two built-ins that read a file defer node:fs to their first
+// lookup, so importing the core evaluates no builtin at all. Everything
+// that opens a socket or spawns a process is not in the core in any form
+// - it is a plugin under plugins/, and importing the core cannot reach
+// it. That is the point of the split: deferring the builtin stopped the
+// module being EVALUATED, but the code was still in the build. See
 // docs/design/plugin-providers.md.
 const FILE_PROVIDER = join(__dirname, '..', 'src', 'provider', 'file')
 
@@ -100,33 +102,52 @@ describe('lazy node builtins', () => {
   // Deferring the builtin (the tests above) stops the module being
   // EVALUATED; it does not stop the code being in the build, because a
   // bundler still resolves a require it can see. So the core surface must
-  // not reach a platform-dependent provider AT ALL - if `fileprovider` is
-  // exported from the core index again, every consumer carries node:fs's
-  // provider whether or not they configured one, and every consumer of the
-  // aws kinds carries request signing.
-  test('the core surface exposes no platform-dependent provider', () => {
+  // not reach a plugin AT ALL - if `hashicorpprovider` is exported from
+  // the core index again, every consumer carries an HTTP vault client
+  // whether or not they configured one, and every consumer of the aws
+  // kinds carries request signing.
+  test('the core surface exposes no plugin', () => {
     uncache()
 
     const core = require(SRC)
 
-    // Registered from the module, not from core - importing core alone
-    // must not register them either, or the trim has nothing to trim.
-    const platform = [
-      'dotenvprovider', 'fileprovider', 'hashicorpprovider', 'boruprovider',
-      'awssecretsprovider', 'awsparamsprovider', 'gcpsecretsprovider',
-      'azuresecretsprovider', 'onepasswordprovider', 'dopplerprovider',
-      'infisicalprovider',
+    const plugins = [
+      'hashicorpprovider', 'boruprovider', 'awssecretsprovider',
+      'awsparamsprovider', 'gcpsecretsprovider', 'azuresecretsprovider',
+      'onepasswordprovider', 'dopplerprovider', 'infisicalprovider',
+      'secretspecprovider', 'sigv4', 'fetchjson', 'allplugins',
     ]
 
-    const leaked = platform.filter((name) => undefined !== core[name])
+    const leaked = plugins.filter((name) => undefined !== core[name])
     assert.deepEqual(leaked, [],
-      'these providers are reachable from the core surface, so every ' +
-      'consumer carries them: ' + leaked.join(', '))
+      'these are reachable from the core surface, so every consumer ' +
+      'carries them: ' + leaked.join(', '))
 
-    // The two that import nothing stay, because a chain with nowhere to
-    // read from is not usable.
+    // The four built-ins stay: they read at most a local file, and a
+    // chain with nowhere to read from is not usable.
     assert.equal('function', typeof core.envprovider)
     assert.equal('function', typeof core.memoryprovider)
+    assert.equal('function', typeof core.dotenvprovider)
+    assert.equal('function', typeof core.fileprovider)
+    assert.deepEqual(core.BUILTINS.map((d: any) => d.name), ['env', 'memory', 'dotenv', 'file'])
+  })
+
+  // The core's catalog holds the built-ins and nothing else, so a chain
+  // naming a plugin kind that was not handed in is refused - by name,
+  // and saying what to do about it.
+  test('a plugin kind that was not passed in is unknown to the core', () => {
+    uncache()
+
+    const { Sekreto } = require(SRC)
+
+    assert.throws(
+      () => new Sekreto({ providers: [{ kind: 'hashicorp', addr: 'https://v', token: 't' }] }),
+      {
+        message:
+          'sekreto: unknown provider kind: hashicorp (available: dotenv, env, file, memory)' +
+          ' - hashicorp is a sekreto plugin, not built in: pass it in the plugins option',
+      },
+    )
   })
 
 

@@ -19,7 +19,7 @@ publish = false
 [dependencies]
 voxgig_sekreto = { path = ".." }
 
-# A LITERAL path, because Cargo resolves these at build time and cannot read
-# $OMNI_HOME. `../vendor/omni` is a gitignored link created by `make vendor`;
-# CI checks omni out to exactly that path.
-voxgig_omni = { path = "../vendor/omni" }
+# omni, by its release tag (omni DOCS.md 8.3): a git dependency Cargo
+# fetches itself, so no checkout, link or $OMNI_HOME is needed. The tag is
+# the whole repository, and `rust/` inside it is the crate.
+voxgig_omni = { git = "https://github.com/voxgig/omni", tag = "rust/v0.1.0" }

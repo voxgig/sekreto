@@ -11,7 +11,8 @@
     "build-spec": "node build-spec.js",
     "build-spec-check": "node build-spec.js --check",
     "clean": "rm -rf node_modules package-lock.json",
-    "reset": "npm run clean && npm i && npm run build-spec"
+    "reset": "npm run clean && npm i && npm run build-spec",
+    "check-spec-shape": "node check-spec-shape.js --self-test"
   },
   "license": "MIT",
   "dependencies": {

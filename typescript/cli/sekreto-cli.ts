@@ -16,20 +16,19 @@
 // in chainfor below.
 
 import { Sekreto } from '../src'
+import type { ProviderSpec } from '../src'
 
-// THE FULL SET, imported for its SIDE EFFECT. The CLI is asked for any
-// provider kind on the command line, so it is the one consumer that
-// legitimately wants all thirteen.
+// THE FULL SET, passed to Sekreto. The CLI is asked for any provider
+// kind on the command line, so it is the one consumer that legitimately
+// wants all ten plugins; an app passes the one or two it configures.
 //
-// It must be a VALUE import. The line below used to be
-// `import { ProviderSpec } from '../src/Providers'` and did double duty by
-// accident: it named a type, so TypeScript ERASED it, and the providers
-// were registered only because Sekreto.ts still reached the barrel itself.
-// Cutting that edge left the CLI with env and memory alone, and every
-// other kind failed as `unknown provider kind` — caught by the
-// integration suite, which is exactly what it is for.
-import '../src/Providers'
-import type { ProviderSpec } from '../src/Providers'
+// It must be a VALUE import. An earlier shape of this split registered
+// kinds as a side effect of importing them, and the CLI's only import of
+// the full set named a type, so TypeScript ERASED it: every kind but env
+// and memory failed as `unknown provider kind`, caught by the
+// integration suite while `make test` stayed green. Passing the list
+// explicitly is what makes that mistake impossible to compile.
+import { allplugins } from '../plugins'
 
 function chainfor(source: string): ProviderSpec[] {
   const env = process.env
@@ -181,7 +180,7 @@ async function main(): Promise<number> {
   const storeflag = args.indexOf('--store')
   const store = -1 === storeflag ? '' : args[storeflag + 1]
 
-  const secrets = new Sekreto({ providers: chainfor(source) })
+  const secrets = new Sekreto({ plugins: allplugins, providers: chainfor(source) })
 
   let token: string
   try {

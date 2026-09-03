@@ -9,6 +9,17 @@
 # This file is the entry point: it names the categories. The cases live in
 # def/, one file per theme.
 
+
+# Spec format version (omni DOCS.md 2.7). Version 1 turns on strict entry
+# validation in every port's runner: an unknown entry field, more than one
+# of in/args/ctx, `err` beside `out` and an empty set all FAIL instead of
+# passing silently. Without this block a spec is version 0, the frozen
+# lenient format, and a typo'd `matches:` is an assertion that quietly
+# stopped asserting. `requires` would name capabilities beyond the version
+# baseline; this spec needs none.
+OMNI: version: 1
+
+
 primary: sekreto: @"def/names.aon"
 primary: sekreto: @"def/dotenv.aon"
 primary: sekreto: @"def/resolve.aon"

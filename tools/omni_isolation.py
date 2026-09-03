@@ -271,10 +271,10 @@ SOURCES = {
                        skip=[], pattern=SOURCE),
     'kotlin':     dict(globs=['kotlin/src/**/*.kt', 'kotlin/cli/**/*.kt'],
                        skip=[], pattern=SOURCE),
-    'typescript': dict(globs=['typescript/src/**/*.ts'],
-                       skip=['typescript/src/omnihome'], pattern=SOURCE),
-    # No skip: unlike typescript, this port has no omnihome resolver, so the
-    # entry copied alongside it matched nothing.
+    # No skip in either Node port: omni comes from npm as a devDependency,
+    # so the checkout resolver that used to live in typescript/src is gone
+    # and nothing under src/ has any business naming omni.
+    'typescript': dict(globs=['typescript/src/**/*.ts'], skip=[], pattern=SOURCE),
     'javascript': dict(globs=['javascript/src/**/*.js'], skip=[], pattern=SOURCE),
 }
 

@@ -49,8 +49,15 @@ MANIFEST = [
     # A renamed crate: the key says `runner`, and code imports the alias too.
     ('rust', 'rust/Cargo.toml', '[lib]',
      '[dependencies]\nrunner = { package = "voxgig_omni", version = "0.1" }\n\n[lib]'),
-    ('typescript', 'typescript/package.json', '"main": "dist/src/index.js",',
-     '"dependencies": { "@voxgig/omni": "^0.1.1" },\n  "main": "dist/src/index.js",'),
+    # Into the REAL dependencies block, which the typescript port now has
+    # (@voxgig/plugin). Injecting a second block elsewhere in the file used
+    # to work only because there was no first: JSON's last key wins, in
+    # json.loads and in npm alike, so a duplicate block ahead of the real
+    # one is invisible to both - and a mutation nobody can see tests
+    # nothing. The anchor vanishing is reported, so removing the block
+    # cannot quietly turn this into a no-op either.
+    ('typescript', 'typescript/package.json', '"dependencies": {',
+     '"dependencies": {\n    "@voxgig/omni": "^0.1.1",'),
     # An npm alias: same evasion, different spelling.
     ('javascript', 'javascript/package.json', '"main": "src/index.js",',
      '"dependencies": { "runner": "npm:@voxgig/omni@1.0.0" },\n  "main": "src/index.js",'),

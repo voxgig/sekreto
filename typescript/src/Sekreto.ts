@@ -8,20 +8,31 @@
 // This file is CANONICAL. Every other port is a translation of it, and
 // spec/sekreto.json is the behavioural contract they all run.
 
-// The REGISTRY, never './Providers'. Importing the barrel here is what
-// made every provider kind reachable from the core: the chain needs
-// `makeprovider`, and the barrel's edge dragged AWS request signing and
-// seven HTTP clients in behind it. The registry knows only the kinds
-// something actually imported. See docs/design/plugin-providers.md.
-import { Provider, ProviderSpec } from './provider/support'
-import { makeprovider } from './provider/Registry'
+// THE CORE IMPORTS NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR
+// SIGNS A REQUEST. The four built-in kinds - env, memory, dotenv, file -
+// read at most a local file; every other kind is a voxgig/plugin
+// definition under plugins/, and a chain may name one only if the
+// calling project handed it in through `plugins`. That is what keeps an
+// SDK whose chain is `[dotenv, env]` from carrying AWS request signing
+// and seven HTTP vault clients. See docs/design/plugin-providers.md.
+import { checktag, formatref, makecatalog, makehost } from '@voxgig/plugin'
+import type { Catalog, Definition, Host } from '@voxgig/plugin'
+
+import { ERROR_CODE, PROVIDER_EXPORT, Provider, ProviderSpec } from './provider/support'
+import { BUILTINS, KINDS } from './provider/builtin'
 
 /** A secret name: dot-separated lowercase segments, e.g. `api.token`. */
 export type Name = string
 
 export type SekretoOptions = {
-  /** The provider chain, in resolution order. */
+  /** The provider chain, in resolution order. An entry is a live
+   * provider, or the declarative spec of one - `{ kind, ...config }`. */
   providers?: (Provider | ProviderSpec)[]
+  /** The provider kinds beyond the built-ins that `providers` may name,
+   * as voxgig/plugin definitions. Static and explicit: the calling
+   * project imports the plugins it needs and passes them here, and a
+   * kind it did not pass is unknown to this Sekreto. */
+  plugins?: Definition[]
   /** Cache resolved values (default: true). */
   cache?: boolean
 }
@@ -213,23 +224,48 @@ export function redact(text: string, values: string[]): string {
   return out
 }
 
-/** One provider in the chain, under the store name it answers to. */
-type Entry = { store: string; provider: Provider }
+/** One provider in the chain, under the store name it answers to, and
+ * the ref of the plugin instance that built it - '' for a live provider
+ * handed in directly, which no instance backs. */
+type Entry = { store: string; ref: string; provider: Provider }
 
 /** One resolved value. Kept as a list rather than a map so that the store
  * a value came from stays attached, and so redaction order is stable. */
 type Cached = { store: string; name: Name; value: string }
 
-/** The store name a provider answers to when its spec does not say.
+/** The store name a live provider answers to.
  *
- * `describe()` opens with the provider's kind - `vault:...`, `dotenv:...`,
- * plain `env` - so the kind is the natural default, and a custom provider
- * gets a sensible name without having to implement anything extra. */
-function storename(provider: Provider, spec?: ProviderSpec): string {
-  if (spec && spec.name) {
-    return spec.name
-  }
+ * `describe()` opens with the provider's kind - `hashicorp:...`,
+ * `dotenv:...`, plain `env` - so the kind is the natural default, and a
+ * custom provider gets a sensible name without having to implement
+ * anything extra. A spec'd provider's store is its `name` or its `kind`,
+ * decided before the provider exists. */
+function storename(provider: Provider): string {
   return provider.describe().split(':')[0]
+}
+
+/** The message for a kind the catalog does not hold.
+ *
+ * A kind sekreto has never heard of is a typo; a kind that exists as a
+ * plugin but was not passed in is the split working as designed and
+ * telling you what to pass. Collapsing the two was the first thing that
+ * made the split confusing to use. */
+function unknownkind(kind: any, catalog: Catalog): string {
+  const known = -1 !== KINDS.plugin.indexOf(String(kind))
+  return (
+    'sekreto: unknown provider kind: ' + String(kind) +
+    ' (available: ' + catalog.names().join(', ') + ')' +
+    (known ? ' - ' + String(kind) + ' is a sekreto plugin, not built in: pass it in the plugins option' : '')
+  )
+}
+
+/** A SekretoError that crossed the plugin boundary comes back out as
+ * itself, byte for byte. Anything else is not sekreto's to rewrite. */
+function unwrap(err: any): any {
+  if (err && ERROR_CODE === err.code && err.details && 'string' === typeof err.details.cause) {
+    return new SekretoError(err.details.cause)
+  }
+  return err
 }
 
 /** The secrets facade: a chain of providers plus a cache.
@@ -240,6 +276,14 @@ function storename(provider: Provider, spec?: ProviderSpec): string {
  * first for ordinary configuration, the second when *which* store holds a
  * secret is part of what you mean. */
 export class Sekreto {
+  /** The voxgig/plugin host every spec'd provider is an instance of.
+   * Read it for introspection - `host.list()` names each store's ref and
+   * status - and nothing on it advances the chain. */
+  readonly host: Host
+  /** The definitions this Sekreto can build: the built-ins plus what
+   * `plugins` handed in. */
+  readonly catalog: Catalog
+
   private entries: Entry[]
   private docache: boolean
   private cache: Cached[]
@@ -251,20 +295,63 @@ export class Sekreto {
   constructor(options?: SekretoOptions) {
     const opts = options || {}
 
+    // Built-ins first, then the plugins, into one catalog: a plugin that
+    // names a built-in kind replaces it, which is how a host substitutes
+    // an implementation and never an accident, because the four names
+    // are documented.
+    this.catalog = makecatalog(BUILTINS.concat(opts.plugins || []))
+    this.host = makehost({ catalog: this.catalog })
+
     this.entries = (opts.providers || []).map((entry) => {
       if ('function' === typeof (entry as Provider).lookup) {
         const provider = entry as Provider
-        return { store: storename(provider), provider }
+        return { store: storename(provider), ref: '', provider }
       }
-
-      const spec = entry as ProviderSpec
-      const provider = makeprovider(spec)
-      return { store: storename(provider, spec), provider }
+      return this.declare(entry as ProviderSpec)
     })
 
     this.docache = false === opts.cache ? false : true
     this.cache = []
     this.seen = []
+  }
+
+  /** One chain entry, as a plugin instance.
+   *
+   * The instance is `kind` for a store named after its kind and
+   * `kind$store` otherwise - `hashicorp$prod` - so `host.list()` reads
+   * like the chain. A store name that is already taken gets a numbered
+   * tag from the host instead, because two providers MAY share a store
+   * name (a directed read walks both) and an instance ref may not. */
+  private declare(spec: ProviderSpec): Entry {
+    const kind = null == spec ? undefined : spec.kind
+
+    if (undefined === kind || !this.catalog.has(kind)) {
+      throw new SekretoError(unknownkind(kind, this.catalog))
+    }
+
+    const store = spec.name || kind
+
+    if (!checktag(store)) {
+      throw new SekretoError('sekreto: invalid store name: ' + store)
+    }
+
+    let ref = store === kind ? kind : formatref(kind, store)
+    if (undefined !== this.host.instance(ref)) {
+      ref = this.host.autotag(kind)
+    }
+
+    try {
+      // `load` runs the definition's `define`, which builds the provider
+      // from the spec; `activate` takes the instance live. Nothing is
+      // contacted by either: a provider opens nothing until its first
+      // lookup.
+      this.host.load(ref, { options: spec })
+      this.host.activate(ref)
+    } catch (err: any) {
+      throw unwrap(err)
+    }
+
+    return { store, ref, provider: this.host.exports(ref + '/' + PROVIDER_EXPORT) as Provider }
   }
 
   /** The secret, or a SekretoError if no provider has it. */
@@ -409,6 +496,17 @@ export class Sekreto {
 
   /** Drop cached values, so the next `get` asks the providers again. */
   refresh(): void {
+    this.cache = []
+  }
+
+  /** Tear the chain down: every plugin instance is deactivated and
+   * unloaded, in reverse, releasing whatever a provider acquired at
+   * activation. Afterwards there is nothing to read from - `get` reports
+   * every secret unknown - and the cache is dropped, though `redact`
+   * still knows every value that was ever resolved. */
+  close(): void {
+    this.host.close()
+    this.entries = []
     this.cache = []
   }
 }

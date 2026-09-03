@@ -23,8 +23,19 @@ import urllib.error
 import urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'tests'))
+
+# voxgig_plugin: installed, or a sibling checkout (see tests/pluginhome.py).
+from pluginhome import pluginpath  # noqa: E402
+
+pluginpath()
 
 from voxgig_sekreto import Sekreto  # noqa: E402
+
+# THE FULL SET, passed to Sekreto. The CLI is asked for any provider kind
+# on the command line, so it is the one consumer that legitimately wants
+# all ten plugins; an app passes the one or two it configures.
+from voxgig_sekreto.plugins import ALL  # noqa: E402
 
 LANG = 'python'
 
@@ -172,7 +183,11 @@ def main():
     # not from whichever provider happens to answer first.
     store = args[args.index('--store') + 1] if '--store' in args else ''
 
-    secrets = Sekreto({'providers': chainfor(source)})
+    try:
+        secrets = Sekreto({'plugins': ALL, 'providers': chainfor(source)})
+    except Exception as err:
+        print('sekreto-cli: ' + str(err), file=sys.stderr)
+        return 2
 
     try:
         token = secrets.getfrom(store, 'api.token') if store else secrets.get('api.token')

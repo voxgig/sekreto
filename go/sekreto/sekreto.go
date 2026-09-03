@@ -16,6 +16,8 @@ import (
 	"sort"
 	"strings"
 	"sync"
+
+	plugin "github.com/voxgig/plugin/go/plugin"
 )
 
 // SekretoError is anything sekreto refuses to do: a bad name, a missing
@@ -28,7 +30,9 @@ func (err *SekretoError) Error() string {
 	return err.Message
 }
 
-func fail(message string) error {
+// Fail is a SekretoError as an error value, for this package and for the
+// plugins, which return their own refusals through it.
+func Fail(message string) error {
 	return &SekretoError{Message: message}
 }
 
@@ -50,16 +54,19 @@ func ValidName(name any) bool {
 	return true
 }
 
-func checkname(name string) error {
+// CheckName is ValidName as an error: the check every name-taking function
+// makes before doing anything else, and the one a plugin makes before
+// putting a name on a command line or in a URL.
+func CheckName(name string) error {
 	if !ValidName(name) {
-		return fail("sekreto: invalid name: " + name)
+		return Fail("sekreto: invalid name: " + name)
 	}
 	return nil
 }
 
 // EnvKey is the environment-variable key for a name: api.token -> API_TOKEN.
 func EnvKey(name string, prefix string) (string, error) {
-	if err := checkname(name); nil != err {
+	if err := CheckName(name); nil != err {
 		return "", err
 	}
 
@@ -77,7 +84,7 @@ type VaultRef struct {
 
 // NameVaultRef splits a name into its vault path and field.
 func NameVaultRef(name string) (*VaultRef, error) {
-	if err := checkname(name); nil != err {
+	if err := CheckName(name); nil != err {
 		return nil, err
 	}
 
@@ -103,7 +110,7 @@ func NameVaultRef(name string) (*VaultRef, error) {
 // still be representable there. (The resulting `.`/`_` collision mirrors
 // the documented EnvKey behaviour, where both already map to `_`.)
 func FlatName(name string, sep string) (string, error) {
-	if err := checkname(name); nil != err {
+	if err := CheckName(name); nil != err {
 		return "", err
 	}
 
@@ -119,7 +126,7 @@ func FlatName(name string, sep string) (string, error) {
 // path hierarchy, rooted at `/` (or at a prefix): db.pass.main ->
 // /db/pass/main, or /app/db/pass/main under prefix `/app`.
 func AwsParam(name string, prefix string) (string, error) {
-	if err := checkname(name); nil != err {
+	if err := CheckName(name); nil != err {
 		return "", err
 	}
 
@@ -231,15 +238,25 @@ func Redact(text string, values []string) string {
 
 // Options configure a Sekreto.
 type Options struct {
-	// Providers is the chain, in resolution order.
-	Providers []Provider
+	// Providers is the chain, in resolution order. Each entry names a kind
+	// to build - a built-in, or a plugin passed in Plugins - or carries a
+	// Provider already built.
+	Providers []*ProviderSpec
+	// Plugins is the provider kinds beyond the built-ins that Providers may
+	// name, as voxgig/plugin definitions. Static and explicit: the calling
+	// project imports the plugin packages it needs and passes them here,
+	// and a kind it did not pass is unknown to this Sekreto.
+	Plugins []plugin.Definition
 	// NoCache disables the resolved-value cache.
 	NoCache bool
 }
 
-// entry is one provider in the chain, under the store name it answers to.
+// entry is one provider in the chain, under the store name it answers to,
+// and the ref of the plugin instance that built it - "" for a provider
+// handed in already built, which no instance backs.
 type entry struct {
 	store    string
+	ref      string
 	provider Provider
 }
 
@@ -261,12 +278,54 @@ func StoreName(provider Provider) string {
 	return strings.SplitN(provider.Describe(), ":", 2)[0]
 }
 
+// unknownkind is the message for a kind the catalog does not hold.
+//
+// A kind sekreto has never heard of is a typo; a kind that exists as a
+// plugin but was not passed in is the split working as designed and
+// telling you what to pass. Collapsing the two was the first thing that
+// made the split confusing to use.
+func unknownkind(kind string, catalog *plugin.Catalog) string {
+	message := "sekreto: unknown provider kind: " + kind +
+		" (available: " + strings.Join(catalog.Names(), ", ") + ")"
+
+	for _, known := range Kinds.Plugin {
+		if known == kind {
+			return message + " - " + kind +
+				" is a sekreto plugin, not built in: pass it in the Plugins option"
+		}
+	}
+
+	return message
+}
+
+// unwrap turns a SekretoError that crossed the plugin boundary back into
+// itself, byte for byte. Anything else is not sekreto's to rewrite.
+func unwrap(err error) error {
+	perr, is := err.(*plugin.PluginError)
+	if !is || ErrorCode != perr.Code {
+		return err
+	}
+
+	cause, is := perr.Details["cause"].(string)
+	if !is {
+		return err
+	}
+
+	return Fail(cause)
+}
+
 // Sekreto is the secrets facade: a chain of providers plus a cache.
 //
 // Two ways to read. Get is transparent - it walks the chain and takes the
 // first hit, and the caller never learns which store answered. GetFrom is
 // directed - it names the store, and only that store is asked.
 type Sekreto struct {
+	// host is the voxgig/plugin host every spec'd provider is an instance
+	// of, and catalog the definitions it can build: the built-ins plus
+	// what Options.Plugins handed in.
+	host    *plugin.Host
+	catalog *plugin.Catalog
+
 	entries []entry
 	docache bool
 	// Guards cache and seen. Four PROVIDERS were given a mutex for
@@ -284,36 +343,151 @@ type Sekreto struct {
 	seen []string
 }
 
-// New makes a Sekreto from options. Each provider answers to its own kind as
-// a store name; use NewNamed to name them explicitly.
-func New(options *Options) *Sekreto {
+// New makes a Sekreto from options: a catalog of the built-in kinds plus
+// the plugins, a voxgig/plugin host, and one instance of the right kind
+// per chain entry. It fails on a kind the catalog does not hold, a store
+// name that is not a valid tag, or a provider that refuses its own
+// configuration.
+func New(options *Options) (*Sekreto, error) {
 	opts := options
 	if nil == opts {
 		opts = &Options{}
 	}
 
-	entries := []entry{}
-	for _, provider := range opts.Providers {
-		entries = append(entries, entry{store: StoreName(provider), provider: provider})
+	// Built-ins first, then the plugins, into one catalog: a plugin that
+	// names a built-in kind replaces it, which is how a host substitutes
+	// an implementation and never an accident, because the four names
+	// are documented.
+	catalog, err := plugin.MakeCatalog(append(Builtins(), opts.Plugins...)...)
+	if nil != err {
+		return nil, err
 	}
 
-	return &Sekreto{entries: entries, docache: !opts.NoCache}
+	sek := &Sekreto{
+		host:    plugin.MakeHost(plugin.HostOptions{Catalog: catalog}),
+		catalog: catalog,
+		entries: []entry{},
+		docache: !opts.NoCache,
+	}
+
+	for _, spec := range opts.Providers {
+		if nil == spec {
+			continue
+		}
+
+		if nil != spec.Provider {
+			store := spec.Name
+			if "" == store {
+				store = StoreName(spec.Provider)
+			}
+			sek.entries = append(sek.entries, entry{store: store, provider: spec.Provider})
+			continue
+		}
+
+		one, err := sek.declare(spec)
+		if nil != err {
+			return nil, err
+		}
+		sek.entries = append(sek.entries, one)
+	}
+
+	return sek, nil
 }
 
-// NewNamed makes a Sekreto whose providers answer to the given store names,
-// in the same order. A name left empty falls back to the provider's kind.
-func NewNamed(providers []Provider, names []string, nocache bool) *Sekreto {
-	entries := []entry{}
+// declare is one chain entry, as a plugin instance.
+//
+// The instance is `kind` for a store named after its kind and `kind$store`
+// otherwise - `hashicorp$prod` - so Host().List() reads like the chain. A
+// store name that is already taken gets a numbered tag from the host
+// instead, because two providers MAY share a store name (a directed read
+// walks both) and an instance ref may not.
+func (sek *Sekreto) declare(spec *ProviderSpec) (entry, error) {
+	kind := spec.Kind
 
-	for index, provider := range providers {
-		store := StoreName(provider)
-		if index < len(names) && "" != names[index] {
-			store = names[index]
-		}
-		entries = append(entries, entry{store: store, provider: provider})
+	if !sek.catalog.Has(kind) {
+		return entry{}, Fail(unknownkind(kind, sek.catalog))
 	}
 
-	return &Sekreto{entries: entries, docache: !nocache}
+	store := spec.Name
+	if "" == store {
+		store = kind
+	}
+
+	if !plugin.CheckTag(store) {
+		return entry{}, Fail("sekreto: invalid store name: " + store)
+	}
+
+	ref := kind
+	if store != kind {
+		formatted, err := plugin.FormatRef(kind, store)
+		if nil != err {
+			return entry{}, err
+		}
+		ref = formatted
+	}
+	if taken, _ := sek.host.Instance(ref); nil != taken {
+		tagged, err := sek.host.AutoTag(kind)
+		if nil != err {
+			return entry{}, err
+		}
+		ref = tagged
+	}
+
+	options, err := OptionsOf(spec)
+	if nil != err {
+		return entry{}, err
+	}
+
+	// Load runs the definition's Define, which builds the provider from
+	// the spec; Activate takes the instance live. Nothing is contacted by
+	// either: a provider opens nothing until its first Lookup.
+	if _, err := sek.host.Load(ref, plugin.DeclareSpec{Options: options}); nil != err {
+		return entry{}, unwrap(err)
+	}
+	if _, err := sek.host.Activate(ref); nil != err {
+		return entry{}, unwrap(err)
+	}
+
+	exported, err := sek.host.Exports(ref + "/" + ProviderExport)
+	if nil != err {
+		return entry{}, err
+	}
+
+	provider, is := exported.(Provider)
+	if !is {
+		return entry{}, Fail("sekreto: plugin " + kind + " exported no provider")
+	}
+
+	return entry{store: store, ref: ref, provider: provider}, nil
+}
+
+// Host is the voxgig/plugin host every spec'd provider is an instance of.
+// Read it for introspection - List names each store's ref and status - and
+// nothing on it advances the chain.
+func (sek *Sekreto) Host() *plugin.Host {
+	return sek.host
+}
+
+// Catalog is the definitions this Sekreto can build: the built-ins plus
+// what Options.Plugins handed in.
+func (sek *Sekreto) Catalog() *plugin.Catalog {
+	return sek.catalog
+}
+
+// Close tears the chain down: every plugin instance is deactivated and
+// unloaded, in reverse, releasing whatever a provider acquired at
+// activation. Afterwards there is nothing to read from - Get reports every
+// secret unknown - and the cache is dropped, though Redact still knows
+// every value that was ever resolved.
+func (sek *Sekreto) Close() error {
+	err := sek.host.Close()
+
+	sek.mu.Lock()
+	sek.entries = []entry{}
+	sek.cache = nil
+	sek.mu.Unlock()
+
+	return err
 }
 
 // Get returns the secret, or an error if no provider has it.
@@ -324,7 +498,7 @@ func (sek *Sekreto) Get(name string) (string, error) {
 	}
 
 	if !has {
-		return "", fail("sekreto: unknown secret: " + name)
+		return "", Fail("sekreto: unknown secret: " + name)
 	}
 
 	return found, nil
@@ -344,7 +518,7 @@ func (sek *Sekreto) GetFrom(store string, name string) (string, error) {
 	}
 
 	if !has {
-		return "", fail("sekreto: unknown secret: " + store + ":" + name)
+		return "", Fail("sekreto: unknown secret: " + store + ":" + name)
 	}
 
 	return found, nil
@@ -366,14 +540,14 @@ func (sek *Sekreto) TryFrom(store string, name string) (string, bool, error) {
 	}
 
 	if 0 == len(matching) {
-		return "", false, fail("sekreto: unknown store: " + store)
+		return "", false, Fail("sekreto: unknown store: " + store)
 	}
 
 	return sek.resolve(store, name, matching)
 }
 
 func (sek *Sekreto) resolve(store string, name string, entries []entry) (string, bool, error) {
-	if err := checkname(name); nil != err {
+	if err := CheckName(name); nil != err {
 		return "", false, err
 	}
 

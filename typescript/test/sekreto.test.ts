@@ -16,38 +16,38 @@ import {
   vaultref,
 } from '../src'
 
-// `sigv4` is no longer on the core surface - it is the node:crypto edge
-// and only the aws providers use it (docs/design/plugin-providers.md).
-import { sigv4 } from '../src/Sigv4'
-
-// THE CONFORMANCE SUITE REGISTERS EVERY KIND, deliberately.
+// THE CONFORMANCE SUITE LOADS EVERY PLUGIN, deliberately.
 //
 // `spec/sekreto.json` is the contract for the whole library and exercises
-// all thirteen providers, so this suite imports the full-set barrel to
-// register them. That is not a leak of the core/plugin split - it is the
-// split working: a CONSUMER imports the kinds it configures and carries
-// nothing else, while the suite that proves all thirteen behave has to
-// have all thirteen. `lazyload.test.ts` pins the other half, that the core
-// surface reaches none of them.
-import '../src/Providers'
+// all fourteen provider kinds, so this suite hands the full set to every
+// Sekreto it builds. That is not a leak of the core/plugin split - it is
+// the split working: a CONSUMER passes the kinds it configures and
+// carries nothing else, while the suite that proves all fourteen behave
+// has to have all fourteen. `lazyload.test.ts` pins the other half, that
+// the core surface reaches none of them.
+//
+// `sigv4` lives with the aws plugin - it is the crypto edge, and only
+// the two aws kinds use it (docs/design/plugin-providers.md).
+import { allplugins, sigv4 } from '../plugins'
 
-import { omnihome, specfile } from '../src/omnihome'
+// omni from npm, as a devDependency - which is omni's own isolation device
+// for a Node consumer: npm never installs a devDependency transitively, so
+// nothing that depends on @voxgig/sekreto can acquire the runner through
+// it (omni register 4.13). The other ports take a checkout; see AGENTS.md.
+import { makeRunner } from '@voxgig/omni'
 
-// omni is a sibling checkout, not a published package (yet), so it is
-// required by path. The TypeScript port consumes omni's compiled output.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const omni = require(omnihome() + '/typescript/dist/src')
+import { specfile } from './specfile'
 
 // Build a Sekreto from the spec's declarative chain description.
 function chainof(spec: any): Sekreto {
-  return new Sekreto({ providers: spec.chain, cache: false })
+  return new Sekreto({ plugins: allplugins, providers: spec.chain, cache: false })
 }
 
 describe('sekreto', () => {
   let R: any
 
   before(async () => {
-    const runner = await omni.makeRunner(specfile())
+    const runner = await makeRunner(specfile())
     R = await runner('sekreto')
   })
 

@@ -32,27 +32,11 @@ function specfile(name) {
   throw new Error('sekreto: spec not found: ' + name)
 }
 
-// omni is a sibling checkout, not a published package (yet), so it is
-// required by path.
-function omnihome() {
-  const cands = [
-    process.env.OMNI_HOME,
-    join(__dirname, '..', '..', '..', 'omni'),
-    join(__dirname, '..', '..', '..', '..', 'omni'),
-    '/workspace/omni',
-    '/home/user/omni',
-  ]
-
-  for (const cand of cands) {
-    if (cand && existsSync(join(cand, 'spec', 'fib.json'))) {
-      return cand
-    }
-  }
-
-  throw new Error('sekreto: voxgig/omni not found - set OMNI_HOME')
-}
-
-const { makeRunner } = require(omnihome() + '/javascript/src')
+// omni from npm, as a devDependency - which is omni's own isolation device
+// for a Node consumer: npm never installs a devDependency transitively, so
+// nothing that depends on @voxgig/sekreto-js can acquire the runner through
+// it (omni register 4.13). The other ports take a checkout; see AGENTS.md.
+const { makeRunner } = require('@voxgig/omni-js')
 
 // Build a Sekreto from the spec's declarative chain description.
 function chainof(spec) {
