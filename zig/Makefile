@@ -36,11 +36,20 @@ PLUGIN = $(shell \
     fi; \
   done)
 
+# ../.plugin is SHARED with the python port, whose `deps` clones plugin's
+# main when it finds nothing - and the integration job builds every port
+# on one runner, python before zig. A clone that predates the consumer
+# root is therefore ordinary, not an error: it is brought up to
+# $(PLUGIN_REF) in place. A checkout the caller owns ($PLUGIN_HOME, a
+# sibling) is never touched; one without the root is simply not found.
 deps:
 	@if [ -n "$(PLUGIN)" ]; then \
 	  echo "plugin: $(PLUGIN)"; \
 	elif [ -d ../.plugin ]; then \
-	  echo "sekreto: ../.plugin has no zig/src/plugin.zig - update it (git -C ../.plugin pull) or set PLUGIN_HOME" >&2; exit 1; \
+	  echo "plugin: ../.plugin predates zig/src/plugin.zig - fetching $(PLUGIN_REF) into it"; \
+	  git -C ../.plugin fetch --quiet --depth 1 $(PLUGIN_REPO) $(PLUGIN_REF) && \
+	  git -C ../.plugin checkout --quiet FETCH_HEAD && \
+	  test -f ../.plugin/zig/src/plugin.zig; \
 	else \
 	  echo "plugin: fetching $(PLUGIN_REPO) ($(PLUGIN_REF)) into ../.plugin"; \
 	  git clone --quiet --depth 1 --branch $(PLUGIN_REF) $(PLUGIN_REPO) ../.plugin; \
