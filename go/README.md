@@ -85,16 +85,14 @@ none, resolved from the module proxy like any other.
 
 The conformance suite runs [`spec/sekreto.json`](../spec/sekreto.json) —
 the same file every port runs — through the Go
-[voxgig/omni](https://github.com/voxgig/omni) runner. Set `OMNI_HOME` if
-your omni checkout is not a sibling of this repository.
+[voxgig/omni](https://github.com/voxgig/omni) runner, resolved from the
+module proxy; no checkout is needed.
 
-`make test` generates a `go.work` pointing at the voxgig/omni checkout, so
-`go.mod` carries no path that works on only one machine. The workspace
-also carries two `replace` lines pinned to the `v0.0.0` the nested
-`testutil` module requires: without them the module-graph loader tries
-to fetch that version, and fails, the moment the graph holds a real
-external module. `make build-clean` proves the library builds with no
-workspace and no omni at all.
+The suite lives in the nested `testutil` module, which requires omni by
+its `go/vX.Y.Z` release tag from the module proxy and replaces the
+library under test with `../` — a path relative to its own `go.mod`, so
+nothing checked in works on only one machine and no `go.work` is needed.
+`make build-clean` proves the library builds with no omni at all.
 
 That suite proves this port computes the same answers as the others. What
 proves it can actually *fetch* a secret is the integration run, from the

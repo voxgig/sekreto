@@ -24,8 +24,9 @@ CA — which is how most private Vault deployments are set up.
 Errors come back as `SekretoError` in a `Result`; a provider miss is
 `Ok(None)`. The cache is a `Vec`, not a map, so redaction order is stable.
 
-`make test` symlinks `vendor/omni` at the voxgig/omni checkout, so
-`Cargo.toml` names a fixed path that resolves anywhere.
+The conformance suite is its own package, `corpus/`, which takes omni as
+a git dependency pinned to omni's `rust/vX.Y.Z` release tag; Cargo
+fetches it, and the library's own `Cargo.toml` never names it.
 
 ## Layout
 
@@ -42,8 +43,8 @@ Errors come back as `SekretoError` in a `Result`; a provider miss is
 
 The conformance suite runs [`spec/sekreto.json`](../spec/sekreto.json) —
 the same file every port runs — through the Rust
-[voxgig/omni](https://github.com/voxgig/omni) runner. Set `OMNI_HOME` if
-your omni checkout is not a sibling of this repository.
+[voxgig/omni](https://github.com/voxgig/omni) runner, pinned by tag; no
+checkout is needed.
 
 That suite proves this port computes the same answers as the others. What
 proves it can actually *fetch* a secret is the integration run, from the

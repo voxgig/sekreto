@@ -28,8 +28,11 @@ half-built module.
 
 The conformance suite runs [`spec/sekreto.json`](../spec/sekreto.json) —
 the same file every port runs — through the JavaScript
-[voxgig/omni](https://github.com/voxgig/omni) runner. Set `OMNI_HOME` if
-your omni checkout is not a sibling of this repository.
+[voxgig/omni](https://github.com/voxgig/omni) runner, taken from npm as
+the devDependency `@voxgig/omni-js`; `make test` runs `npm install`
+first. A devDependency is omni's isolation device for Node: npm never
+installs one transitively, so nothing that depends on this package can
+acquire the runner through it.
 
 That suite proves this port computes the same answers as the others. What
 proves it can actually *fetch* a secret is the integration run, from the

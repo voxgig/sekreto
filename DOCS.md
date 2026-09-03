@@ -718,6 +718,12 @@ the case files under [`spec/def/`](spec/def), written in
 result is committed so that no port needs a Node toolchain to run its tests.
 Edit the aontu, never the JSON.
 
+The spec declares omni **format version 1**, so every runner validates
+each entry strictly — an unknown field, more than one of `in`/`args`/`ctx`,
+`err` beside `out` or an empty set fails the suite rather than passing
+silently — and `make spec` unifies every source with omni's spec-format
+shape before the JSON is accepted.
+
 The groups:
 
 | group | subject |

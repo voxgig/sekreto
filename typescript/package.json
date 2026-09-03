@@ -56,10 +56,8 @@
   "files": [
     "LICENSE",
     "src",
-    "!src/omnihome.*",
     "plugins",
     "dist/src",
-    "!dist/src/omnihome.*",
     "dist/plugins"
   ],
   "dependencies": {
@@ -68,6 +66,7 @@
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@types/node": "^25.9.2",
+    "@voxgig/omni": "^0.1.2",
     "eslint": "^10.4.1",
     "globals": "^17.6.0",
     "prettier": "^3.8.3",

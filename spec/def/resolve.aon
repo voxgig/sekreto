@@ -6,8 +6,8 @@
 # as a null rather than an error.
 #
 # Every entry builds its chain from the spec, so the chain description is
-# part of the input rather than test-harness setup — that is what lets all
-# 22 ports share these cases verbatim.
+# part of the input rather than test-harness setup — that is what lets every
+# port share these cases verbatim.
 
 
 resolve: set: [

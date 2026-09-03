@@ -67,8 +67,7 @@ The one dependency is `@voxgig/plugin`, which itself has none.
 | `plugins/<name>.ts` | one plugin each; `plugins/aws.ts` carries `sigv4.ts` beside it |
 | `plugins/httpjson.ts` | the bounded, redirect-refusing HTTP round-trip every wire plugin shares |
 | `plugins/index.ts` | the full set |
-| `src/omnihome.ts` | finding the voxgig/omni checkout and the shared spec |
-| `test/sekreto.test.ts` | the conformance suite |
+| `test/sekreto.test.ts` | the conformance suite, on `@voxgig/omni` from npm |
 | `test/plugins.test.ts`, `test/lazyload.test.ts` | the plugin seam, from both sides |
 | `cli/sekreto-cli.ts` | the app that needs a secret |
 
@@ -76,8 +75,10 @@ The one dependency is `@voxgig/plugin`, which itself has none.
 
 The conformance suite runs [`spec/sekreto.json`](../spec/sekreto.json) —
 the same file every port runs — through the TypeScript
-[voxgig/omni](https://github.com/voxgig/omni) runner. Set `OMNI_HOME` if
-your omni checkout is not a sibling of this repository.
+[voxgig/omni](https://github.com/voxgig/omni) runner, taken from npm as
+the devDependency `@voxgig/omni`. A devDependency is omni's isolation
+device for Node: npm never installs one transitively, so nothing that
+depends on this package can acquire the runner through it.
 
 That suite proves this port computes the same answers as the others. What
 proves it can actually *fetch* a secret is the integration run, from the

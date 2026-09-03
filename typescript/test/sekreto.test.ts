@@ -30,12 +30,13 @@ import {
 // the two aws kinds use it (docs/design/plugin-providers.md).
 import { allplugins, sigv4 } from '../plugins'
 
-import { omnihome, specfile } from '../src/omnihome'
+// omni from npm, as a devDependency - which is omni's own isolation device
+// for a Node consumer: npm never installs a devDependency transitively, so
+// nothing that depends on @voxgig/sekreto can acquire the runner through
+// it (omni register 4.13). The other ports take a checkout; see AGENTS.md.
+import { makeRunner } from '@voxgig/omni'
 
-// omni is a sibling checkout, not a published package (yet), so it is
-// required by path. The TypeScript port consumes omni's compiled output.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const omni = require(omnihome() + '/typescript/dist/src')
+import { specfile } from './specfile'
 
 // Build a Sekreto from the spec's declarative chain description.
 function chainof(spec: any): Sekreto {
@@ -46,7 +47,7 @@ describe('sekreto', () => {
   let R: any
 
   before(async () => {
-    const runner = await omni.makeRunner(specfile())
+    const runner = await makeRunner(specfile())
     R = await runner('sekreto')
   })
 

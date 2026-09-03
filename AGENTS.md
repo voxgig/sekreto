@@ -203,25 +203,40 @@ statements in `test/integration.sh`.
   store's name is decided before the provider exists — `name` or `kind`
   — and is also the plugin instance's tag, so it has to be a valid one.
 - **A Go workspace does not resolve a phantom version.** `testutil/go.mod`
-  requires omni and the library at `v0.0.0`, and `use` alone does not
-  stop the module-graph loader fetching a go.mod at that version. It
-  went unnoticed while the graph held only workspace modules; requiring
-  voxgig/plugin from the proxy made every workspace-mode build fail on
-  omni. The Makefile's `go.work` adds a `replace` pinned to the phantom
-  version, and stays out of any checked-in file.
+  used to require omni and the library at `v0.0.0`, reached through a
+  generated `go.work`, and `use` alone does not stop the module-graph
+  loader fetching a go.mod at that version. It went unnoticed while the
+  graph held only workspace modules; requiring voxgig/plugin from the
+  proxy made every workspace-mode build fail on omni. The suite now
+  requires omni by its release tag and replaces the library with a path
+  relative to its own go.mod, and there is no workspace to get wrong.
 
 ## voxgig/omni
 
-The conformance suites need a [voxgig/omni](https://github.com/voxgig/omni)
-checkout. Every port finds it the same way: `$OMNI_HOME`, then `../../omni`,
-`../../../omni`, `/workspace/omni`, `/home/user/omni` — the first that has
-`spec/fib.json`. Set `OMNI_HOME` if yours is elsewhere.
+The conformance suites run through [voxgig/omni](https://github.com/voxgig/omni)'s
+runner, one port each. Only the *test* depends on omni — the library and
+CLI never do, and `tools/omni_isolation.py` proves it (omni register 4.13).
+Each port takes the runner the way omni publishes it for that language
+(omni `DOCS.md` §8.3):
 
-Compiled ports wire it in without putting a machine-specific path in a
-checked-in file: Go generates a `go.work`, Rust symlinks `vendor/omni`,
-C# passes `-p:OmniPath=`, Java puts it on the classpath. All four are
-gitignored, and only the *test* depends on omni — the library and CLI
-never do.
+| ports | how omni arrives | wiring |
+|---|---|---|
+| typescript, javascript | npm: `@voxgig/omni`, `@voxgig/omni-js`, as a **devDependency** — omni's isolation device for Node, since npm never installs one transitively | `npm install`, nothing else |
+| go | the module proxy, by omni's `go/vX.Y.Z` release tag | `testutil/go.mod` requires the tag and replaces the library with `../`; no `go.work` |
+| rust | a git dependency pinned to omni's `rust/vX.Y.Z` tag, fetched by Cargo | `corpus/Cargo.toml`; no vendor link |
+| python, ruby, php, perl, java, csharp, zig, kotlin | a **checkout** — omni publishes nothing for these runners | `$OMNI_HOME`, then `../../omni`, `../../../omni`, `/workspace/omni`, `/home/user/omni`, the first with `spec/fib.json`; C# passes `-p:OmniPath=`, Java puts it on the classpath, both gitignored |
+
+Bumping omni is therefore three edits — the two npm ranges, the Go tag,
+the Rust tag — and, for the checkout ports, whatever CI checks out.
+
+**The spec declares omni format version 1** (`OMNI: version: 1` in
+`spec/sekreto.aon`), which turns on strict entry validation in every
+runner: an unknown entry field, more than one of `in`/`args`/`ctx`, `err`
+beside `out` and an empty set all fail instead of passing silently.
+`make spec` and `make spec-check` also unify every source with omni's
+spec-format shape (`spec/def/omni-spec.aon`, a verbatim copy, like
+`tools/build-spec.js` and `tools/check-spec-shape.js`; resync them from
+omni, never edit them here) and prove the shape can go red.
 
 ## The API server and the vaults
 
