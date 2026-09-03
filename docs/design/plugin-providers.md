@@ -161,8 +161,10 @@ split confusing to use.
   not packaged at all; it now carries a `pyproject.toml`, and sekreto
   declares it from git until it is on PyPI. A checkout that has not
   pip-installed it finds a sibling `plugin` checkout the way every port
-  finds omni (`PLUGIN_HOME`, `tests/pluginhome.py`), for the tests and
-  the CLI only — the library does no path search.
+  finds omni (`PLUGIN_HOME`, `tests/pluginhome.py`), and the Makefile
+  fetches a shallow clone when there is none — for the tests and the
+  CLI only; the library does no path search. CI therefore needs no
+  checkout step for it, as it needs none for npm or the module proxy.
 - **Go's `New` returns an error**, because building a chain can now
   fail in ways the old `New` could not, and the Go port ships no
   package to stay compatible with. `Options.Providers` is a list of

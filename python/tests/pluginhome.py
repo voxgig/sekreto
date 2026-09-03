@@ -3,10 +3,11 @@
 # voxgig_sekreto depends on voxgig_plugin - the python port of
 # voxgig/plugin - and declares it in pyproject.toml, so `pip install`
 # brings it. A developer working from checkouts has not run that, and
-# neither has CI's conformance job, so the tests and the CLI look for a
-# sibling checkout the same way every port looks for omni: $PLUGIN_HOME,
-# then the usual places. An installed package wins; this is only the
-# fallback.
+# neither has CI, so the tests and the CLI look for a checkout the same
+# way every port looks for omni: $PLUGIN_HOME, then the usual places -
+# including the ../.plugin that the Makefile's `deps` target fetches
+# when nothing else is found. An installed package wins; this is only
+# the fallback.
 
 import os
 import sys

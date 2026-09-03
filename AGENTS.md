@@ -33,8 +33,9 @@ ten stay one.
    which itself takes nothing: a port that has adopted the plugin
    architecture (rule 4) depends on plugin's port of its language, the
    way that language takes a dependency — npm for typescript, the module
-   proxy for go, git for python until it is on PyPI. That is the whole
-   list. voxgig/omni is not on it: it drives the tests and no shipped
+   proxy for go, git for python until it is on PyPI (and, for a python
+   checkout that has not pip-installed it, `make deps` fetches a shallow
+   clone the tests and CLI find). That is the whole list. voxgig/omni is not on it: it drives the tests and no shipped
    manifest may name it (`tools/omni_isolation.py` proves that).
 
    The exception is **cryptographic transport**, and it is a principle

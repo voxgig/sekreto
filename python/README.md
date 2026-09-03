@@ -58,8 +58,10 @@ The one dependency is `voxgig-plugin`, which itself has none. It is not
 on PyPI yet, so `pyproject.toml` declares it from git; a checkout that
 has not pip-installed it finds a sibling `plugin` checkout the way the
 tests find omni — `PLUGIN_HOME`, then the usual places
-(`tests/pluginhome.py`) — for the tests and the CLI. The library itself
-searches no path.
+(`tests/pluginhome.py`) — for the tests and the CLI, and `make deps`
+fetches a shallow clone into `../.plugin` when there is none, which is
+what `npm install` and `go mod download` do for the other two ports.
+The library itself searches no path.
 
 ## Layout
 
