@@ -25,10 +25,7 @@ OMNI := $(shell \
 # Recursively expanded (=, not :=), so a reference AFTER `deps` has run
 # sees the clone it made.
 PLUGIN_REPO ?= https://github.com/voxgig/plugin
-# TEMPORARY: the consumer root, and the dual-toolchain build that lets a
-# 0.16 host compile the port, ship with the voxgig/plugin change on this
-# same branch name. Flip to `main` the moment that lands there.
-PLUGIN_REF ?= claude/sekreto-plugin-architecture-2v4q61
+PLUGIN_REF ?= main
 PLUGIN = $(shell \
   for d in "$$PLUGIN_HOME" ../../plugin ../../../plugin /workspace/plugin /home/user/plugin ../.plugin; do \
     if [ -n "$$d" ] && [ -f "$$d/zig/src/plugin.zig" ]; then \
