@@ -10,7 +10,14 @@ license = "MIT"
 # one: a secrets library that talks to a remote vault needs TLS, and
 # hand-rolling TLS would be far worse than taking a well-audited crate.
 # rustls is pure Rust and memory-safe; webpki-roots supplies the Mozilla
-# root set. Nothing else is pulled in.
+# root set. This is the only port with a production dependency at all.
+#
+# Two direct, TWELVE in the closure: rustls brings once_cell, ring,
+# rustls-pki-types, rustls-webpki, subtle and zeroize, and ring in turn
+# brings cfg-if, getrandom and untrusted, with getrandom bringing libc.
+# `cargo tree --edges normal` prints the current set. Worth knowing before
+# adding anything else here - the audit surface is the closure, not the two
+# lines below.
 rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
 webpki-roots = "0.26"
 

@@ -7,8 +7,27 @@ wherever they live.
 make test                     # the conformance suite
 ```
 
-`HTTP::Tiny` and `JSON::PP` are both core Perl, so this port stays free
-of CPAN.
+`HTTP::Tiny` and `JSON::PP` are both core Perl, so this port declares no
+CPAN dependency.
+
+**https is the exception, and it is not this port's to fix.** `HTTP::Tiny`
+loads `IO::Socket::SSL` and `Net::SSLeay` on demand for an https request,
+and neither is core — a stock Perl reaches an `http://` vault and cannot
+reach an `https://` one. Which kind of Perl you have:
+
+```sh
+perl -MHTTP::Tiny -e 'my ($ok, $why) = HTTP::Tiny->can_ssl;
+                      print $ok ? "https: yes\n" : "https: no\n$why"'
+```
+
+Where that says no, install both from CPAN — on Debian and Ubuntu they are
+`libio-socket-ssl-perl` and `libnet-ssleay-perl`.
+
+Missing, it fails closed and says so — `sekreto: cannot reach https://…:
+IO::Socket::SSL 1.42 must be installed for https support` — which is a
+store that could not answer, never a miss, so the chain stops rather than
+falling through to a weaker store. Verification stays on either way
+(`verify_SSL => 1`); this port never trades TLS checking for reachability.
 
 `validname` returns 1/0, as Perl truth goes; the conformance suite adapts
 that to the spec's `true`/`false` rather than the library handing back JSON
