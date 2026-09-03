@@ -23,10 +23,21 @@ OMNI := $(shell \
 # ./testutil/...` then fails with "directory prefix testutil does not
 # contain modules listed in go.work". Regenerating is cheap; being
 # stale is not.
+#
+# THE TWO REPLACES ARE LOAD-BEARING. testutil/go.mod requires omni and
+# this module at v0.0.0 - a version that exists nowhere - and `use` alone
+# does not stop the workspace's module-graph loader from trying to fetch
+# a go.mod at that version. Nothing noticed while the graph held only
+# workspace modules, because nothing needed the graph; the moment this
+# module required voxgig/plugin from the proxy, every build in workspace
+# mode failed on omni. A replace pinned to the phantom version points the
+# loader at the directory instead, and stays out of any checked-in file.
 go.work:
 	@test -n "$(OMNI)" || { echo "sekreto: voxgig/omni not found - set OMNI_HOME" >&2; exit 1; }
 	@rm -f go.work go.work.sum
 	go work init . ./testutil $(OMNI)/go
+	go work edit -replace github.com/voxgig/omni/go@v0.0.0=$(OMNI)/go \
+	  -replace github.com/voxgig/sekreto/go@v0.0.0=.
 
 build: go.work
 	go build ./...

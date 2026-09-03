@@ -10,7 +10,9 @@
 # carry known-answer cases that all ten ports must reproduce bit-for-bit,
 # and lets the integration mock recompute the signature server-side.
 #
-# A port of typescript/src/Sigv4.ts, which is canonical.
+# A port of typescript/plugins/sigv4.ts, which is canonical. It lives with
+# the aws plugin because it is the one place the library needs
+# HMAC-SHA256, and a built-in must not.
 
 import hashlib
 import hmac as hmaclib

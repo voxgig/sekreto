@@ -5,9 +5,10 @@ ten stay one.
 
 ## The three that matter
 
-1. **TypeScript is canonical.** `typescript/src/Sekreto.ts` and
-   `typescript/src/Providers.ts` define the behaviour. Every other port is
-   a translation of them. Change canonical first, then propagate.
+1. **TypeScript is canonical.** `typescript/src/Sekreto.ts`,
+   `typescript/src/provider/` and `typescript/plugins/` define the
+   behaviour. Every other port is a translation of them. Change canonical
+   first, then propagate.
 
 2. **`spec/sekreto.aon` is the contract.** It runs against every port. A
    port that disagrees with the spec is the thing that is wrong — not the
@@ -20,12 +21,21 @@ ten stay one.
    run `make spec`, commit both. CI's `spec-freshness` job rebuilds and
    fails on any drift.
 
-3. **No third-party dependencies, with one narrow exception.** (`tools/` is
+3. **No third-party dependencies, with one narrow exception — and one
+   Voxgig dependency.** (`tools/` is
    build machinery, not a port — it depends on `@voxgig/model`, and nothing
    at test time ever reaches it.) Where a
    standard library is missing something, the port carries a small one of
    its own: JSON in Java and Rust (C# uses the BCL's), HTTP in Rust. That is
    the cost of the rule and it is worth paying.
+
+   The Voxgig dependency is [voxgig/plugin](https://github.com/voxgig/plugin),
+   which itself takes nothing: a port that has adopted the plugin
+   architecture (rule 4) depends on plugin's port of its language, the
+   way that language takes a dependency — npm for typescript, the module
+   proxy for go, git for python until it is on PyPI. That is the whole
+   list. voxgig/omni is not on it: it drives the tests and no shipped
+   manifest may name it (`tools/omni_isolation.py` proves that).
 
    The exception is **cryptographic transport**, and it is a principle
    rather than a list. Where a port's standard library has TLS, it uses it.
@@ -54,26 +64,50 @@ ten stay one.
    ways — the Azure emulator must be refused without its certificate and
    accepted with it. See `doc/design/more-ports.md`.
 
-4. **Core carries no platform dependency; providers are modules.**
-   `env` and `memory` live in the core because they import nothing. The
-   other twelve each live in their own module under `provider/` and
-   REGISTER THEMSELVES at import, so a kind nobody imports is not in the
-   build. `makeprovider` is a registry lookup, not a switch.
+4. **Four kinds are built in; everything else is a plugin, in the port's
+   `plugins/` folder, loaded statically by the calling project.** What
+   makes a kind built in is that it reads at most a local file: `env`,
+   `memory`, `dotenv`, `file`. Every kind that opens a socket, signs a
+   request or spawns a process — the vault clients, the cloud stores,
+   the two CLIs, and `sigv4` with them — is a voxgig/plugin definition
+   under `plugins/`, and a `Sekreto` can build only the kinds its
+   constructor was handed. The same four built-ins and the same ten
+   plugin kinds in every port; only the loading mechanism follows the
+   language.
 
-   The rule that keeps it true: **nothing in the core may import the
-   full-set barrel.** `Sekreto.ts` importing `./Providers` for
-   `makeprovider` is exactly what made all fourteen kinds reachable
-   before — one edge, and every consumer carried AWS request signing.
-   Import `./provider/Registry`.
+   The rules that keep it true:
+
+   - **The core imports no plugin, in any form.** Not the module, not
+     the full set, not a type that the compiler would erase anyway. In
+     Go that is a linking boundary (`sekreto/` imports no `net/http`,
+     `crypto` or `os/exec`); in TypeScript a bundling one (nothing under
+     `src/` reaches `plugins/`); in Python it decides what
+     `import voxgig_sekreto` pulls in. `lazyload.test.ts`,
+     `plugin_test.go` and `test_plugins.py` each pin their half.
+   - **Loading is explicit, never a side effect of importing.** An
+     earlier shape registered kinds at import into a module-global
+     registry; the CLI's only import of the full set named a type,
+     TypeScript erased it, and every kind but two failed in the
+     integration suite while `make test` stayed green. A list handed to
+     the constructor cannot be erased.
+   - **A `SekretoError` crosses the plugin boundary under the code
+     `sekreto_error`** and comes back out as itself. The spec pins those
+     messages byte for byte, and voxgig/plugin wraps a code-less error
+     raised in `define` as `plugin_define_failed`. `providerplugin` puts
+     the code on; `Sekreto` takes it off. Do not catch and rewrap
+     anywhere else.
+   - **A port adopts the architecture only once voxgig/plugin has its
+     language.** Until then it keeps the `kind` switch with the same
+     fourteen kinds — javascript, ruby, php, perl, rust, java, csharp
+     and kotlin can move now; zig waits for a plugin port. The
+     propagation order, and what each port owes, is
+     [`docs/design/plugin-providers.md`](./docs/design/plugin-providers.md).
 
    Deferring a builtin (`nodemod`) is not the same thing and does not
-   replace it: deferring stops the module being EVALUATED, while a
-   bundler still resolves a `require` it can see. Both are needed.
-
-   `typescript/test/lazyload.test.ts` pins it from both sides — the core
-   surface exposes no platform provider, and a provider still loads its
-   builtin when actually used. Design and the propagation order for the
-   other nine ports: [`docs/design/plugin-providers.md`](./docs/design/plugin-providers.md).
+   replace it: deferring stops a Node module being EVALUATED at import,
+   which is what lets the core's `dotenv` and `file` load `node:fs` at
+   first lookup rather than at import. It does not remove code from a
+   build; the split does that.
 
 5. **Two ways to read, and they are not interchangeable.** `get` is
    transparent — the chain answers and the caller never learns which store
@@ -126,8 +160,10 @@ that disagree about what passing means are worse than one.
 
 A port is complete when it has all four:
 
-- the library — the equivalent of `Sekreto` and all fourteen provider
-  kinds
+- the library — the equivalent of `Sekreto`, the four built-in kinds in
+  its core, and the ten plugin kinds in its `plugins/` folder where
+  voxgig/plugin has its language (the `kind` switch over all fourteen
+  where it does not yet)
 - a conformance suite running `spec/sekreto.json` through that language's
   voxgig/omni runner, covering all fourteen groups
 - a CLI at the path `test/integration.sh` expects, printing exactly
@@ -162,7 +198,16 @@ statements in `test/integration.sh`.
   swallows typos.
 - **Store names come from `describe()`.** The default is everything before
   the first `:`, so a new provider gets a sensible store name for free —
-  but it means `describe()` must keep leading with the kind.
+  but it means `describe()` must keep leading with the kind. A spec'd
+  store's name is decided before the provider exists — `name` or `kind`
+  — and is also the plugin instance's tag, so it has to be a valid one.
+- **A Go workspace does not resolve a phantom version.** `testutil/go.mod`
+  requires omni and the library at `v0.0.0`, and `use` alone does not
+  stop the module-graph loader fetching a go.mod at that version. It
+  went unnoticed while the graph held only workspace modules; requiring
+  voxgig/plugin from the proxy made every workspace-mode build fail on
+  omni. The Makefile's `go.work` adds a `replace` pinned to the phantom
+  version, and stays out of any checked-in file.
 
 ## voxgig/omni
 

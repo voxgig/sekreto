@@ -10,9 +10,11 @@
 // known-answer cases that all ten ports must reproduce bit-for-bit, and
 // lets the integration mock recompute the signature server-side.
 //
-// A port of typescript/src/Sigv4.ts, which is canonical.
+// A port of typescript/plugins/sigv4.ts, which is canonical. It lives
+// with the aws plugin because it is the one place the library needs
+// HMAC-SHA256, and a built-in must not.
 
-package sekreto
+package aws
 
 import (
 	"crypto/hmac"
@@ -22,6 +24,9 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/voxgig/sekreto/go/plugins/httpjson"
+	"github.com/voxgig/sekreto/go/sekreto"
 )
 
 // Sigv4Input is one request to sign. The JSON tags match the shared
@@ -61,29 +66,6 @@ func hmacsha256(key []byte, text string) []byte {
 	return mac.Sum(nil)
 }
 
-// uriescape is RFC 3986 escaping, which is stricter than most standard
-// escapers: AWS wants everything but the unreserved characters escaped,
-// with uppercase hex - `!`, `'`, `(`, `)` and `*` included.
-func uriescape(text string) string {
-	const hexdigit = "0123456789ABCDEF"
-
-	var out strings.Builder
-
-	for _, char := range []byte(text) {
-		if 'A' <= char && 'Z' >= char || 'a' <= char && 'z' >= char ||
-			'0' <= char && '9' >= char ||
-			'-' == char || '_' == char || '.' == char || '~' == char {
-			out.WriteByte(char)
-		} else {
-			out.WriteByte('%')
-			out.WriteByte(hexdigit[char>>4])
-			out.WriteByte(hexdigit[char&0xf])
-		}
-	}
-
-	return out.String()
-}
-
 // percentdecode undoes percent-encoding without treating `+` as a space,
 // the way the canonical port's decodeURIComponent does. A malformed
 // escape is left as it came - there is nothing better to sign.
@@ -111,8 +93,8 @@ func canonicalquery(query string) string {
 			value = pair[eq+1:]
 		}
 		pairs = append(pairs, [2]string{
-			uriescape(percentdecode(key)),
-			uriescape(percentdecode(value)),
+			httpjson.Escape(percentdecode(key)),
+			httpjson.Escape(percentdecode(value)),
 		})
 	}
 
@@ -136,7 +118,7 @@ func canonicalquery(query string) string {
 func SigV4(input *Sigv4Input) (map[string]string, error) {
 	parsed, err := url.Parse(input.URL)
 	if nil != err {
-		return nil, fail("sekreto: sigv4: bad url: " + input.URL)
+		return nil, sekreto.Fail("sekreto: sigv4: bad url: " + input.URL)
 	}
 
 	date := input.Datetime

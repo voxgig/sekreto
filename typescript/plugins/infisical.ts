@@ -1,9 +1,15 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
-import { ProviderSpec, Provider, SekretoError, envkey } from './support'
-import { checkaddr } from './addr'
-import { fetchjson } from './http'
+import { ProviderSpec, Provider, SekretoError, envkey, providerplugin } from '../src/provider/support'
+import { checkaddr } from '../src/provider/addr'
+import { fetchjson } from './httpjson'
 
+/** Infisical.
+ *
+ * `api.token` reads the secret keyed `API_TOKEN` (Infisical's own
+ * convention is environment-style keys) at a secret path in one
+ * environment of a project. Auth is a token, or a universal-auth
+ * (machine identity) login with clientid/clientsecret. */
 export function infisicalprovider(options?: {
   addr?: string
   token?: string
@@ -90,15 +96,7 @@ export function infisicalprovider(options?: {
   }
 }
 
-/** Build a provider from its declarative form. */
 
-
-// Registering at import is what makes this module's presence the only
-// thing that decides whether the kind exists in a build.
-import { register } from './Registry'
-
-register({
-  name: 'infisical',
-  needs: ['fetch'],
-  define: (spec: ProviderSpec) => infisicalprovider(spec),
-})
+/** The plugin. Needs HTTPS. */
+export const infisical = providerplugin('infisical', (spec: ProviderSpec) =>
+  infisicalprovider(spec))

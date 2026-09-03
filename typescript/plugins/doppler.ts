@@ -1,9 +1,15 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
-import { ProviderSpec, Provider, SekretoError, envkey } from './support'
-import { checkaddr } from './addr'
-import { fetchjson } from './http'
+import { ProviderSpec, Provider, SekretoError, envkey, providerplugin } from '../src/provider/support'
+import { checkaddr } from '../src/provider/addr'
+import { fetchjson } from './httpjson'
 
+/** Doppler.
+ *
+ * The whole config is downloaded once - Doppler's own bulk endpoint -
+ * and answered from memory, like a remote .env: `api.token` is the
+ * `API_TOKEN` entry. A service token is config-scoped, so project and
+ * config are only needed with broader tokens. */
 export function dopplerprovider(options?: {
   token?: string
   project?: string
@@ -55,20 +61,7 @@ export function dopplerprovider(options?: {
   }
 }
 
-/** Infisical.
- *
- * `api.token` reads the secret keyed `API_TOKEN` (Infisical's own
- * convention is environment-style keys) at a secret path in one
- * environment of a project. Auth is a token, or a universal-auth
- * (machine identity) login with clientid/clientsecret. */
 
-
-// Registering at import is what makes this module's presence the only
-// thing that decides whether the kind exists in a build.
-import { register } from './Registry'
-
-register({
-  name: 'doppler',
-  needs: ['fetch'],
-  define: (spec: ProviderSpec) => dopplerprovider(spec),
-})
+/** The plugin. Needs HTTPS. */
+export const doppler = providerplugin('doppler', (spec: ProviderSpec) =>
+  dopplerprovider(spec))

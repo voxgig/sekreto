@@ -1,7 +1,8 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
-import { ProviderSpec, Provider, SekretoError, envkey, nodemod, parsedotenv } from './support'
+import { Provider, SekretoError, envkey, nodemod, parsedotenv } from './support'
 
+/** A `.env` file, read once, keyed exactly like the environment. */
 export function dotenvprovider(file: string, prefix?: string): Provider {
   let values: Record<string, string> | undefined
 
@@ -32,17 +33,3 @@ export function dotenvprovider(file: string, prefix?: string): Provider {
     describe: () => 'dotenv:' + file,
   }
 }
-
-/** Literal values, keyed like environment variables. The spec uses this
- * to test chain behaviour without touching the outside world. */
-
-
-// Registering at import is what makes this module's presence the only
-// thing that decides whether the kind exists in a build.
-import { register } from './Registry'
-
-register({
-  name: 'dotenv',
-  needs: ['fs'],
-  define: (spec: ProviderSpec) => dotenvprovider(spec.file || '.env', spec.prefix),
-})

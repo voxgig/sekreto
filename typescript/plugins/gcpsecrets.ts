@@ -1,9 +1,22 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
-import { ProviderSpec, Provider, SekretoError, flatname, nodemod, unbase64 } from './support'
-import { checkaddr } from './addr'
-import { fetchjson } from './http'
+import {
+  ProviderSpec, Provider, SekretoError, flatname, providerplugin, unbase64,
+} from '../src/provider/support'
+import { checkaddr } from '../src/provider/addr'
+import { fetchjson } from './httpjson'
 
+/** GCP Secret Manager.
+ *
+ * `api.token` reads secret `api_token` (dots flattened to `_`; Secret
+ * Manager ids have no hierarchy and reject dots), latest version. The
+ * token comes from config, then `GOOGLE_OAUTH_ACCESS_TOKEN`, then the
+ * GCE/GKE metadata server - so on Google's own platform no credential
+ * configuration is needed at all.
+ *
+ * The metadata call itself is plain http to a link-local host by
+ * platform design; no credential rides on it, so `checkaddr` guards the
+ * Secret Manager address instead. */
 export function gcpsecretsprovider(options?: {
   project?: string
   token?: string
@@ -96,25 +109,7 @@ export function gcpsecretsprovider(options?: {
   }
 }
 
-/** Azure Key Vault.
- *
- * `api.token` reads secret `api-token` (dots flattened to `-`; Key
- * Vault names allow nothing else), current version. The token comes
- * from config, then a client-credentials login when tenant/clientid/
- * clientsecret are given, then the IMDS managed-identity endpoint - so
- * on Azure's own platform no credential configuration is needed.
- *
- * As with GCP, the IMDS call is plain http to a link-local host by
- * platform design and carries no credential; the login and vault
- * addresses are `checkaddr`-guarded. */
 
-
-// Registering at import is what makes this module's presence the only
-// thing that decides whether the kind exists in a build.
-import { register } from './Registry'
-
-register({
-  name: 'gcpsecrets',
-  needs: ['fetch'],
-  define: (spec: ProviderSpec) => gcpsecretsprovider(spec),
-})
+/** The plugin. Needs HTTPS. */
+export const gcpsecrets = providerplugin('gcpsecrets', (spec: ProviderSpec) =>
+  gcpsecretsprovider(spec))

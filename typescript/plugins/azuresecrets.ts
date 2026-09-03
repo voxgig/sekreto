@@ -1,9 +1,20 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
-import { ProviderSpec, Provider, SekretoError, flatname } from './support'
-import { checkaddr } from './addr'
-import { fetchjson } from './http'
+import { ProviderSpec, Provider, SekretoError, flatname, providerplugin } from '../src/provider/support'
+import { checkaddr } from '../src/provider/addr'
+import { fetchjson } from './httpjson'
 
+/** Azure Key Vault.
+ *
+ * `api.token` reads secret `api-token` (dots flattened to `-`; Key
+ * Vault names allow nothing else), current version. The token comes
+ * from config, then a client-credentials login when tenant/clientid/
+ * clientsecret are given, then the IMDS managed-identity endpoint - so
+ * on Azure's own platform no credential configuration is needed.
+ *
+ * As with GCP, the IMDS call is plain http to a link-local host by
+ * platform design and carries no credential; the login and vault
+ * addresses are `checkaddr`-guarded. */
 export function azuresecretsprovider(options?: {
   vault?: string
   token?: string
@@ -122,20 +133,7 @@ export function azuresecretsprovider(options?: {
   }
 }
 
-/** 1Password, through a Connect server.
- *
- * The item titled `api.token` (titles keep their dots), in the named
- * vault. The value is the field with purpose PASSWORD, or the field
- * labelled `value`. A vault that cannot be found is an error - config
- * names it, so its absence is a broken store, not a missing secret. */
 
-
-// Registering at import is what makes this module's presence the only
-// thing that decides whether the kind exists in a build.
-import { register } from './Registry'
-
-register({
-  name: 'azuresecrets',
-  needs: ['fetch'],
-  define: (spec: ProviderSpec) => azuresecretsprovider(spec),
-})
+/** The plugin. Needs HTTPS. */
+export const azuresecrets = providerplugin('azuresecrets', (spec: ProviderSpec) =>
+  azuresecretsprovider(spec))

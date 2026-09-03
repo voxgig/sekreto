@@ -1,9 +1,9 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
-import { SekretoError } from './support'
-import { checkaddr } from './addr'
+import { SekretoError } from '../src/provider/support'
 
-// Moved here with fetchjson, its only consumer.
+/** How long any single vault round-trip may take before it is treated as
+ * unreachable. Ports carry the same bound. */
 const HTTP_TIMEOUT_MS = 10000
 
 /** How much of a response body will be read before the store is treated as
@@ -24,6 +24,11 @@ const HTTP_TIMEOUT_MS = 10000
  * starting. */
 const HTTP_MAXBODY = 8 * 1024 * 1024
 
+/** One JSON round-trip. Network failure is always an error - an
+ * unreachable store is a store that could not answer.
+ *
+ * Shared by every plugin that speaks HTTP, and by nothing in the core:
+ * a chain of built-ins never reaches this file. */
 export async function fetchjson(
   method: string,
   url: string,
@@ -89,18 +94,3 @@ export async function fetchjson(
 
   return { status: res.status, body: parsed }
 }
-
-/** HashiCorp Vault.
- *
- * KV v2 (the default): `api.token` reads `{addr}/v1/{mount}/data/api`
- * and takes the `token` field of `data.data`. KV v1 (`kv: 1`) reads
- * `{addr}/v1/{mount}/api` and takes the field of `data`. A 404 means
- * "not here" - a miss - so a vault can sit in a chain with fallbacks.
- *
- * A Vault Enterprise namespace rides the X-Vault-Namespace header, on
- * logins as well as reads.
- *
- * Instead of being handed a token, the provider can log in: Kubernetes
- * auth (the pod's service-account JWT, from its conventional path) or
- * AppRole. A failed login is an error, never a miss - it means this
- * store could not answer at all. */

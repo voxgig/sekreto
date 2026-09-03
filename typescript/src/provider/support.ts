@@ -1,4 +1,5 @@
-// The providers a Sekreto chains together.
+// What a provider is, what its declarative form looks like, and how a
+// provider kind becomes a voxgig/plugin definition.
 //
 // A provider answers one question: "do you have this secret?" It returns
 // the value, or undefined to mean "ask the next one". Nothing else about
@@ -12,6 +13,9 @@
 // missing configuration - is an ERROR: falling through there would
 // quietly reach for a weaker store.
 
+import { PluginError } from '@voxgig/plugin'
+import type { Definition } from '@voxgig/plugin'
+
 import {
   SekretoError,
   awsparam,
@@ -24,26 +28,19 @@ import {
 
 // NODE BUILTINS, LOADED ON FIRST USE.
 //
-// These were top-level imports, which made them a side effect of importing
-// sekreto AT ALL: `child_process`, `fs` and `path` entered the module graph
-// for a caller who only ever used a `memory` or `env` provider, and any
-// runtime lacking them failed at import time rather than at the point of
-// use. Sekreto.ts imports makeprovider from this module, so the chain
-// reached everything.
+// `fs` and `path` are what the two built-in file-reading providers need,
+// and they are loaded when a lookup runs rather than when sekreto is
+// imported: a caller who only ever configures `memory` or `env` never
+// evaluates them, and a runtime that lacks them fails at the point of
+// use rather than at import. The platform-dependent providers proper -
+// everything that opens a socket or spawns a process - are not in the
+// core at all; they are plugins (docs/design/plugin-providers.md).
 //
-// A plain require(), not `await import()`: dotenvprovider, fileprovider and
-// boruprovider all have SYNCHRONOUS lookups, and making them async to
-// accommodate a dynamic import would change observable behaviour for anyone
-// calling a provider directly. The package is CommonJS ("type":
+// A plain require(), not `await import()`: dotenvprovider and
+// fileprovider have SYNCHRONOUS lookups, and making them async to
+// accommodate a dynamic import would change observable behaviour for
+// anyone calling a provider directly. The package is CommonJS ("type":
 // "commonjs"), so require is available and synchronous.
-//
-// What this buys and what it does not: the builtins are no longer evaluated
-// at import time, so importing sekreto is safe in a runtime that lacks them
-// and a bundler can drop an unreachable provider along with its edge. It is
-// NOT by itself a complete browser story — a bundler still resolves a
-// require it can see statically, so a browser build wants conditional
-// exports ("browser" field) as well. That is a packaging change, tracked
-// separately.
 const nodemods: Record<string, any> = {}
 
 function nodemod<T = any>(name: string): T {
@@ -74,27 +71,14 @@ export type Provider = {
 }
 
 /** The declarative form of a provider, as used in config and in the
- * shared spec. */
+ * shared spec. `kind` names a built-in or a plugin; the rest is that
+ * kind's own configuration, and a plugin reads it as `inst.options`. */
 export type ProviderSpec = {
-  kind:
-    | 'env'
-    | 'dotenv'
-    | 'memory'
-    | 'file'
-    | 'hashicorp'
-    | 'boru'
-    | 'awssecrets'
-    | 'awsparams'
-    | 'gcpsecrets'
-    | 'azuresecrets'
-    | 'onepassword'
-    | 'doppler'
-    | 'infisical'
-    | 'secretspec'
+  kind: string
   /** The store name `Sekreto.getfrom` addresses. Defaults to `kind`. */
   name?: string
   prefix?: string
-  /** dotenv: the file to read. */
+  /** dotenv: the file to read. secretspec: the declaration file. */
   file?: string
   /** memory: literal values, keyed like environment variables. */
   values?: Record<string, string>
@@ -128,7 +112,8 @@ export type ProviderSpec = {
     roleid?: string
     secretid?: string
   }
-  /** boru: the executable to run (default `boru`). */
+  /** boru / secretspec: the executable to run (default: the kind's own
+   * name). */
   command?: string
   /** secretspec: the profile to read (`--profile`). */
   profile?: string
@@ -175,12 +160,64 @@ export type ProviderSpec = {
   path?: string
 }
 
-/** Environment variables: `api.token` from `API_TOKEN`. */
+// --- providers as voxgig/plugin definitions --------------------------
+
+/** The export key under which a provider definition publishes the
+ * provider it built. `Sekreto` reads `<ref>/provider` off the host. */
+export const PROVIDER_EXPORT = 'provider'
+
+/** The voxgig/plugin error code a SekretoError travels under when it is
+ * raised inside a definition's `define`.
+ *
+ * plugin wraps a code-less error raised by a callback as
+ * `plugin_define_failed`, and keeps an error that already carries a
+ * code. A provider that refuses its own configuration - `kv: 3`, a
+ * missing project - raises a SekretoError, and that message is pinned
+ * by the spec byte for byte, so it must come back out of the host
+ * exactly as it went in. `providerplugin` gives it this code on the way
+ * in; `Sekreto` turns it back into a SekretoError on the way out. */
+export const ERROR_CODE = 'sekreto_error'
+
+/** A provider kind, as a voxgig/plugin definition.
+ *
+ * This is the whole bridge between the two libraries. The definition's
+ * `name` is the `kind` a ProviderSpec names; its `define` reads the spec
+ * as `inst.options`, builds the provider with `make`, and exports it.
+ * Nothing runs at `activate`: a provider opens nothing until its first
+ * lookup, so there is nothing to capture - a provider that does hold a
+ * resource acquires it there and lets the instance scope unwind it.
+ *
+ * Every built-in and every plugin is made this way, so a custom
+ * provider kind is one call:
+ *
+ *     providerplugin('mystore', (spec) => mystoreprovider(spec.addr))
+ */
+export function providerplugin(
+  kind: string,
+  make: (spec: ProviderSpec) => Provider,
+): Definition {
+  return {
+    name: kind,
+    define: (inst: any) => {
+      let provider: Provider
+      try {
+        provider = make(inst.options as ProviderSpec)
+      } catch (err: any) {
+        if (err instanceof SekretoError) {
+          throw new PluginError(ERROR_CODE, err.message, { ref: inst.ref, cause: err.message })
+        }
+        throw err
+      }
+      inst.export(PROVIDER_EXPORT, provider)
+    },
+  }
+}
 
 export {
   SekretoError, awsparam, checkname, envkey, flatname, parsedotenv, vaultref,
 }
 export { nodemod }
+export type { Definition }
 
 /** Decode standard base64, or undefined when the text is not base64.
  *

@@ -103,10 +103,14 @@ unreadable without making them safer.
 
 AWS Signature V4, in-tree, pure: the caller passes the timestamp
 (`datetime: 'YYYYMMDDTHHMMSSZ'`), so the same input signs identically in
-every port. Input: `method`, `url`, `headers?`, `body?`, `service`,
-`region`, `keyid`, `secret`, `session?`, `datetime`. Output: the headers
-to attach — `authorization`, `x-amz-date`, and `x-amz-security-token`
-when a session token was given.
+every port. It lives with the `aws` plugin — `@voxgig/sekreto/plugins/aws`,
+`plugins/aws` in go, `voxgig_sekreto.plugins.aws` in python — because it
+is the one place the library needs HMAC-SHA256, and the core never does.
+
+Input: `method`, `url`, `headers?`, `body?`, `service`, `region`,
+`keyid`, `secret`, `session?`, `datetime`. Output: the headers to attach
+— `authorization`, `x-amz-date`, and `x-amz-security-token` when a
+session token was given.
 
 The spec pins known-answer cases, including a vector from AWS's own
 published SigV4 test suite, so a port that signs wrongly in any byte goes
@@ -122,12 +126,17 @@ resolved.
 ```ts
 new Sekreto({
   providers: (Provider | ProviderSpec)[],  // resolution order
+  plugins?: Definition[],                  // the kinds beyond the built-ins that providers may name
   cache?: boolean,                         // default true
 })
 ```
 
 A `providers` entry is either a live provider or its declarative form —
 the same shape used in `spec/sekreto.json` and in an app's config file.
+A spec names a `kind`: one of the four built-ins, or a plugin passed in
+`plugins` (see [Plugins](#plugins)). A kind that was passed in neither
+way raises `sekreto: unknown provider kind: <kind>` before anything is
+built.
 
 ### Transparent — the chain answers
 
@@ -167,30 +176,150 @@ one never alias.
 | `sources()` | a description of each provider, in resolution order |
 | `redact(text)` | `text` with every value *this* Sekreto resolved hidden |
 | `refresh()` | drop cached values, so the next `get` asks again |
+| `close()` | tear the chain down: every store's plugin instance is deactivated and unloaded, in reverse; afterwards nothing answers, and `redact` still knows every value ever resolved |
+| `host` | the voxgig/plugin host the stores are instances of — `host.list()` names each store's ref and status; nothing on it advances the chain |
+| `catalog` | the definitions this Sekreto can build: the built-ins plus `plugins` |
 
 `get` and `try` raise `sekreto: invalid name: <name>` before asking any
 provider, so a typo fails the same way whether or not a vault is reachable.
 
 ### Per-language names
 
-| | optional lookup | directed | redact-resolved |
-|---|---|---|---|
-| typescript, javascript | `try` | `getfrom` / `tryfrom` | `redact` |
-| python | `try_` | `getfrom` / `tryfrom` | `redact` |
-| ruby | `try` | `getfrom` / `tryfrom` | `redact` |
-| php | `try` | `getfrom` / `tryfrom` | `redact` |
-| perl | `try` | `getfrom` / `tryfrom` | `redactall` |
-| go | `Try` → `(value, found, err)` | `GetFrom` / `TryFrom` | `Redact` |
-| rust | `trysecret` → `Option` | `getfrom` / `tryfrom` | `redact` |
-| java | `tryget` | `getfrom` / `tryfrom` | `redact` |
-| kotlin | `tryget`, and `` `try` `` | `getfrom` / `tryfrom` | `redact` |
-| csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` |
+| | optional lookup | directed | redact-resolved | construct |
+|---|---|---|---|---|
+| typescript, javascript | `try` | `getfrom` / `tryfrom` | `redact` | `new Sekreto({ plugins, providers })` |
+| python | `try_` | `getfrom` / `tryfrom` | `redact` | `Sekreto({'plugins': …, 'providers': …})` |
+| ruby | `try` | `getfrom` / `tryfrom` | `redact` | |
+| php | `try` | `getfrom` / `tryfrom` | `redact` | |
+| perl | `try` | `getfrom` / `tryfrom` | `redactall` | |
+| go | `Try` → `(value, found, err)` | `GetFrom` / `TryFrom` | `Redact` | `New(&Options{Plugins, Providers}) (*Sekreto, error)` |
+| rust | `trysecret` → `Option` | `getfrom` / `tryfrom` | `redact` | |
+| java | `tryget` | `getfrom` / `tryfrom` | `redact` | |
+| kotlin | `tryget`, and `` `try` `` | `getfrom` / `tryfrom` | `redact` | |
+| csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` | |
+
+Go's `New` returns an error, because building a chain can fail — an
+unknown kind, a store name that is not a valid tag, a provider refusing
+its configuration — and Go has nothing to throw. Its `Options.Providers`
+is a list of specs; a spec may carry a `Provider` already built, which is
+how a custom provider that is not a plugin joins the chain.
 
 `try` is a keyword in Java and Kotlin, and Python needs to avoid shadowing
 the statement, hence `tryget` and `try_`. Kotlin can escape a keyword with
 backticks, so it carries `` `try` `` as well. Go and Rust have no exceptions, so
 they answer with `(value, found, error)` and `Result<Option<..>>`
 respectively rather than throwing.
+
+---
+
+## Plugins
+
+Four provider kinds are **built in** to every port: `env`, `memory`,
+`dotenv` and `file` — the ones that read at most a local file, and need
+no socket, no TLS, no crypto and no child process. Every other kind is a
+**plugin**: a [voxgig/plugin](https://github.com/voxgig/plugin)
+definition in the port's `plugins/` folder, which the calling project
+hands to `Sekreto` at construction.
+
+| plugin | kinds | needs | typescript | go | python |
+|---|---|---|---|---|---|
+| `hashicorp` | `hashicorp` | HTTPS, fs | `@voxgig/sekreto/plugins/hashicorp` → `hashicorp` | `plugins/hashicorp` → `hashicorp.Plugin` | `voxgig_sekreto.plugins.hashicorp` → `hashicorp` |
+| `boru` | `boru` | child process, or HTTPS | `…/plugins/boru` → `boru` | `plugins/boru` → `boru.Plugin` | `…plugins.boru` → `boru` |
+| `aws` | `awssecrets`, `awsparams` | HTTPS, HMAC-SHA256 | `…/plugins/aws` → `awssecrets`, `awsparams` | `plugins/aws` → `aws.Secrets`, `aws.Params` | `…plugins.aws` → `awssecrets`, `awsparams` |
+| `gcpsecrets` | `gcpsecrets` | HTTPS | `…/plugins/gcpsecrets` → `gcpsecrets` | `plugins/gcpsecrets` → `gcpsecrets.Plugin` | `…plugins.gcpsecrets` → `gcpsecrets` |
+| `azuresecrets` | `azuresecrets` | HTTPS | `…/plugins/azuresecrets` → `azuresecrets` | `plugins/azuresecrets` → `azuresecrets.Plugin` | `…plugins.azuresecrets` → `azuresecrets` |
+| `onepassword` | `onepassword` | HTTPS | `…/plugins/onepassword` → `onepassword` | `plugins/onepassword` → `onepassword.Plugin` | `…plugins.onepassword` → `onepassword` |
+| `doppler` | `doppler` | HTTPS | `…/plugins/doppler` → `doppler` | `plugins/doppler` → `doppler.Plugin` | `…plugins.doppler` → `doppler` |
+| `infisical` | `infisical` | HTTPS | `…/plugins/infisical` → `infisical` | `plugins/infisical` → `infisical.Plugin` | `…plugins.infisical` → `infisical` |
+| `secretspec` | `secretspec` | child process | `…/plugins/secretspec` → `secretspec` | `plugins/secretspec` → `secretspec.Plugin` | `…plugins.secretspec` → `secretspec` |
+| *the full set* | all ten | everything | `@voxgig/sekreto/plugins` → `allplugins` | `plugins` → `plugins.All()` | `voxgig_sekreto.plugins` → `ALL` |
+
+The full set is for the CLI, the conformance suite, and an app whose
+chain is decided at run time. Reaching one plugin through it reaches
+every other, which is the cost the split exists to remove: an app
+imports the kinds it configures.
+
+**Loading is static.** There is no dynamic discovery, no registry a
+module adds itself to at import, and no module loaded by name: the
+plugins a `Sekreto` can build are exactly the ones its constructor was
+handed, so what a build carries is decided where a compiler can see it.
+That is the same in a language with dynamic loading (typescript, python)
+as in one without (go), on purpose — the set of stores an app can reach
+is not something to discover at run time.
+
+### What a plugin is
+
+A sekreto plugin is a voxgig/plugin `Definition` whose `name` is the
+provider `kind` and whose `define` builds the provider from the
+instance's options (the spec) and exports it under the key `provider`.
+Every built-in and every shipped plugin is made by one helper, and so is
+a custom kind:
+
+```ts
+import { providerplugin } from '@voxgig/sekreto'
+
+export const mystore = providerplugin('mystore', (spec) => ({
+  lookup: async (name) => ...,
+  describe: () => 'mystore:' + spec.addr,
+}))
+```
+
+```go
+var Plugin = sekreto.ProviderPlugin("mystore", func(spec *sekreto.ProviderSpec) (sekreto.Provider, error) {
+    return &MyStore{Addr: spec.Addr}, nil
+})
+```
+
+```python
+mystore = providerplugin('mystore', lambda spec: MyStore(spec.get('addr')))
+```
+
+A plugin that names a built-in kind replaces it — how a host substitutes
+an implementation, and never an accident, because the four names are
+documented.
+
+### What the host holds
+
+Each chain entry built from a spec is an **instance** on `secrets.host`,
+the voxgig/plugin host, and `host.list()` reads like the chain: the
+instance is `kind` for a store named after its kind and `kind$store`
+otherwise, so `{ kind: 'hashicorp', name: 'prod' }` is `hashicorp$prod`.
+Two providers may share a store name — a directed read walks both — but
+an instance ref may not, so a repeat gets a numbered tag from the host
+(`memory`, then `memory$1`) and keeps its store name. A store name must
+be a valid plugin tag (`[a-zA-Z0-9.~_-]+`), or construction raises
+`sekreto: invalid store name: <name>`.
+
+Nothing is contacted at construction: `define` builds the provider and
+`activate` takes the instance live, and a provider opens nothing until
+its first lookup. `close()` deactivates and unloads every instance in
+reverse, which is where a provider that acquired a resource at
+activation releases it.
+
+A provider that refuses its own configuration — `kv: 3`, a missing
+project — raises a `SekretoError` from inside `define`. voxgig/plugin
+keeps an error that carries a code and wraps one that does not, so the
+helper gives a `SekretoError` the code `sekreto_error` on the way in and
+`Sekreto` turns it back into the same `SekretoError` on the way out,
+byte for byte, because the spec pins those messages. Any other error a
+`define` raises is the host's to report, as `plugin_define_failed`.
+
+### Per language
+
+| | plugins live in | the dependency | loading one | loading all |
+|---|---|---|---|---|
+| typescript | `typescript/plugins/` | `@voxgig/plugin` (npm) | `import { hashicorp } from '@voxgig/sekreto/plugins/hashicorp'` | `import { allplugins } from '@voxgig/sekreto/plugins'` |
+| go | `go/plugins/<kind>/` | `github.com/voxgig/plugin/go` (module proxy) | `import ".../go/plugins/hashicorp"` → `hashicorp.Plugin` | `import ".../go/plugins"` → `plugins.All()` |
+| python | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git, until it is on PyPI) | `from voxgig_sekreto.plugins.hashicorp import hashicorp` | `from voxgig_sekreto.plugins import ALL` |
+| the other nine ports | — | — | a `kind` switch over every kind, until voxgig/plugin has their language | |
+
+In Go the split is a *linking* boundary: a plugin package not imported
+is not in the binary, and the core package imports no `net/http`, no
+`crypto` and no `os/exec`. In TypeScript it is a *bundling* one: the
+core reaches no plugin module, so a bundler drops what a chain does not
+name. In Python, where importing is neither, it governs which kinds a
+`Sekreto` can name and what `import voxgig_sekreto` pulls in — the core,
+the four built-ins and `voxgig_plugin`, and no module under `plugins/`.
 
 ---
 
@@ -207,7 +336,7 @@ type Provider = {
 }
 ```
 
-### `env`
+### `env` — built in
 
 Environment variables, via `envkey`.
 
@@ -217,7 +346,7 @@ Environment variables, via `envkey`.
 
 `describe()` → `env` or `env:<prefix>`
 
-### `dotenv`
+### `dotenv` — built in
 
 A `.env` file, read once on first use and keyed exactly like the
 environment. **A missing file is not an error** — it means "no secrets
@@ -229,7 +358,7 @@ here", so a chain works unchanged on a machine that has no `.env`.
 
 `describe()` → `dotenv:<file>`
 
-### `memory`
+### `memory` — built in
 
 Literal values, keyed like environment variables. Used by the shared spec
 to test chain behaviour without touching the outside world, and useful for
@@ -241,7 +370,7 @@ defaults in an app.
 
 `describe()` → `memory` or `memory:<prefix>`
 
-### `file` — a mounted-secret directory
+### `file` — a mounted-secret directory — built in
 
 One secret per file, keyed like the environment: `api.token` reads
 `<dir>/API_TOKEN`. That is the shape of a mounted Kubernetes Secret, a
@@ -258,7 +387,7 @@ tools that write these files disagree about it.
 
 `describe()` → `file:<dir>`
 
-### `hashicorp` — HashiCorp Vault
+### `hashicorp` — HashiCorp Vault — plugin `hashicorp`
 
 ```ts
 {
@@ -321,7 +450,7 @@ trusts the Mozilla root set via `rustls`, and `SEKRETO_CA_BUNDLE` names a PEM
 bundle of extra roots for an internal CA — additive, so a wrong path weakens
 nothing, it just adds no roots.
 
-### `boru` — a boru vault
+### `boru` — a boru vault — plugin `boru`
 
 ```ts
 {
@@ -382,7 +511,7 @@ allowed case.
 > the secret in the child's environment, where sekreto's `env` provider
 > finds it with no sekreto configuration at all.
 
-### `awssecrets` / `awsparams` — AWS
+### `awssecrets` / `awsparams` — AWS — plugin `aws`
 
 ```ts
 { kind: 'awssecrets', region?: string, keyid?: string, secret?: string,
@@ -409,7 +538,7 @@ itself, under the conventional field `value`. A
 `describe()` → `awssecrets:<region>` / `awsparams:<region><prefix>`
 (config values only, so the description is environment-independent)
 
-### `gcpsecrets` — GCP Secret Manager
+### `gcpsecrets` — GCP Secret Manager — plugin `gcpsecrets`
 
 ```ts
 { kind: 'gcpsecrets', project: string, token?: string, addr?: string,
@@ -425,7 +554,7 @@ long-running process keeps working past the first hour. A 404 is a miss.
 
 `describe()` → `gcpsecrets:<project>`
 
-### `azuresecrets` — Azure Key Vault
+### `azuresecrets` — Azure Key Vault — plugin `azuresecrets`
 
 ```ts
 { kind: 'azuresecrets', vault: string, token?: string, tenant?: string,
@@ -443,7 +572,7 @@ before their `expires_in` runs out. A 404 is a miss.
 
 `describe()` → `azuresecrets:<vault>`
 
-### `onepassword` — 1Password, through a Connect server
+### `onepassword` — 1Password, through a Connect server — plugin `onepassword`
 
 ```ts
 { kind: 'onepassword', addr: string, token: string, vault: string }
@@ -456,7 +585,7 @@ there raises — config names it, so its absence is a broken store.
 
 `describe()` → `onepassword:<vault>`
 
-### `doppler` — Doppler
+### `doppler` — Doppler — plugin `doppler`
 
 ```ts
 { kind: 'doppler', token: string, project?: string, config?: string,
@@ -470,7 +599,7 @@ answered from memory, like a remote `.env`: `api.token` is the
 
 `describe()` → `doppler`, or `doppler:<project>/<config>`
 
-### `infisical` — Infisical
+### `infisical` — Infisical — plugin `infisical`
 
 ```ts
 { kind: 'infisical', addr?: string, token?: string, clientid?: string,
@@ -485,7 +614,7 @@ clientid/clientsecret. A 404 is a miss.
 
 `describe()` → `infisical:<project>/<environment>`
 
-### `secretspec` — SecretSpec
+### `secretspec` — SecretSpec — plugin `secretspec`
 
 ```
 { kind: 'secretspec', command?: string, file?: string, profile?: string,
@@ -544,7 +673,8 @@ every port:
 | `sekreto: unknown secret: <name>` | no provider had it |
 | `sekreto: unknown secret: <store>:<name>` | a directed read, and that store did not have it |
 | `sekreto: unknown store: <store>` | a directed read naming a store not in the chain |
-| `sekreto: unknown provider kind: <kind>` | a spec naming no known provider |
+| `sekreto: unknown provider kind: <kind> (available: …)` | a spec naming a kind that is neither built in nor in `plugins` — and, for a kind sekreto ships as a plugin, which plugin to pass |
+| `sekreto: invalid store name: <name>` | a spec `name` that is not a valid plugin tag |
 | `sekreto: hashicorp error: <status>: <url>` | Vault answered neither 200 nor 404 |
 | `sekreto: refusing to send a token in plaintext to <addr> (use https)` | a remote plaintext Vault address |
 | `sekreto: not an http(s) address: <addr>` | a Vault address of some other scheme |

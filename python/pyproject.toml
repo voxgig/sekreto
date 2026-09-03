@@ -1,13 +1,18 @@
 [project]
 name = "voxgig-sekreto"
-version = "0.1.0"
+version = "0.2.0"
 description = "sekreto: one interface for secrets, wherever they live"
 requires-python = ">=3.9"
-dependencies = []
+# The one dependency: voxgig/plugin's python port, which is not on PyPI
+# yet, so it is declared from git. Every provider kind is a plugin
+# definition, and the built-in ones are hosted the same way as the rest.
+dependencies = [
+    "voxgig-plugin @ git+https://github.com/voxgig/plugin.git#subdirectory=python",
+]
 
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["voxgig_sekreto"]
+packages = ["voxgig_sekreto", "voxgig_sekreto.plugins"]

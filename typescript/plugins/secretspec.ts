@@ -1,6 +1,8 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
-import { ProviderSpec, Provider, SekretoError, envkey, nodemod } from './support'
+import {
+  ProviderSpec, Provider, SekretoError, envkey, nodemod, providerplugin,
+} from '../src/provider/support'
 
 /** SecretSpec — https://secretspec.dev
  *
@@ -80,20 +82,14 @@ function secretspecmiss(why: string, key: string): boolean {
   return why.includes("Secret '" + key + "' not found")
 }
 
-// Registering at import is what makes this module's presence the only
-// thing that decides whether the kind exists in a build.
-import { register } from './Registry'
-
-register({
-  name: 'secretspec',
-  needs: ['node:child_process'],
-  define: (spec: ProviderSpec) =>
-    secretspecprovider({
-      command: spec.command,
-      file: spec.file,
-      profile: spec.profile,
-      backend: spec.backend,
-      reason: spec.reason,
-      prefix: spec.prefix,
-    }),
-})
+/** The plugin. Needs a child process. */
+export const secretspec = providerplugin('secretspec', (spec: ProviderSpec) =>
+  secretspecprovider({
+    command: spec.command,
+    file: spec.file,
+    profile: spec.profile,
+    backend: spec.backend,
+    reason: spec.reason,
+    prefix: spec.prefix,
+  }),
+)

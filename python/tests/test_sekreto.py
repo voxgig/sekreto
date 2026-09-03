@@ -8,17 +8,31 @@ import os
 import sys
 import unittest
 
-from voxgig_sekreto import (
+from pluginhome import pluginpath
+
+pluginpath()
+
+from voxgig_sekreto import (  # noqa: E402
     Sekreto,
     awsparam,
     envkey,
     flatname,
     parsedotenv,
     redact,
-    sigv4,
     validname,
     vaultref,
 )
+
+# THE CONFORMANCE SUITE LOADS EVERY PLUGIN, deliberately. The spec is the
+# contract for the whole library and exercises all fourteen provider
+# kinds, so this suite hands the full set to every Sekreto it builds.
+# That is the split working, not a leak of it: a CONSUMER passes the
+# kinds it configures and imports nothing else, while the suite that
+# proves all fourteen behave has to have all fourteen.
+#
+# `sigv4` lives with the aws plugin - it is the crypto edge, and only the
+# two aws kinds use it (docs/design/plugin-providers.md).
+from voxgig_sekreto.plugins import ALL, sigv4  # noqa: E402
 
 
 def specfile(name):
@@ -57,7 +71,7 @@ from voxgig_omni import makeRunner  # noqa: E402
 
 def chainof(spec):
     """Build a Sekreto from the spec's declarative chain description."""
-    return Sekreto({'providers': spec['chain'], 'cache': False})
+    return Sekreto({'plugins': ALL, 'providers': spec['chain'], 'cache': False})
 
 
 R = makeRunner(specfile('sekreto.json'))('sekreto')

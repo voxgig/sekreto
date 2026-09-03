@@ -1,22 +1,36 @@
 # voxgig_sekreto - one interface for secrets, wherever they live.
+#
+# THE CORE SURFACE: the chain, the four built-in provider kinds, and the
+# means of adding a fifth.
+#
+# The built-ins are the kinds that read at most a local file - env,
+# memory, dotenv, file. Everything that opens a socket, spawns a process
+# or signs a request is a PLUGIN, is not imported by this package, and is
+# handed to `Sekreto` by the calling project:
+#
+#     from voxgig_sekreto import Sekreto
+#     from voxgig_sekreto.plugins.hashicorp import hashicorp
+#
+#     secrets = Sekreto({
+#         'plugins': [hashicorp],
+#         'providers': [{'kind': 'env'}, {'kind': 'hashicorp', 'addr': addr, 'token': token}],
+#     })
+#
+# or, for every kind at once, `ALL` from `voxgig_sekreto.plugins`. See
+# docs/design/plugin-providers.md.
 
+from .addr import checkaddr, safeaddr
 from .providers import (
-    AwsparamsProvider,
-    AwssecretsProvider,
-    AzuresecretsProvider,
-    BoruProvider,
-    DopplerProvider,
+    BUILTINS,
+    ERROR_CODE,
+    KINDS,
+    PROVIDER_EXPORT,
     DotenvProvider,
     EnvProvider,
     FileProvider,
-    GcpsecretsProvider,
-    InfisicalProvider,
     MemoryProvider,
-    OnepasswordProvider,
     Provider,
-    HashicorpProvider,
-    SecretspecProvider,
-    makeprovider,
+    providerplugin,
 )
 from .sekreto import (
     Sekreto,
@@ -30,34 +44,28 @@ from .sekreto import (
     validname,
     vaultref,
 )
-from .sigv4 import sigv4
 
 __all__ = [
-    'AwsparamsProvider',
-    'AwssecretsProvider',
-    'AzuresecretsProvider',
-    'BoruProvider',
-    'DopplerProvider',
+    'BUILTINS',
+    'ERROR_CODE',
+    'KINDS',
+    'PROVIDER_EXPORT',
     'DotenvProvider',
     'EnvProvider',
     'FileProvider',
-    'GcpsecretsProvider',
-    'InfisicalProvider',
     'MemoryProvider',
-    'OnepasswordProvider',
     'Provider',
     'Sekreto',
     'SekretoError',
-    'HashicorpProvider',
-    'SecretspecProvider',
     'awsparam',
+    'checkaddr',
     'envkey',
     'flatname',
-    'makeprovider',
     'parsedotenv',
+    'providerplugin',
     'redact',
+    'safeaddr',
     'sekreto',
-    'sigv4',
     'validname',
     'vaultref',
 ]

@@ -155,6 +155,7 @@ go/go.work.sum
 
 # CI checkouts of sibling repos
 .omni/
+.plugin/
 .boru/
 boru-bin
 

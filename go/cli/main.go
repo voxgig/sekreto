@@ -23,6 +23,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/voxgig/sekreto/go/plugins"
 	"github.com/voxgig/sekreto/go/sekreto"
 )
 
@@ -213,13 +214,18 @@ func run() int {
 		}
 	}
 
-	providers, names, err := sekreto.MakeNamedChain(chainfor(source))
+	// THE FULL SET, passed to New. The CLI is asked for any provider kind
+	// on the command line, so it is the one consumer that legitimately
+	// wants all ten plugins; an app passes the one or two it configures,
+	// and links nothing else.
+	secrets, err := sekreto.New(&sekreto.Options{
+		Plugins:   plugins.All(),
+		Providers: chainfor(source),
+	})
 	if nil != err {
 		fmt.Fprintln(os.Stderr, "sekreto-cli: "+err.Error())
 		return 2
 	}
-
-	secrets := sekreto.NewNamed(providers, names, false)
 
 	var token string
 	if "" == store {

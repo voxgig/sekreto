@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	omni "github.com/voxgig/omni/go"
+	"github.com/voxgig/sekreto/go/plugins"
+	"github.com/voxgig/sekreto/go/plugins/aws"
 	"github.com/voxgig/sekreto/go/sekreto"
 )
 
@@ -44,6 +46,13 @@ func specfile(t *testing.T, name string) string {
 
 // The spec describes a provider chain as plain JSON. Re-encoding is the
 // shortest honest route from omni's `any` to the library's typed specs.
+//
+// THE CONFORMANCE SUITE LOADS EVERY PLUGIN, deliberately. The spec is the
+// contract for the whole library and exercises all fourteen provider
+// kinds, so this suite hands the full set to every Sekreto it builds.
+// That is the split working, not a leak of it: a CONSUMER passes the
+// kinds it configures and links nothing else, while the suite that
+// proves all fourteen behave has to have all fourteen.
 func chainof(value any) (*sekreto.Sekreto, error) {
 	entry, is := value.(map[string]any)
 	if !is {
@@ -60,12 +69,11 @@ func chainof(value any) (*sekreto.Sekreto, error) {
 		return nil, err
 	}
 
-	providers, names, err := sekreto.MakeNamedChain(specs)
-	if nil != err {
-		return nil, err
-	}
-
-	return sekreto.NewNamed(providers, names, true), nil
+	return sekreto.New(&sekreto.Options{
+		Plugins:   plugins.All(),
+		Providers: specs,
+		NoCache:   true,
+	})
 }
 
 func text(value any) string {
@@ -111,12 +119,14 @@ var (
 			return nil, err
 		}
 
-		var input sekreto.Sigv4Input
+		// SigV4 lives with the aws plugin - it is the crypto edge, and
+		// only the two aws kinds use it (docs/design/plugin-providers.md).
+		var input aws.Sigv4Input
 		if err := json.Unmarshal(data, &input); nil != err {
 			return nil, err
 		}
 
-		signed, err := sekreto.SigV4(&input)
+		signed, err := aws.SigV4(&input)
 		if nil != err {
 			return nil, err
 		}

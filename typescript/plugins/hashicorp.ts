@@ -1,9 +1,25 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
-import { ProviderSpec, Provider, SekretoError, checkname, nodemod, vaultref } from './support'
-import { checkaddr } from './addr'
-import { fetchjson } from './http'
+import {
+  ProviderSpec, Provider, SekretoError, nodemod, providerplugin, vaultref,
+} from '../src/provider/support'
+import { checkaddr } from '../src/provider/addr'
+import { fetchjson } from './httpjson'
 
+/** HashiCorp Vault.
+ *
+ * KV v2 (the default): `api.token` reads `{addr}/v1/{mount}/data/api`
+ * and takes the `token` field of `data.data`. KV v1 (`kv: 1`) reads
+ * `{addr}/v1/{mount}/api` and takes the field of `data`. A 404 means
+ * "not here" - a miss - so a vault can sit in a chain with fallbacks.
+ *
+ * A Vault Enterprise namespace rides the X-Vault-Namespace header, on
+ * logins as well as reads.
+ *
+ * Instead of being handed a token, the provider can log in: Kubernetes
+ * auth (the pod's service-account JWT, from its conventional path) or
+ * AppRole. A failed login is an error, never a miss - it means this
+ * store could not answer at all. */
 export function hashicorpprovider(
   addr: string,
   token: string,
@@ -114,43 +130,13 @@ export function hashicorpprovider(
   }
 }
 
-/** A boru vault (https://github.com/boru-lang/boru).
- *
- * Two ways in, both boru's own.
- *
- * With no `addr`, the CLI: `boru vault get --reveal <alias>` prints the
- * secret on stdout and nothing else. The passphrase is read by boru
- * itself from `BORU_VAULT_PASSPHRASE`; sekreto never accepts it as
- * config and never puts it on a command line, where it would show up in
- * the process table.
- *
- * With an `addr`, boru's wire protocol: `boru vault serve` publishes a
- * read-only, HashiCorp-shaped provision API (boru's
- * design/VAULT-WIRE-PROTOCOL.0.md), authenticated by a capability token
- * from `boru vault grant`. A sekreto name is already a valid boru
- * alias, and boru aliases keep their dots, so `api.token` is the single
- * path segment `api.token` - not the `api`/`token` split a HashiCorp KV
- * gets. The value is the `value` field. A 404 is a miss; anything else
- * the server refuses (a revoked capability, a sealed vault) is an
- * error.
- *
- * boru's `vault proxy` and `vault mcp` remain out of bounds: they are a
- * credential *broker*, built precisely so the caller never receives the
- * credential. `vault serve` is the provision endpoint, built to hand
- * the value back - that is the one sekreto uses. */
 
-
-// Registering at import is what makes this module's presence the only
-// thing that decides whether the kind exists in a build.
-import { register } from './Registry'
-
-register({
-  name: 'hashicorp',
-  needs: ['fetch', 'fs'],
-  define: (spec: ProviderSpec) => hashicorpprovider(spec.addr || '', spec.token || '', {
+/** The plugin. Needs HTTPS, and the filesystem for a kubernetes JWT. */
+export const hashicorp = providerplugin('hashicorp', (spec: ProviderSpec) =>
+  hashicorpprovider(spec.addr || '', spec.token || '', {
     mount: spec.mount,
     kv: spec.kv,
     vaultnamespace: spec.vaultnamespace,
     auth: spec.auth,
   }),
-})
+)

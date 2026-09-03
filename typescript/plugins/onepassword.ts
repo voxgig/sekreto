@@ -1,11 +1,17 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
 import {
-  ProviderSpec, Provider, SekretoError, checkname, vaultref,
-} from './support'
-import { checkaddr } from './addr'
-import { fetchjson } from './http'
+  ProviderSpec, Provider, SekretoError, checkname, providerplugin,
+} from '../src/provider/support'
+import { checkaddr } from '../src/provider/addr'
+import { fetchjson } from './httpjson'
 
+/** 1Password, through a Connect server.
+ *
+ * The item titled `api.token` (titles keep their dots), in the named
+ * vault. The value is the field with purpose PASSWORD, or the field
+ * labelled `value`. A vault that cannot be found is an error - config
+ * names it, so its absence is a broken store, not a missing secret. */
 export function onepasswordprovider(options?: {
   addr?: string
   token?: string
@@ -98,20 +104,7 @@ export function onepasswordprovider(options?: {
   }
 }
 
-/** Doppler.
- *
- * The whole config is downloaded once - Doppler's own bulk endpoint -
- * and answered from memory, like a remote .env: `api.token` is the
- * `API_TOKEN` entry. A service token is config-scoped, so project and
- * config are only needed with broader tokens. */
 
-
-// Registering at import is what makes this module's presence the only
-// thing that decides whether the kind exists in a build.
-import { register } from './Registry'
-
-register({
-  name: 'onepassword',
-  needs: ['fetch'],
-  define: (spec: ProviderSpec) => onepasswordprovider(spec),
-})
+/** The plugin. Needs HTTPS. */
+export const onepassword = providerplugin('onepassword', (spec: ProviderSpec) =>
+  onepasswordprovider(spec))

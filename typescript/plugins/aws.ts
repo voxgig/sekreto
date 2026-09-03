@@ -1,11 +1,13 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
 import {
-  ProviderSpec, Provider, SekretoError, awsparam, flatname, vaultref, unbase64 } from './support'
-import { checkaddr } from './addr'
-import { sigv4 } from '../Sigv4'
-import { fetchjson } from './http'
+  ProviderSpec, Provider, SekretoError, awsparam, providerplugin, vaultref, unbase64,
+} from '../src/provider/support'
+import { checkaddr } from '../src/provider/addr'
+import { sigv4 } from './sigv4'
+import { fetchjson } from './httpjson'
 
+/** The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now. */
 function awsnow(): string {
   return new Date()
     .toISOString()
@@ -189,31 +191,16 @@ export function awsparamsprovider(options?: Awsopts): Provider {
   }
 }
 
-/** GCP Secret Manager.
- *
- * `api.token` reads secret `api_token` (dots flattened to `_`; Secret
- * Manager ids have no hierarchy and reject dots), latest version. The
- * token comes from config, then `GOOGLE_OAUTH_ACCESS_TOKEN`, then the
- * GCE/GKE metadata server - so on Google's own platform no credential
- * configuration is needed at all.
- *
- * The metadata call itself is plain http to a link-local host by
- * platform design; no credential rides on it, so `checkaddr` guards the
- * Secret Manager address instead. */
 
+/** The two plugins. Both need HTTPS and HMAC-SHA256 - the one crypto
+ * dependency in the library, which is why this is a plugin rather than
+ * a built-in: `sigv4` is exported from here and from nowhere in the
+ * core. */
+export const awssecrets = providerplugin('awssecrets', (spec: ProviderSpec) =>
+  awssecretsprovider(spec))
 
-// Registering at import is what makes this module's presence the only
-// thing that decides whether the kind exists in a build.
-import { register } from './Registry'
+export const awsparams = providerplugin('awsparams', (spec: ProviderSpec) =>
+  awsparamsprovider(spec))
 
-register({
-  name: 'awssecrets',
-  needs: ['fetch', 'crypto'],
-  define: (spec: ProviderSpec) => awssecretsprovider(spec),
-})
-
-register({
-  name: 'awsparams',
-  needs: ['fetch', 'crypto'],
-  define: (spec: ProviderSpec) => awsparamsprovider(spec),
-})
+export { sigv4 }
+export type { Sigv4Input, Sigv4Output } from './sigv4'

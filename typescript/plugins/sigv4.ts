@@ -13,10 +13,11 @@
 
 // node:crypto is loaded ON FIRST USE, not at import time.
 //
-// Providers.ts imports sigv4 for the AWS providers, and Sekreto.ts imports
-// Providers — so a top-level `node:crypto` here put it in the module graph
-// of every sekreto consumer, including one that never signs anything.
-// Deferring keeps this module pure until an AWS provider actually runs.
+// This module lives under plugins/ and is reached only through the aws
+// plugin, so the core never sees it at all; deferring the builtin on top
+// of that keeps importing the plugin free of side effects too, and lets
+// the sigv4 conformance group run on a runtime that has crypto without
+// anything else in the module graph having asked for it.
 //
 // require(), not `await import()`: these helpers are synchronous and are
 // called from synchronous signing code. The package is CommonJS.
