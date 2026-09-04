@@ -201,11 +201,11 @@ let writeall (chan : channel) (text : string) (url : string) : unit =
   done
 
 (* The offset of `needle` in `hay`, if it is there. *)
-let findbytes (hay : Bytes.t) (upto : int) (needle : string) : int option =
-  let nlen = String.length needle in
+let findbytes (hay : string) (needle : string) : int option =
+  let hlen = String.length hay and nlen = String.length needle in
   let rec walk index =
-    if index + nlen > upto then None
-    else if Bytes.sub_string hay index nlen = needle then Some index
+    if index + nlen > hlen then None
+    else if String.sub hay index nlen = needle then Some index
     else walk (index + 1)
   in
   walk 0
@@ -301,35 +301,36 @@ let request (meth : string) (url : string) (headers : (string * string) list)
        datacentre link is gigabytes. One byte over the bound is enough to
        know it was exceeded, and an endless body is a store that could not
        answer - so this is an error, never a miss. *)
-    let cap = maxbody + 1 in
-    let raw = Bytes.create cap in
-    let filled = ref 0 in
+    let held = Buffer.create 8192 in
+    let chunk = Bytes.create 65536 in
     let reading = ref true in
 
     while !reading do
-      if !filled >= cap then reading := false
+      if Buffer.length held > maxbody then reading := false
       else
-        match chanread chan raw !filled (cap - !filled) with
+        match chanread chan chunk 0 65536 with
         | 0 -> reading := false
-        | got -> filled := !filled + got
+        | got -> Buffer.add_subbytes held chunk 0 got
         | exception Unix.Unix_error ((Unix.EAGAIN | Unix.EWOULDBLOCK), _, _) ->
           unreachable url "timed out"
         | exception Unix.Unix_error (err, _, _) -> unreachable url (Unix.error_message err)
         | exception Failure why -> unreachable url why
     done;
 
-    if !filled > maxbody then fail ("sekreto: oversized response from " ^ bare url);
+    if Buffer.length held > maxbody then fail ("sekreto: oversized response from " ^ bare url);
+
+    let raw = Buffer.contents held in
 
     let split_at =
-      match findbytes raw !filled "\r\n\r\n" with
+      match findbytes raw "\r\n\r\n" with
       | Some at -> at
       | None -> fail ("sekreto: malformed response from " ^ bare url)
     in
 
     (* Headers are ASCII; the body is not necessarily, so it stays bytes
        until every length-counted slice has been taken. *)
-    let head = Bytes.sub_string raw 0 split_at in
-    let rawbody = Bytes.sub_string raw (split_at + 4) (!filled - split_at - 4) in
+    let head = String.sub raw 0 split_at in
+    let rawbody = String.sub raw (split_at + 4) (String.length raw - split_at - 4) in
 
     let lines = String.split_on_char '\n' head in
     let statusline = match lines with first :: _ -> first | [] -> "" in
