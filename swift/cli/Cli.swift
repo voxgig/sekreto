@@ -227,14 +227,26 @@ func run(_ args: [String]) -> Int32 {
   // not from whichever provider happens to answer first.
   let store = flag(args, "--store")
 
-  var secrets: Sekreto
-  var token: String
+  let secrets: Sekreto
 
   do {
     secrets = try makesekreto(chainfor(source))
+  } catch {
+    // Nothing has been resolved yet, so there is nothing to redact.
+    FileHandle.standardError.write(Data("sekreto-cli: \(error)\n".utf8))
+    return 2
+  }
+
+  let token: String
+
+  do {
     token = store.isEmpty ? try secrets.get("api.token") : try secrets.getfrom(store, "api.token")
   } catch {
-    FileHandle.standardError.write(Data("sekreto-cli: \(error)\n".utf8))
+    // Routed through redact like every other failure path: a chain that
+    // answered from one store and then failed in another must not put the
+    // value it did resolve into a diagnostic.
+    FileHandle.standardError.write(
+      Data("sekreto-cli: \(secrets.redact("\(error)"))\n".utf8))
     return 2
   }
 

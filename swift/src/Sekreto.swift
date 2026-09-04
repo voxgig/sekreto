@@ -266,11 +266,22 @@ public func redact(_ text: Any?, _ values: [Any?]?) -> String {
   //
   // Longest first, always. A shorter value that is a prefix of a longer
   // one would otherwise redact half of it and leave the rest in the log.
+  //
+  // Sorted STABLY, by carrying the arrival index: Swift's `sorted` makes
+  // no stability promise, and two values of the same length would
+  // otherwise be redacted in an order that varies between runs.
   let usable =
     (values ?? [])
     .compactMap { $0 as? String }
     .filter { 4 <= $0.count }
-    .sorted { $0.count > $1.count }
+    .enumerated()
+    .sorted { left, right in
+      if left.element.count != right.element.count {
+        return left.element.count > right.element.count
+      }
+      return left.offset < right.offset
+    }
+    .map { $0.element }
 
   for value in usable {
     // A literal replace-all, never a regex: a secret containing regex

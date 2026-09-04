@@ -974,8 +974,10 @@ class Boru extends Provider {
     final ran = runcmd(
       [command, 'vault', 'get', '--reveal', alias],
       command,
+      // Merged over the parent environment, not replacing it: boru needs
+      // the rest of it, BORU_VAULT_PASSPHRASE included.
       extraenv: (null != home && home!.isNotEmpty)
-          ? {...Platform.environment, 'BORU_HOME': home!}
+          ? {'BORU_HOME': home!}
           : null,
     );
 
