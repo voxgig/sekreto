@@ -41,12 +41,15 @@ def find? {α : Type} (entries : Pairs α) (key : String) : Option α :=
   | (name, value) :: rest => if name == key then some value else find? rest key
 
 /-- Set `key`, in place if it is already there and appended if it is not,
-so the order a caller wrote is the order that comes back. -/
-def set {α : Type} (entries : Pairs α) (key : String) (value : α) : Pairs α :=
+so the order a caller wrote is the order that comes back.
+
+Named `put` and not `set`: `Pairs` is an abbreviation for `List`, and a
+`List.set` that takes an index is already in scope for dot notation. -/
+def put {α : Type} (entries : Pairs α) (key : String) (value : α) : Pairs α :=
   match entries with
   | [] => [(key, value)]
   | (name, held) :: rest =>
-    if name == key then (name, value) :: rest else (name, held) :: set rest key value
+    if name == key then (name, value) :: rest else (name, held) :: put rest key value
 
 /-- The keys, in order. -/
 def keys {α : Type} (entries : Pairs α) : List String := entries.map Prod.fst

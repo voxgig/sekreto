@@ -28,6 +28,10 @@ def segments (name : String) : List String := name.splitOn "."
 def asciiupper (text : String) : String :=
   String.mk (text.toList.map Char.toUpper)
 
+/-- Lowercase the ASCII letters and nothing else. -/
+def asciilower (text : String) : String :=
+  String.mk (text.toList.map Char.toLower)
+
 /-- Is `part` a single well-formed name segment: `[a-z0-9_]+`? -/
 def namepart (part : String) : Bool :=
   !part.isEmpty && part.toList.all (fun ch =>

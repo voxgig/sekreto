@@ -28,7 +28,7 @@ module Providers
 where
 
 import Bytes (unbase64, utf8decode)
-import Control.Exception (IOException, catch, throwIO, try)
+import Control.Exception (IOException, throwIO, try)
 import Control.Monad (when)
 import qualified Data.ByteString as B
 import Data.Char (isSpace, toLower)
@@ -283,9 +283,11 @@ trimslash = dropsuffix "/"
 nowms :: IO Integer
 nowms = round . (1000 *) <$> getPOSIXTime
 
--- | A deadline that never arrives. A configured token never expires.
+-- | A deadline that never arrives: a configured token never expires, and
+-- neither does a login whose expiry was absent or zero. Integer is
+-- unbounded, so this is a chosen far future rather than a maxBound.
 never :: Integer
-never = maxBound
+never = 10 ^ (18 :: Int)
 
 -- | When a logged-in token must be renewed, from its expiry in seconds -
 -- a JSON number, or a string, as Azure IMDS sends it: now + max(seconds -

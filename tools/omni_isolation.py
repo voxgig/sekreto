@@ -339,6 +339,11 @@ PORTS = {
     # Note that lakefile.toml IS on the manifest list below, so if one is
     # ever added this entry stops being true and the guard will say so.
     'lean':       dict(lib=[], why='no manifest a consumer resolves'),
+    # haskell: no .cabal and no cabal.project. ghc is driven straight from
+    # the Makefile, and the OpenSSL binding is `foreign import ccall`
+    # rather than a package, so Hackage is never consulted and there is
+    # nothing for a consumer to resolve.
+    'haskell':    dict(lib=[], why='no manifest a consumer resolves'),
     # scala: scalac is handed a file list too - the Makefile drives it
     # directly and there is no build.sbt, so the same applies again.
     'scala':      dict(lib=[], why='no manifest a consumer resolves'),
@@ -421,6 +426,12 @@ SOURCES = {
     # form `/-`, so a `/-` comment naming omni would be reported.
     'lean':       dict(globs=['lean/src/**/*.lean', 'lean/cli/**/*.lean',
                               'lean/ffi/**/*.c', 'lean/ffi/**/*.h'],
+                       skip=[], pattern=SOURCE),
+    # .hsc and .c are included in case the FFI grows either; today the
+    # binding is plain `foreign import ccall` in .hs, needing no stub file.
+    'haskell':    dict(globs=['haskell/src/**/*.hs', 'haskell/src/**/*.hsc',
+                              'haskell/src/**/*.c', 'haskell/src/**/*.h',
+                              'haskell/cli/**/*.hs'],
                        skip=[], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone
