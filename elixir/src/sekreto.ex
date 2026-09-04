@@ -87,7 +87,7 @@ defmodule Sekreto do
   and `API_TOKEN` into something no environment holds.
   """
   def envkey(name, prefix \\ "") do
-    prefix <> String.upcase(Enum.join(String.split(checkname(name), "."), "_"), :ascii)
+    (prefix || "") <> String.upcase(Enum.join(String.split(checkname(name), "."), "_"), :ascii)
   end
 
   @doc """
@@ -462,13 +462,10 @@ defmodule Sekreto do
   defp entries(%Sekreto{state: state}), do: Sekreto.Cell.get(state).entries
 end
 
+# The cache and the resolved-value list are ordinary fields, so the default
+# struct inspection would print every secret this chain has ever read. This
+# one reaches the store names and nothing else.
 defimpl Inspect, for: Sekreto do
-  @moduledoc """
-  The cache and the resolved-value list are ordinary fields, so the default
-  struct inspection would print every secret this chain has ever read. This
-  one reaches the store names and nothing else.
-  """
-
   def inspect(sek, _opts) do
     Inspect.Algebra.concat(["Sekreto { stores: [ ", Enum.join(Sekreto.stores(sek), ", "), " ] }"])
   end
