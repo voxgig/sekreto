@@ -31,8 +31,10 @@ test: build
 	@printf '{"configVersion":2,"packages":[{"name":"voxgig_omni","rootUri":"file://%s/dart","packageUri":"lib/","languageVersion":"3.0"}]}\n' "$(OMNI)" > build/package_config.json
 	$(DART) run --packages=build/package_config.json test/sekreto_test.dart
 
+# `.dart_tool` is written by `dart compile exe` because a pubspec.yaml is
+# present; it holds no dependencies, since none are declared.
 clean:
-	rm -rf build
+	rm -rf build .dart_tool
 
 inspect:
 	@$(DART) --version 2>&1 | tail -1
