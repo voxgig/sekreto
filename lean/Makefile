@@ -95,13 +95,17 @@ $(B)/sekreto-cli: $(LIB)/.stamp $(FFIOBJS) cli/Cli.lean
 # The suite compiles against the library `build` just made, so the
 # library is compiled once however many times the tests are run.
 #
-# omni's own .olean files are stamped with the toolchain that wrote them
-# and are refused by any other, so the runner is compiled HERE, from
-# omni's source, with this port's pinned toolchain. It lands in
-# build/omni, which nothing the library builds ever reaches.
+# THE RUNNER IS BUILT HERE, from omni's SOURCE, rather than by invoking
+# omni's own Makefile. A `.olean` carries the exact compiler that wrote
+# it and every other release refuses to load it, so linking omni's build
+# artifacts would pin this repository and that one to a single Lean
+# version between them - and `make -C $(OMNI)/lean build` would build
+# artifacts this suite then cannot use. Compiling `Omni.lean` into
+# build/omni costs two seconds, assumes nothing about omni being built,
+# and is what "the port builds omni itself" means for this language.
+# Nothing the library builds ever reaches build/omni.
 test: build
 	@test -n "$(OMNI)" || { echo "sekreto: voxgig/omni not found - set OMNI_HOME" >&2; exit 1; }
-	$(MAKE) -C $(OMNI)/lean build
 	@mkdir -p $(B)/omni
 	LEAN_PATH=$(CURDIR)/$(B)/omni $(LEAN) --root=$(OMNI)/lean \
 	  -o $(B)/omni/Omni.olean -i $(B)/omni/Omni.ilean -c $(B)/omni/Omni.c \
