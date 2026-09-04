@@ -343,7 +343,7 @@ jobs:
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
         run: |
-          for lang in typescript javascript python ruby php perl go rust java csharp zig kotlin; do
+          for lang in $(make -s print-langs); do
             echo "======== $lang ========"
             make -C "$lang" build
           done

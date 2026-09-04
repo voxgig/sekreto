@@ -45,6 +45,7 @@ permissions:
 
 env:
   KOTLIN_VERSION: '2.1.20'
+  SCALA_VERSION: '3.4.2'
 
 jobs:
   real-stores:
@@ -101,6 +102,13 @@ jobs:
             "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
           unzip -q /tmp/kotlinc.zip -d /opt
           echo /opt/kotlinc/bin >> "$GITHUB_PATH"
+      - name: Setup Scala
+        run: |
+          curl -sSLf --retry 3 -o /tmp/scala3.tar.gz \
+            "https://github.com/scala/scala3/releases/download/${SCALA_VERSION}/scala3-${SCALA_VERSION}.tar.gz"
+          mkdir -p /opt/scala3
+          tar xzf /tmp/scala3.tar.gz -C /opt/scala3 --strip-components=1
+          echo /opt/scala3/bin >> "$GITHUB_PATH"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0'
@@ -142,7 +150,7 @@ jobs:
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
         run: |
-          for lang in typescript javascript python ruby php perl go rust java csharp zig kotlin; do
+          for lang in $(make -s print-langs); do
             echo "======== $lang ========"
             make -C "$lang" build
           done
