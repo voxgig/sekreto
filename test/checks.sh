@@ -109,7 +109,7 @@ waithttp() {
 # ------------------------------------------------------------------- ports
 
 # Every port, in the order the top-level Makefile lists them.
-ALL_LANGS="typescript javascript python ruby php perl go rust java csharp zig kotlin"
+ALL_LANGS="typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure swift dart elixir cpp c lua ocaml haskell lean"
 
 # How to invoke each port's CLI.
 cli_cmd() {
@@ -126,6 +126,17 @@ cli_cmd() {
   csharp) echo "dotnet $ROOT/csharp/cli/bin/Release/net8.0/SekretoCli.dll" ;;
   zig) echo "$ROOT/zig/build/sekreto-cli" ;;
   kotlin) echo "java -cp $ROOT/kotlin/build/sekreto-cli.jar sekreto.Cli" ;;
+  scala) echo "java -cp $ROOT/scala/build/sekreto-cli.jar sekreto.Cli" ;;
+  clojure) echo "java -cp $ROOT/clojure/build/sekreto-cli.jar sekreto.Cli" ;;
+  swift) echo "$ROOT/swift/build/sekreto-cli" ;;
+  dart) echo "$ROOT/dart/build/sekreto-cli" ;;
+  elixir) echo "$ROOT/elixir/build/sekreto-cli" ;;
+  cpp) echo "$ROOT/cpp/build/sekreto-cli" ;;
+  c) echo "$ROOT/c/build/sekreto-cli" ;;
+  lua) echo "lua5.4 $ROOT/lua/cli/sekreto-cli.lua" ;;
+  ocaml) echo "$ROOT/ocaml/build/sekreto-cli" ;;
+  haskell) echo "$ROOT/haskell/build/sekreto-cli" ;;
+  lean) echo "$ROOT/lean/build/sekreto-cli" ;;
   *) echo "" ;;
   esac
 }
@@ -148,6 +159,20 @@ cli_ready() {
   csharp) [ -f "$ROOT/csharp/cli/bin/Release/net8.0/SekretoCli.dll" ] ;;
   zig) [ -x "$ROOT/zig/build/sekreto-cli" ] ;;
   kotlin) [ -f "$ROOT/kotlin/build/sekreto-cli.jar" ] ;;
+  scala) [ -f "$ROOT/scala/build/sekreto-cli.jar" ] ;;
+  clojure) [ -f "$ROOT/clojure/build/sekreto-cli.jar" ] ;;
+  swift) [ -x "$ROOT/swift/build/sekreto-cli" ] ;;
+  dart) [ -x "$ROOT/dart/build/sekreto-cli" ] ;;
+  elixir) [ -x "$ROOT/elixir/build/sekreto-cli" ] ;;
+  cpp) [ -x "$ROOT/cpp/build/sekreto-cli" ] ;;
+  c) [ -x "$ROOT/c/build/sekreto-cli" ] ;;
+  # Two artifacts, not one: the CLI is a script, and the transport is a
+  # helper binary the Makefile compiles. A built script with no helper
+  # would pass a one-file check and then fail at the first socket.
+  lua) [ -f "$ROOT/lua/cli/sekreto-cli.lua" ] && [ -x "$ROOT/lua/build/sekreto-net" ] ;;
+  ocaml) [ -x "$ROOT/ocaml/build/sekreto-cli" ] ;;
+  haskell) [ -x "$ROOT/haskell/build/sekreto-cli" ] ;;
+  lean) [ -x "$ROOT/lean/build/sekreto-cli" ] ;;
   *) false ;;
   esac
 }

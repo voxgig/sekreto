@@ -1,10 +1,23 @@
 # Bringing sekreto to the languages struct already has
 
 [voxgig/struct](https://github.com/voxgig/struct) has twenty-three ports.
-sekreto now has twelve — **zig** and **kotlin** landed with this document.
-The remaining eleven are:
+**ALL OF THEM ARE DONE.** sekreto now has twenty-three ports, the same
+set. **zig** and **kotlin** landed with this document; **scala**,
+**clojure**, **swift**, **dart**, **elixir**, **cpp**, **c**, **lua**,
+**ocaml**, **haskell** and **lean** landed after it. Nothing on the list
+below is outstanding.
 
-> c, clojure, cpp, dart, elixir, haskell, lean, lua, ocaml, scala, swift
+Two things this document predicted, and one it did not.
+
+It said seven could be built today with no rule bent, and seven were. It
+said six needed a TLS binding, and all six took one — **every one a full
+port**, none falling back to the local-providers-only state offered as an
+intermediate. What it did not anticipate is that the corpus would not be
+the thing that caught the remaining bugs: three defects were found by
+adversarial audit in code paths no spec entry reaches — an escape case,
+a hand-built JSON string, and a credential field whose null value made
+one port answer with a DIFFERENT field's secret. The spec pins behaviour
+it describes; it cannot pin behaviour it does not.
 
 Every one of them already has a [voxgig/omni](https://github.com/voxgig/omni)
 runner, so the conformance half of a port has somewhere to plug in. The
@@ -56,8 +69,9 @@ the line.
 
 ## Seven that can be complete ports today
 
-**zig, kotlin, scala, clojure, dart, swift, elixir** — of which **zig and
-kotlin are done**.
+~~**zig, kotlin, scala, clojure, dart, swift, elixir**~~ — **all seven
+are done.** Every port this section said could be built today has been
+built, and none needed a rule bent to do it.
 
 Each has HTTP with TLS in its standard library or platform library, and
 everything else is either there or is the kind of small in-tree piece
@@ -69,22 +83,54 @@ order, easiest first:
    `std` has the HTTP client, TLS, JSON, SHA-256, HMAC, base64 and
    subprocess. It was also the best proof that the port shape survives a
    language with manual memory management and no exceptions.
-2. **kotlin** (**done**)**, scala, clojure** — one platform, three
-   languages. The JVM gives HTTP, TLS, HMAC and base64; only JSON is
-   hand-rolled, and `java/src/com/voxgig/sekreto/Json.java` is the model
-   at 299 lines. Writing that parser three times in three idioms is the
-   point of the exercise rather than a waste of it.
+2. ~~**kotlin, scala, clojure**~~ — **all three done.** One platform,
+   three languages. The JVM gives HTTP, TLS, HMAC and base64; only JSON is
+   hand-rolled, and `java/src/com/voxgig/sekreto/Json.java` was the model
+   at 299 lines. Writing that parser three times in three idioms was the
+   point of the exercise rather than a waste of it, and the three came out
+   at 299, 299 and 258 lines — close enough to the model to show the same
+   work, far enough apart to show it was done again rather than copied.
+   The HTTP/1.1 pin the java port needed is in all three.
    Note the HTTP/2 trap the Java port hit: `java.net.http` defaults to
    `HTTP_2` and its h2c upgrade sends a `Content-Length` with an empty
    body, which strict servers reject. Scala and Clojure inherit that
    default and must pin HTTP/1.1, as java and kotlin now do.
-3. **dart, swift, elixir** — each has HTTP, TLS and (except Elixir on
-   older OTP) JSON; each needs SHA-256 and HMAC hand-rolled, except
-   Elixir, where OTP's `:crypto` has both.
+3. ~~**dart, swift, elixir**~~ — **all three done.** Each has HTTP and
+   TLS; each needed SHA-256 and HMAC hand-rolled except Elixir, where
+   OTP's `:crypto` has both.
 
-## Six that need a TLS binding
+   The JSON prediction held exactly. **Elixir was built on OTP 25** —
+   what Ubuntu ships, and the floor this document named — where neither
+   `:json` nor Elixir's `JSON` module exists, so its parser is
+   hand-rolled and was proved against that OTP rather than a newer one.
+   **swift and dart** could have used `JSONSerialization` and
+   `dart:convert`; swift hand-rolls anyway and dart uses the platform
+   one, which is the difference the rule allows.
 
-**c, cpp, ocaml, haskell, lua, lean.**
+   Two things this section did not predict. **swift ships no
+   `Package.swift`** — the Makefile drives `swiftc` directly — which
+   keeps SwiftPM out of a consumer's way entirely, and CryptoKit being
+   Apple-only means `src/Crypto.swift` carries FIPS 180-4 in-tree.
+   **dart answers `FutureOr`, not `Future`**, because `dart:io`'s client
+   is async-only while omni's dart runner is synchronous: an all-`Future`
+   API could not have been driven by the shared suite at all.
+
+## Six that need a TLS binding — all six done
+
+**c, cpp, ocaml, haskell, lua, lean**, and **every one landed as a FULL
+port.** The intermediate state this document allows — local providers
+working, network kinds raising "this build has no TLS backend" — was
+offered to each and needed by none.
+
+The decision below was taken here and is now implemented. What it cost,
+measured rather than estimated: one binding per language, and OpenSSL
+reached from exactly one file in each. c enforces that mechanically —
+`make check-tls` runs `nm` over the archive and fails if any object but
+`tls.o` names `SSL_*`, `X509_*`, `EVP_*` or `HMAC` — and cpp's audit
+proved the same property by counting undefined symbols per object:
+`Tls.o` 27, every other object 0.
+
+The original analysis follows, unchanged.
 
 For all six the obstacle is the same and it is TLS. None has it in the
 standard library, and there is no in-tree answer: TLS is the one thing

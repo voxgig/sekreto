@@ -196,7 +196,24 @@ provider, so a typo fails the same way whether or not a vault is reachable.
 | rust | `trysecret` → `Option` | `getfrom` / `tryfrom` | `redact` | |
 | java | `tryget` | `getfrom` / `tryfrom` | `redact` | |
 | kotlin | `tryget`, and `` `try` `` | `getfrom` / `tryfrom` | `redact` | |
+| scala | `tryget` → `Option` | `getfrom` / `tryfrom` | `redact` | |
+| clojure | `tryget` | `getfrom` / `tryfrom` | `redactall` | |
+| swift | `tryget` → `String?` | `getfrom` / `tryfrom` | `redact` | |
+| dart | `tryget` → `FutureOr<String?>` | `getfrom` / `tryfrom` | `redact` | |
+| elixir | `tryget` | `getfrom` / `tryfrom` | `redactall` | `Sekreto.new(plugins: …, providers: …)` |
+| cpp | `tryget` → `std::optional` | `getfrom` / `tryfrom` | `redact` | |
+| c | `sek_try` → `(err, *out)` | `sek_getfrom` / `sek_tryfrom` | `sek_redact_text` | `sek_new(&opts, &out)` |
+| lua | `tryget` → `nil` on a miss | `getfrom` / `tryfrom` | `redact` | |
+| ocaml | `tryget` → `string option` | `getfrom` / `tryfrom` | `redact` | |
+| haskell | `tryget` → `IO (Maybe String)` | `getfrom` / `tryfrom` | `redact` | |
+| lean | `tryget` → `IO (Option String)` | `getfrom` / `tryfrom` | `redact` | |
 | csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` | |
+
+C prefixes everything `sek_` and answers every call with a `sek_err`,
+writing the value through an out parameter, for the same reason Go
+returns one: it has nothing to throw. It is the only port whose caller
+also owns memory, which is why `sek_redact` takes a pool and the chain's
+own redaction is `sek_redact_text`.
 
 Go's `New` returns an error, because building a chain can fail — an
 unknown kind, a store name that is not a valid tag, a provider refusing
@@ -204,11 +221,26 @@ its configuration — and Go has nothing to throw. Its `Options.Providers`
 is a list of specs; a spec may carry a `Provider` already built, which is
 how a custom provider that is not a plugin joins the chain.
 
-`try` is a keyword in Java and Kotlin, and Python needs to avoid shadowing
-the statement, hence `tryget` and `try_`. Kotlin can escape a keyword with
-backticks, so it carries `` `try` `` as well. Go and Rust have no exceptions, so
-they answer with `(value, found, error)` and `Result<Option<..>>`
-respectively rather than throwing.
+`try` is a keyword in Java, Kotlin and Scala and a special form in
+Clojure, and Python needs to avoid shadowing the statement, hence `tryget`
+and `try_`. Kotlin can escape a
+keyword with backticks, so it carries `` `try` `` as well. Go and Rust have no
+exceptions, so they answer with `(value, found, error)` and
+`Result<Option<..>>` respectively rather than throwing. Scala has
+exceptions and throws like the other JVM ports, but its optional lookup
+answers with `Option[String]`, which is what the language reaches for
+where Java returns `Optional`. Clojure and Elixir carry `redactall` for the same
+reason Perl does: `redact` is already the pure two-argument function, and
+the method on a chain would take two arguments as well.
+
+Dart answers `FutureOr` rather than `Future`, and the reason is the
+conformance runner: `dart:io`'s `HttpClient` is async-only while omni's
+Dart runner is synchronous, so an all-`Future` API could not be driven by
+the shared suite at all. A chain of local stores completes without
+yielding and hands back a plain value; the first provider that opens a
+socket returns a future and the chain returns one in turn. `await` reads
+either. It also keeps every pre-I/O refusal — `checkaddr`, an unsupported
+kv version, missing AWS credentials — synchronous at the call.
 
 ---
 

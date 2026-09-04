@@ -30,6 +30,9 @@ permissions:
 env:
   # One place, because three jobs install it.
   KOTLIN_VERSION: '2.1.20'
+  SCALA_VERSION: '3.4.2'
+  CLOJURE_VERSION: '1.12.0.1530'
+  SWIFT_VERSION: '5.10.1'
 
 jobs:
   omni-isolation:
@@ -108,6 +111,17 @@ jobs:
           - csharp
           - zig
           - kotlin
+          - scala
+          - clojure
+          - swift
+          - dart
+          - elixir
+          - cpp
+          - c
+          - lua
+          - ocaml
+          - haskell
+          - lean
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -164,7 +178,9 @@ jobs:
         if: matrix.lang == 'rust'
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        if: matrix.lang == 'java' || matrix.lang == 'kotlin'
+        if: >-
+          matrix.lang == 'java' || matrix.lang == 'kotlin'
+          || matrix.lang == 'scala' || matrix.lang == 'clojure'
         with:
           distribution: temurin
           java-version: '21'
@@ -186,6 +202,123 @@ jobs:
             "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
           unzip -q /tmp/kotlinc.zip -d /opt
           echo /opt/kotlinc/bin >> "$GITHUB_PATH"
+
+      # scalac from the scala3 release tarball. Same reasoning as kotlinc
+      # above: there is no scala3 package in Ubuntu's archives, and the
+      # alternative -- coursier -- resolves the compiler from Maven at run
+      # time, which is a second network dependency to pin rather than one.
+      # The tarball is the whole distribution and needs only the JDK the
+      # setup-java step installs. scala/Makefile finds the two runtime jars
+      # from scalac's own location on PATH, so no path is written twice.
+      - name: Setup Scala
+        if: matrix.lang == 'scala'
+        run: |
+          curl -sSLf --retry 3 -o /tmp/scala3.tar.gz \
+            "https://github.com/scala/scala3/releases/download/${SCALA_VERSION}/scala3-${SCALA_VERSION}.tar.gz"
+          mkdir -p /opt/scala3
+          tar xzf /tmp/scala3.tar.gz -C /opt/scala3 --strip-components=1
+          echo /opt/scala3/bin >> "$GITHUB_PATH"
+      # The OFFICIAL Clojure CLI, pinned. Ubuntu's `clojure` package is a
+      # DIFFERENT PROGRAM: it runs the Clojure jar directly and understands
+      # neither -M nor deps.edn aliases, both of which this port's Makefile
+      # and voxgig/omni's own clojure runner need. Installing to $HOME keeps
+      # it out of sudo's way; the script's default prefix is /usr/local.
+      - name: Setup Clojure
+        if: matrix.lang == 'clojure'
+        run: |
+          curl -sSLf --retry 3 -o /tmp/clojure-install.sh \
+            "https://download.clojure.org/install/linux-install-${CLOJURE_VERSION}.sh"
+          chmod +x /tmp/clojure-install.sh
+          /tmp/clojure-install.sh --prefix "$HOME/clojure-cli"
+          echo "$HOME/clojure-cli/bin" >> "$GITHUB_PATH"
+      # swift.org publishes one build per Ubuntu release, and 5.10.1 has NO
+      # 24.04 build -- 24.04 support arrived with Swift 6. The 22.04 build
+      # runs on 24.04, which is what ubuntu-latest is: verified, not assumed
+      # (the port was written and its suite run under exactly this tarball on
+      # Ubuntu 24.04.4). Moving to a 6.x build is the alternative and is a
+      # bigger change than it looks -- Swift 6 language mode is a different
+      # concurrency dialect -- so pin what is known to work.
+      #
+      # corelibs-foundation reaches libcurl and libxml2 at RUNTIME, which is
+      # why they are installed rather than assumed: FoundationNetworking is
+      # a libcurl client, and a missing one surfaces as a link error at the
+      # first URLSession call rather than at setup.
+      - name: Setup Swift
+        if: matrix.lang == 'swift'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libcurl4-openssl-dev libxml2-dev libpython3-dev
+          curl -sSLf --retry 3 -o /tmp/swift.tar.gz \
+            "https://download.swift.org/swift-${SWIFT_VERSION}-release/ubuntu2204/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE-ubuntu22.04.tar.gz"
+          sudo mkdir -p /opt/swift
+          sudo tar xzf /tmp/swift.tar.gz -C /opt/swift --strip-components=1
+          echo /opt/swift/usr/bin >> "$GITHUB_PATH"
+      # Dart from Google's APT repository, not the dart-archive bucket -- see
+      # the fuller note on the integration job's copy of this step. The
+      # bucket URL the SDK docs give answered 404 for every version tried
+      # and took this job down with it.
+      - name: Setup Dart
+        if: matrix.lang == 'dart'
+        run: |
+          curl -sSLf --retry 3 https://dl.google.com/linux/linux_signing_key.pub \
+            | sudo gpg --dearmor -o /usr/share/keyrings/dart.gpg
+          echo "deb [signed-by=/usr/share/keyrings/dart.gpg] https://storage.googleapis.com/download.dartlang.org/linux/debian stable main" \
+            | sudo tee /etc/apt/sources.list.d/dart.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends dart
+          echo /usr/lib/dart/bin >> "$GITHUB_PATH"
+          /usr/lib/dart/bin/dart --version
+      # Elixir from the Ubuntu archive rather than a pinned tarball, and the
+      # OTP version is PRINTED rather than assumed. more-ports.md records
+      # that Ubuntu ships OTP 25, where neither :json nor Elixir's JSON
+      # module exists -- which is why this port hand-rolls its JSON. That
+      # floor is the thing worth knowing when this line changes, so the step
+      # says out loud which OTP it got.
+      - name: Setup Elixir
+        if: matrix.lang == 'elixir'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends elixir
+          elixir --version | tail -1
+          erl -eval 'io:format("OTP ~s~n",[erlang:system_info(otp_release)]),halt().' -noshell
+      # c and cpp need only a compiler and OpenSSL's headers. Both are on
+      # the runner image already, but libssl-dev is installed explicitly
+      # rather than assumed: it is the one piece whose absence would fail
+      # at the link line with a message about -lssl rather than about a
+      # missing toolchain, which reads as a port bug and is not one.
+      - name: Setup OpenSSL headers
+        if: matrix.lang == 'cpp' || matrix.lang == 'c'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libssl-dev
+      # lua5.4 from the Ubuntu archive, and the OpenSSL headers the port's
+      # own transport needs. Lua has no sockets at all, so the Makefile
+      # compiles native/sekretonet.c into a helper the library runs -- the
+      # -dev package is a BUILD requirement here, not an optional extra.
+      - name: Setup Lua
+        if: matrix.lang == 'lua'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 libssl-dev
+      # ocaml and haskell from the Ubuntu archive; neither port uses a
+      # package manager, so the compiler is all that is needed. libssl-dev
+      # is a BUILD requirement for both -- ocaml binds OpenSSL through C
+      # stubs and haskell through the FFI, since GHC's boot libraries have
+      # no networking at all, not even a socket.
+      - name: Setup OCaml
+        if: matrix.lang == 'ocaml'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ocaml libssl-dev
+      - name: Setup Haskell
+        if: matrix.lang == 'haskell'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ghc libssl-dev
+      # Lean via elan, pinned by the port's own lean-toolchain. libcurl is
+      # the binding more-ports.md names for Lean specifically -- it handles
+      # chain and hostname verification itself.
+      - name: Setup Lean
+        if: matrix.lang == 'lean'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libcurl4-openssl-dev
+          curl -sSLf --retry 3 https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan.sh
+          sh /tmp/elan.sh -y --default-toolchain "$(cat lean/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
@@ -284,6 +417,112 @@ jobs:
             "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
           unzip -q /tmp/kotlinc.zip -d /opt
           echo /opt/kotlinc/bin >> "$GITHUB_PATH"
+      - name: Setup Scala
+        run: |
+          curl -sSLf --retry 3 -o /tmp/scala3.tar.gz \
+            "https://github.com/scala/scala3/releases/download/${SCALA_VERSION}/scala3-${SCALA_VERSION}.tar.gz"
+          mkdir -p /opt/scala3
+          tar xzf /tmp/scala3.tar.gz -C /opt/scala3 --strip-components=1
+          echo /opt/scala3/bin >> "$GITHUB_PATH"
+      # The OFFICIAL Clojure CLI, pinned. Ubuntu's `clojure` package is a
+      # DIFFERENT PROGRAM: it runs the Clojure jar directly and understands
+      # neither -M nor deps.edn aliases, both of which this port's Makefile
+      # and voxgig/omni's own clojure runner need. Installing to $HOME keeps
+      # it out of sudo's way; the script's default prefix is /usr/local.
+      - name: Setup Clojure
+        run: |
+          curl -sSLf --retry 3 -o /tmp/clojure-install.sh \
+            "https://download.clojure.org/install/linux-install-${CLOJURE_VERSION}.sh"
+          chmod +x /tmp/clojure-install.sh
+          /tmp/clojure-install.sh --prefix "$HOME/clojure-cli"
+          echo "$HOME/clojure-cli/bin" >> "$GITHUB_PATH"
+      # swift.org publishes one build per Ubuntu release, and 5.10.1 has NO
+      # 24.04 build -- 24.04 support arrived with Swift 6. The 22.04 build
+      # runs on 24.04, which is what ubuntu-latest is: verified, not assumed
+      # (the port was written and its suite run under exactly this tarball on
+      # Ubuntu 24.04.4). Moving to a 6.x build is the alternative and is a
+      # bigger change than it looks -- Swift 6 language mode is a different
+      # concurrency dialect -- so pin what is known to work.
+      #
+      # corelibs-foundation reaches libcurl and libxml2 at RUNTIME, which is
+      # why they are installed rather than assumed: FoundationNetworking is
+      # a libcurl client, and a missing one surfaces as a link error at the
+      # first URLSession call rather than at setup.
+      - name: Setup Swift
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libcurl4-openssl-dev libxml2-dev libpython3-dev
+          curl -sSLf --retry 3 -o /tmp/swift.tar.gz \
+            "https://download.swift.org/swift-${SWIFT_VERSION}-release/ubuntu2204/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE-ubuntu22.04.tar.gz"
+          sudo mkdir -p /opt/swift
+          sudo tar xzf /tmp/swift.tar.gz -C /opt/swift --strip-components=1
+          echo /opt/swift/usr/bin >> "$GITHUB_PATH"
+      # Dart from Google's APT repository, not the dart-archive bucket. The
+      # bucket URL that the SDK docs give --
+      # storage.googleapis.com/dart-archive/channels/stable/release/<v>/sdk/
+      # dartsdk-linux-x64.release.zip -- answered 404 for every version
+      # tried, both the pinned one and an older known-good one, and took
+      # `conformance / dart` down with it. The APT repo is the route that
+      # actually works and is the one this port was developed against.
+      #
+      # The version therefore comes from the repo rather than from a pin
+      # here, so `dart --version` is printed: a silent major bump is the
+      # thing worth seeing in the log.
+      - name: Setup Dart
+        run: |
+          curl -sSLf --retry 3 https://dl.google.com/linux/linux_signing_key.pub \
+            | sudo gpg --dearmor -o /usr/share/keyrings/dart.gpg
+          echo "deb [signed-by=/usr/share/keyrings/dart.gpg] https://storage.googleapis.com/download.dartlang.org/linux/debian stable main" \
+            | sudo tee /etc/apt/sources.list.d/dart.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends dart
+          echo /usr/lib/dart/bin >> "$GITHUB_PATH"
+          /usr/lib/dart/bin/dart --version
+      # Elixir from the Ubuntu archive rather than a pinned tarball, and the
+      # OTP version is PRINTED rather than assumed. more-ports.md records
+      # that Ubuntu ships OTP 25, where neither :json nor Elixir's JSON
+      # module exists -- which is why this port hand-rolls its JSON. That
+      # floor is the thing worth knowing when this line changes, so the step
+      # says out loud which OTP it got.
+      - name: Setup Elixir
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends elixir
+          elixir --version | tail -1
+          erl -eval 'io:format("OTP ~s~n",[erlang:system_info(otp_release)]),halt().' -noshell
+      # c and cpp need only a compiler and OpenSSL's headers. Both are on
+      # the runner image already, but libssl-dev is installed explicitly
+      # rather than assumed: it is the one piece whose absence would fail
+      # at the link line with a message about -lssl rather than about a
+      # missing toolchain, which reads as a port bug and is not one.
+      - name: Setup OpenSSL headers
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libssl-dev
+      # lua5.4 from the Ubuntu archive, and the OpenSSL headers the port's
+      # own transport needs. Lua has no sockets at all, so the Makefile
+      # compiles native/sekretonet.c into a helper the library runs -- the
+      # -dev package is a BUILD requirement here, not an optional extra.
+      - name: Setup Lua
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 libssl-dev
+      # ocaml and haskell from the Ubuntu archive; neither port uses a
+      # package manager, so the compiler is all that is needed. libssl-dev
+      # is a BUILD requirement for both -- ocaml binds OpenSSL through C
+      # stubs and haskell through the FFI, since GHC's boot libraries have
+      # no networking at all, not even a socket.
+      - name: Setup OCaml
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ocaml libssl-dev
+      - name: Setup Haskell
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ghc libssl-dev
+      # Lean via elan, pinned by the port's own lean-toolchain. libcurl is
+      # the binding more-ports.md names for Lean specifically -- it handles
+      # chain and hostname verification itself.
+      - name: Setup Lean
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libcurl4-openssl-dev
+          curl -sSLf --retry 3 https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan.sh
+          sh /tmp/elan.sh -y --default-toolchain "$(cat lean/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: Setup Zig
         run: |
           python3 -m pip install --disable-pip-version-check --quiet \
@@ -318,7 +557,7 @@ jobs:
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
         run: |
-          for lang in typescript javascript python ruby php perl go rust java csharp zig kotlin; do
+          for lang in $(make -s print-langs); do
             echo "======== $lang ========"
             make -C "$lang" build
           done

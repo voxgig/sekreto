@@ -1,0 +1,10 @@
+# The Dart port of sekreto declares no dependencies, and none may be added:
+# every port carries its own JSON, its own SHA-256 and its own HMAC rather
+# than reach for a package. `dart pub get` is never run, and nothing here
+# names voxgig/omni - the conformance suite finds it through a package map
+# the Makefile writes into build/.
+name: sekreto
+description: "sekreto: one interface for secrets, wherever they live."
+version: 0.1.0
+environment:
+  sdk: ">=3.0.0 <4.0.0"

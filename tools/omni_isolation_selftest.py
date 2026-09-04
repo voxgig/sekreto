@@ -68,6 +68,15 @@ MANIFEST = [
      '[project]\ndynamic = ["dependencies"]'),
     ('csharp', 'csharp/src/Sekreto.csproj', '</Project>',
      '<ItemGroup><PackageReference Include="Voxgig.Omni" Version="0.1.0" /></ItemGroup></Project>'),
+    # A clojure coordinate in :deps, which IS what a consumer resolves. The
+    # exempt case below is the same declaration one line lower, in an alias,
+    # which is not.
+    ('clojure', 'clojure/deps.edn', ' :deps {}',
+     ' :deps {io.github.voxgig/omni {:local/root "../../omni/clojure"}}'),
+    # A dart dependency, which IS what a consumer resolves. The exempt case
+    # below is the same declaration under dev_dependencies, which is not.
+    ('dart', 'dart/pubspec.yaml', 'environment:',
+     'dependencies:\n  voxgig_omni:\n    path: ../../omni/dart\nenvironment:'),
 
     # THE FIVE EVASIONS Codex found after the first version shipped. Each
     # declares omni in a way that read clean, and each is here so it cannot
@@ -102,6 +111,13 @@ EXEMPT = [
     ('typescript', 'typescript/package.json', '"devDependencies": {',
      '"devDependencies": {\n    "@voxgig/omni": "^0.1.1",',
      'npm devDependencies are never installed transitively'),
+    ('clojure', 'clojure/deps.edn', '  :test {:extra-paths ["test"]}',
+     '  :omni {:extra-deps {io.github.voxgig/omni {:local/root "../../omni/clojure"}}}\n'
+     '  :test {:extra-paths ["test"]}',
+     'a deps.edn alias is never resolved transitively'),
+    ('dart', 'dart/pubspec.yaml', 'environment:',
+     'dev_dependencies:\n  voxgig_omni:\n    path: ../../omni/dart\nenvironment:',
+     'pub never resolves a dependency\'s dev_dependencies'),
 ]
 
 

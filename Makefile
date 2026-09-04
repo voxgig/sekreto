@@ -25,9 +25,19 @@
 
 # Every port directory. Target names are the directory names, used verbatim
 # as `make -C <dir>`.
-LANGS = typescript javascript python ruby php perl go rust java csharp zig kotlin
+LANGS = typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure swift dart elixir cpp c lua ocaml haskell lean
 
-.PHONY: all test build integration realstores inspect clean check spec spec-check omni-isolation
+# THE PORT LIST, FOR ANYTHING THAT WOULD OTHERWISE REPEAT IT. Both CI
+# workflows build every port in an explicit loop rather than through
+# `make build`, because build-% tolerates -- and so hides -- a port whose
+# build FAILS. That loop used to carry its own copy of the names, and
+# adding the scala port is exactly what the duplication cost: LANGS knew,
+# test/checks.sh knew, and both loops did not, so the job ran every other
+# port and then failed as `scala/not-built`. They read this instead.
+print-langs:
+	@echo $(LANGS)
+
+.PHONY: all test build integration realstores inspect clean check spec spec-check omni-isolation print-langs
 
 all: test integration
 

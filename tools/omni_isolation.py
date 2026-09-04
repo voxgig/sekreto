@@ -209,6 +209,72 @@ def read_csproj(path):
         text, re.I)]
 
 
+def read_deps_edn(path):
+    """deps.edn: the CONSUMER-RESOLVED region - everything before `:aliases`.
+
+    tools.deps ignores a dependency's aliases entirely: a consumer taking
+    this port resolves its `:paths` and its `:deps`, and nothing else.  An
+    alias is therefore clojure's devDependencies - the place a conformance
+    runner may legitimately be named - and this reads up to the first one.
+    Both `:paths` and `:deps` are in scope, not `:deps` alone: an external
+    path lands on a consumer's classpath the same way a coordinate does.
+
+    COMMENTS ARE STRIPPED FIRST, and that is not a nicety.  A comment can
+    open the scope by accident: in the struct port of this tool the clojure
+    scan started at `:deps\b`, an explanatory comment ABOVE the map
+    contained `:deps/root "clojure"`, and the read began inside prose -
+    reading the word omni out of an explanation of why omni is NOT declared
+    there.  Measured, not hypothetical.  It strips by line, so a `;` inside
+    a string would be cut too; no deps.edn here has one, and a parse is the
+    real answer if one ever does.
+
+    A textual scan, and saying so plainly matters: it is weaker than a parse
+    and it is what is available without an EDN reader, which python has no
+    more of in its standard library than these ports are allowed as a
+    dependency.
+    """
+    text = re.sub(r';.*$', '', path.read_text(encoding='utf-8'), flags=re.M)
+    head = re.split(r':aliases\b', text, maxsplit=1)[0]
+    return [line for line in head.splitlines() if line.strip()]
+
+
+def read_pubspec(path):
+    """pubspec.yaml: the CONSUMER-RESOLVED sections.
+
+    `dependencies:` and `dependency_overrides:` are what a consumer taking
+    this package resolves.  `dev_dependencies:` is not - pub resolves those
+    only for the package's own development, exactly as npm does with
+    devDependencies, which this tool already exempts for the two Node
+    ports.  A conformance runner may legitimately be named there.
+
+    COMMENTS ARE STRIPPED FIRST, and this port is the proof rather than the
+    theory: dart/pubspec.yaml opens by saying "nothing here names
+    voxgig/omni", so a reader that kept comments would read the word omni
+    out of the very sentence promising it is absent, and report the port
+    for the presence of its own documentation.  That is the same failure
+    read_deps_edn records from struct's port of this tool, met a second
+    time in a different language.
+
+    A textual scan, said plainly: it is weaker than a YAML parse, and
+    python's standard library has no YAML reader - which these tools are no
+    more entitled to take as a dependency than a port is.
+    """
+    text = re.sub(r'#.*$', '', path.read_text(encoding='utf-8'), flags=re.M)
+    want, out = False, []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if re.match(r'^\S', line):
+            # Any top-level key closes the previous section.
+            want = bool(re.match(r'^(dependencies|dependency_overrides)\s*:', line))
+            if want:
+                out.append(line)
+            continue
+        if want:
+            out.append(line)
+    return out
+
+
 DYNAMIC_UNRESOLVED = ('<dynamic dependencies with no resolvable source: '
                       'omni cannot be ruled out here>')
 
@@ -229,6 +295,8 @@ PORTS = {
     'csharp':     dict(lib=[('csharp/src/Sekreto.csproj', read_csproj),
                             ('csharp/cli/SekretoCli.csproj', read_csproj)],
                        harness=['csharp/test/SekretoTest.csproj']),
+    'clojure':    dict(lib=[('clojure/deps.edn', read_deps_edn)]),
+    'dart':       dict(lib=[('dart/pubspec.yaml', read_pubspec)]),
     'typescript': dict(lib=[('typescript/package.json', read_package_json)]),
     'javascript': dict(lib=[('javascript/package.json', read_package_json)]),
     'python':     dict(lib=[('python/pyproject.toml', read_pyproject)]),
@@ -242,6 +310,43 @@ PORTS = {
     # kotlin: kotlinc is handed a file list, exactly as javac is for the
     # java port, so the same applies.
     'kotlin':     dict(lib=[], why='no manifest a consumer resolves'),
+    # swift: the Makefile drives swiftc over a file list and there is no
+    # Package.swift, so SwiftPM has nothing to resolve. Introducing one
+    # would make this entry wrong, and the manifest guard below would say
+    # so rather than let it pass.
+    'swift':      dict(lib=[], why='no manifest a consumer resolves'),
+    # elixir: the escript is assembled by tool/escript.exs from OTP's own
+    # :escript.create/2 rather than `mix escript.build`, precisely so there
+    # is no mix.exs -- a project manifest whose only content would be the
+    # absence of dependencies. Nothing for a consumer to resolve.
+    'elixir':     dict(lib=[], why='no manifest a consumer resolves'),
+    # cpp: the Makefile drives g++ over a file list. There is no CMakeLists,
+    # no vcpkg.json, no conanfile -- nothing a consumer resolves.
+    'cpp':        dict(lib=[], why='no manifest a consumer resolves'),
+    # c: a Makefile and a compiler, and nothing else. No manifest exists
+    # for C at all, so there is nothing here a consumer could resolve.
+    'c':          dict(lib=[], why='no manifest a consumer resolves'),
+    # lua: no rockspec. luarocks is not in play at all -- the port's only
+    # native piece is an in-tree C module the Makefile compiles -- so
+    # there is nothing for a consumer to resolve.
+    'lua':        dict(lib=[], why='no manifest a consumer resolves'),
+    # ocaml: no dune-project and no .opam file -- the Makefile drives
+    # ocamlopt directly, C stubs included. Nothing a consumer resolves.
+    'ocaml':      dict(lib=[], why='no manifest a consumer resolves'),
+    # lean: no lakefile.toml and no lakefile.lean -- only a lean-toolchain,
+    # which pins a compiler version and declares no dependency. Lake never
+    # resolves anything here, so there is nothing for a consumer to take.
+    # Note that lakefile.toml IS on the manifest list below, so if one is
+    # ever added this entry stops being true and the guard will say so.
+    'lean':       dict(lib=[], why='no manifest a consumer resolves'),
+    # haskell: no .cabal and no cabal.project. ghc is driven straight from
+    # the Makefile, and the OpenSSL binding is `foreign import ccall`
+    # rather than a package, so Hackage is never consulted and there is
+    # nothing for a consumer to resolve.
+    'haskell':    dict(lib=[], why='no manifest a consumer resolves'),
+    # scala: scalac is handed a file list too - the Makefile drives it
+    # directly and there is no build.sbt, so the same applies again.
+    'scala':      dict(lib=[], why='no manifest a consumer resolves'),
     'perl':       dict(lib=[], why='no manifest a consumer resolves'),
     'php':        dict(lib=[], why='no manifest a consumer resolves'),
     'ruby':       dict(lib=[], why='no manifest a consumer resolves'),
@@ -270,6 +375,63 @@ SOURCES = {
     'zig':        dict(globs=['zig/src/**/*.zig', 'zig/cli/**/*.zig'],
                        skip=[], pattern=SOURCE),
     'kotlin':     dict(globs=['kotlin/src/**/*.kt', 'kotlin/cli/**/*.kt'],
+                       skip=[], pattern=SOURCE),
+    'scala':      dict(globs=['scala/src/**/*.scala', 'scala/cli/**/*.scala'],
+                       skip=[], pattern=SOURCE),
+    # clojure/test is where omni legitimately appears, and it is excluded by
+    # living outside the globs - as go/testutil and rust/corpus are. Note
+    # that a `;;` comment is NOT skipped by the comment rule below, which
+    # only knows the markers of the languages that were here first: a
+    # clojure source file must not name omni even in prose.
+    'clojure':    dict(globs=['clojure/src/**/*.clj', 'clojure/cli/**/*.clj'],
+                       skip=[], pattern=SOURCE),
+    'dart':       dict(globs=['dart/src/**/*.dart', 'dart/cli/**/*.dart'],
+                       skip=[], pattern=SOURCE),
+    'swift':      dict(globs=['swift/src/**/*.swift', 'swift/cli/**/*.swift'],
+                       skip=[], pattern=SOURCE),
+    # elixir/tool is build machinery, not shipped source, and sits outside
+    # the globs exactly as go/testutil and rust/corpus do.
+    'elixir':     dict(globs=['elixir/src/**/*.ex', 'elixir/cli/**/*.ex'],
+                       skip=[], pattern=SOURCE),
+    # Headers are shipped source too: a cpp port carries much of itself in
+    # .hpp, and scanning only .cpp would leave most of it unread.
+    'cpp':        dict(globs=['cpp/src/**/*.cpp', 'cpp/src/**/*.hpp',
+                              'cpp/cli/**/*.cpp', 'cpp/cli/**/*.hpp'],
+                       skip=[], pattern=SOURCE),
+    # Headers again, for the same reason as cpp: .h is shipped source.
+    'c':          dict(globs=['c/src/**/*.c', 'c/src/**/*.h',
+                              'c/cli/**/*.c', 'c/cli/**/*.h'],
+                       skip=[], pattern=SOURCE),
+    # lua/native is shipped source too: the OpenSSL binding is a C module
+    # the library requires at runtime, so it is as much a part of what a
+    # consumer gets as the .lua files are.
+    'lua':        dict(globs=['lua/src/**/*.lua', 'lua/cli/**/*.lua',
+                              'lua/native/**/*.c', 'lua/native/**/*.h'],
+                       skip=[], pattern=SOURCE),
+    # The .c stubs are the OpenSSL binding and ship with the library, so
+    # they are scanned alongside the .ml -- same reasoning as lua/native.
+    # Note for anyone editing this port: the COMMENT rule below does not
+    # know OCaml's `(*`, any more than it knows Clojure's `;`, so an .ml
+    # file must not name omni even in prose. It caught exactly that here --
+    # a comment explaining which reader consumes `Printexc.to_string` --
+    # and the comment was reworded rather than the guard widened. Widening
+    # a guard so a port passes is the move this whole tool exists to stop.
+    'ocaml':      dict(globs=['ocaml/src/**/*.ml', 'ocaml/src/**/*.mli',
+                              'ocaml/src/**/*.c', 'ocaml/src/**/*.h',
+                              'ocaml/cli/**/*.ml'],
+                       skip=[], pattern=SOURCE),
+    # lean/ffi is the libcurl binding and ships with the library, so it is
+    # scanned like lua/native and ocaml's stubs. A further note for editors
+    # of this port: the COMMENT rule knows Lean's `--` but NOT its block
+    # form `/-`, so a `/-` comment naming omni would be reported.
+    'lean':       dict(globs=['lean/src/**/*.lean', 'lean/cli/**/*.lean',
+                              'lean/ffi/**/*.c', 'lean/ffi/**/*.h'],
+                       skip=[], pattern=SOURCE),
+    # .hsc and .c are included in case the FFI grows either; today the
+    # binding is plain `foreign import ccall` in .hs, needing no stub file.
+    'haskell':    dict(globs=['haskell/src/**/*.hs', 'haskell/src/**/*.hsc',
+                              'haskell/src/**/*.c', 'haskell/src/**/*.h',
+                              'haskell/cli/**/*.hs'],
                        skip=[], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone
