@@ -33,6 +33,7 @@ env:
   SCALA_VERSION: '3.4.2'
   CLOJURE_VERSION: '1.12.0.1530'
   SWIFT_VERSION: '5.10.1'
+  DART_VERSION: '3.13.3'
 
 jobs:
   omni-isolation:
@@ -114,6 +115,8 @@ jobs:
           - scala
           - clojure
           - swift
+          - dart
+          - elixir
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -246,6 +249,26 @@ jobs:
           sudo mkdir -p /opt/swift
           sudo tar xzf /tmp/swift.tar.gz -C /opt/swift --strip-components=1
           echo /opt/swift/usr/bin >> "$GITHUB_PATH"
+      - name: Setup Dart
+        if: matrix.lang == 'dart'
+        run: |
+          curl -sSLf --retry 3 -o /tmp/dart.zip \
+            "https://storage.googleapis.com/dart-archive/channels/stable/release/${DART_VERSION}/sdk/dartsdk-linux-x64.release.zip"
+          sudo unzip -q /tmp/dart.zip -d /opt
+          echo /opt/dart-sdk/bin >> "$GITHUB_PATH"
+      # Elixir from the Ubuntu archive rather than a pinned tarball, and the
+      # OTP version is PRINTED rather than assumed. more-ports.md records
+      # that Ubuntu ships OTP 25, where neither :json nor Elixir's JSON
+      # module exists -- which is why this port hand-rolls its JSON. That
+      # floor is the thing worth knowing when this line changes, so the step
+      # says out loud which OTP it got.
+      - name: Setup Elixir
+        if: matrix.lang == 'elixir'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends elixir
+          elixir --version | tail -1
+          erl -eval 'io:format("OTP ~s~n",[erlang:system_info(otp_release)]),halt().' -noshell
 
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
@@ -385,6 +408,24 @@ jobs:
           sudo mkdir -p /opt/swift
           sudo tar xzf /tmp/swift.tar.gz -C /opt/swift --strip-components=1
           echo /opt/swift/usr/bin >> "$GITHUB_PATH"
+      - name: Setup Dart
+        run: |
+          curl -sSLf --retry 3 -o /tmp/dart.zip \
+            "https://storage.googleapis.com/dart-archive/channels/stable/release/${DART_VERSION}/sdk/dartsdk-linux-x64.release.zip"
+          sudo unzip -q /tmp/dart.zip -d /opt
+          echo /opt/dart-sdk/bin >> "$GITHUB_PATH"
+      # Elixir from the Ubuntu archive rather than a pinned tarball, and the
+      # OTP version is PRINTED rather than assumed. more-ports.md records
+      # that Ubuntu ships OTP 25, where neither :json nor Elixir's JSON
+      # module exists -- which is why this port hand-rolls its JSON. That
+      # floor is the thing worth knowing when this line changes, so the step
+      # says out loud which OTP it got.
+      - name: Setup Elixir
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends elixir
+          elixir --version | tail -1
+          erl -eval 'io:format("OTP ~s~n",[erlang:system_info(otp_release)]),halt().' -noshell
       - name: Setup Zig
         run: |
           python3 -m pip install --disable-pip-version-check --quiet \

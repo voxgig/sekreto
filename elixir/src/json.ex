@@ -140,7 +140,17 @@ defmodule Sekreto.Json do
         ?\t -> "\\t"
         # `/` is accepted on input but never escaped on output, and
         # non-ASCII is not escaped either.
-        other when other < 0x20 -> "\\u" <> String.pad_leading(Integer.to_string(other, 16), 4, "0")
+        # LOWERCASE hex, and `String.downcase` is what makes it so:
+        # Integer.to_string(11, 16) is "B" in Elixir, not "b". Every other
+        # port emits lowercase here -- rust `\\u{:04x}`, kotlin, scala and
+        # java `"\\u%04x"`, csharp `ToString("x4")` -- and the writer is
+        # contract, so a port that disagreed would be the thing that is
+        # wrong. Note the deliberate asymmetry with sigv4.ex, where the
+        # SAME call must stay UPPERCASE: AWS percent-escapes are uppercase
+        # by specification. Two sites, one call, opposite answers.
+        other when other < 0x20 ->
+          "\\u" <>
+            String.pad_leading(String.downcase(Integer.to_string(other, 16), :ascii), 4, "0")
         other -> <<other::utf8>>
       end
 

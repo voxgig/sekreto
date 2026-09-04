@@ -109,7 +109,7 @@ waithttp() {
 # ------------------------------------------------------------------- ports
 
 # Every port, in the order the top-level Makefile lists them.
-ALL_LANGS="typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure swift"
+ALL_LANGS="typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure swift dart elixir"
 
 # How to invoke each port's CLI.
 cli_cmd() {
@@ -129,6 +129,8 @@ cli_cmd() {
   scala) echo "java -cp $ROOT/scala/build/sekreto-cli.jar sekreto.Cli" ;;
   clojure) echo "java -cp $ROOT/clojure/build/sekreto-cli.jar sekreto.Cli" ;;
   swift) echo "$ROOT/swift/build/sekreto-cli" ;;
+  dart) echo "$ROOT/dart/build/sekreto-cli" ;;
+  elixir) echo "$ROOT/elixir/build/sekreto-cli" ;;
   *) echo "" ;;
   esac
 }
@@ -154,6 +156,8 @@ cli_ready() {
   scala) [ -f "$ROOT/scala/build/sekreto-cli.jar" ] ;;
   clojure) [ -f "$ROOT/clojure/build/sekreto-cli.jar" ] ;;
   swift) [ -x "$ROOT/swift/build/sekreto-cli" ] ;;
+  dart) [ -x "$ROOT/dart/build/sekreto-cli" ] ;;
+  elixir) [ -x "$ROOT/elixir/build/sekreto-cli" ] ;;
   *) false ;;
   esac
 }

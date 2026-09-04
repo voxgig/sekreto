@@ -58,6 +58,11 @@ defmodule Sekreto.Sigv4 do
            ch in [?-, ?_, ?., ?~] do
         <<ch>>
       else
+        # UPPERCASE hex, deliberately: AWS SigV4 specifies uppercase
+        # percent-escapes, and Integer.to_string/2 already gives that.
+        # json.ex uses the same call and must LOWERCASE it -- the two are
+        # opposite requirements, which is exactly how one gets copied onto
+        # the other by mistake.
         "%" <> String.pad_leading(Integer.to_string(ch, 16), 2, "0")
       end
     end)

@@ -1,11 +1,13 @@
 # Bringing sekreto to the languages struct already has
 
 [voxgig/struct](https://github.com/voxgig/struct) has twenty-three ports.
-sekreto now has fifteen — **zig** and **kotlin** landed with this
-document, then **scala**, **clojure** and **swift**. The remaining eight
-are:
+sekreto now has seventeen — **zig** and **kotlin** landed with this
+document, then **scala**, **clojure**, **swift**, **dart** and
+**elixir**. The remaining six are:
 
-> c, cpp, dart, elixir, haskell, lean, lua, ocaml
+> c, cpp, haskell, lean, lua, ocaml
+
+Those six are the TLS-binding set below, and nothing else is left.
 
 Every one of them already has a [voxgig/omni](https://github.com/voxgig/omni)
 runner, so the conformance half of a port has somewhere to plug in. The
@@ -57,8 +59,9 @@ the line.
 
 ## Seven that can be complete ports today
 
-**zig, kotlin, scala, clojure, dart, swift, elixir** — of which **zig,
-kotlin, scala, clojure and swift are done**.
+~~**zig, kotlin, scala, clojure, dart, swift, elixir**~~ — **all seven
+are done.** Every port this section said could be built today has been
+built, and none needed a rule bent to do it.
 
 Each has HTTP with TLS in its standard library or platform library, and
 everything else is either there or is the kind of small in-tree piece
@@ -82,14 +85,25 @@ order, easiest first:
    `HTTP_2` and its h2c upgrade sends a `Content-Length` with an empty
    body, which strict servers reject. Scala and Clojure inherit that
    default and must pin HTTP/1.1, as java and kotlin now do.
-3. **dart,** ~~**swift**~~**, elixir** — each has HTTP, TLS and (except
-   Elixir on older OTP) JSON; each needs SHA-256 and HMAC hand-rolled,
-   except Elixir, where OTP's `:crypto` has both. **swift is done**, and
-   the hand-rolled half was the whole of the work there: CryptoKit is
-   Apple-only and swift-crypto is a package, so `src/Crypto.swift` carries
-   FIPS 180-4 SHA-256 and HMAC in-tree. It ships no `Package.swift` at
-   all — the Makefile drives `swiftc` directly — which is what keeps
-   SwiftPM out of a consumer's way entirely.
+3. ~~**dart, swift, elixir**~~ — **all three done.** Each has HTTP and
+   TLS; each needed SHA-256 and HMAC hand-rolled except Elixir, where
+   OTP's `:crypto` has both.
+
+   The JSON prediction held exactly. **Elixir was built on OTP 25** —
+   what Ubuntu ships, and the floor this document named — where neither
+   `:json` nor Elixir's `JSON` module exists, so its parser is
+   hand-rolled and was proved against that OTP rather than a newer one.
+   **swift and dart** could have used `JSONSerialization` and
+   `dart:convert`; swift hand-rolls anyway and dart uses the platform
+   one, which is the difference the rule allows.
+
+   Two things this section did not predict. **swift ships no
+   `Package.swift`** — the Makefile drives `swiftc` directly — which
+   keeps SwiftPM out of a consumer's way entirely, and CryptoKit being
+   Apple-only means `src/Crypto.swift` carries FIPS 180-4 in-tree.
+   **dart answers `FutureOr`, not `Future`**, because `dart:io`'s client
+   is async-only while omni's dart runner is synchronous: an all-`Future`
+   API could not have been driven by the shared suite at all.
 
 ## Six that need a TLS binding
 

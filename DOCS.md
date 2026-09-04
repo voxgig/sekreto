@@ -199,6 +199,8 @@ provider, so a typo fails the same way whether or not a vault is reachable.
 | scala | `tryget` → `Option` | `getfrom` / `tryfrom` | `redact` | |
 | clojure | `tryget` | `getfrom` / `tryfrom` | `redactall` | |
 | swift | `tryget` → `String?` | `getfrom` / `tryfrom` | `redact` | |
+| dart | `tryget` → `FutureOr<String?>` | `getfrom` / `tryfrom` | `redact` | |
+| elixir | `tryget` | `getfrom` / `tryfrom` | `redactall` | `Sekreto.new(plugins: …, providers: …)` |
 | csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` | |
 
 Go's `New` returns an error, because building a chain can fail — an
@@ -215,9 +217,18 @@ exceptions, so they answer with `(value, found, error)` and
 `Result<Option<..>>` respectively rather than throwing. Scala has
 exceptions and throws like the other JVM ports, but its optional lookup
 answers with `Option[String]`, which is what the language reaches for
-where Java returns `Optional`. Clojure carries `redactall` for the same
+where Java returns `Optional`. Clojure and Elixir carry `redactall` for the same
 reason Perl does: `redact` is already the pure two-argument function, and
 the method on a chain would take two arguments as well.
+
+Dart answers `FutureOr` rather than `Future`, and the reason is the
+conformance runner: `dart:io`'s `HttpClient` is async-only while omni's
+Dart runner is synchronous, so an all-`Future` API could not be driven by
+the shared suite at all. A chain of local stores completes without
+yielding and hands back a plain value; the first provider that opens a
+socket returns a future and the chain returns one in turn. `await` reads
+either. It also keeps every pre-I/O refusal — `checkaddr`, an unsupported
+kv version, missing AWS credentials — synchronous at the call.
 
 ---
 
