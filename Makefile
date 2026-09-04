@@ -25,7 +25,7 @@
 
 # Every port directory. Target names are the directory names, used verbatim
 # as `make -C <dir>`.
-LANGS = typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure swift dart elixir cpp
+LANGS = typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure swift dart elixir cpp c
 
 # THE PORT LIST, FOR ANYTHING THAT WOULD OTHERWISE REPEAT IT. Both CI
 # workflows build every port in an explicit loop rather than through

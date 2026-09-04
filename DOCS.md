@@ -202,7 +202,14 @@ provider, so a typo fails the same way whether or not a vault is reachable.
 | dart | `tryget` → `FutureOr<String?>` | `getfrom` / `tryfrom` | `redact` | |
 | elixir | `tryget` | `getfrom` / `tryfrom` | `redactall` | `Sekreto.new(plugins: …, providers: …)` |
 | cpp | `tryget` → `std::optional` | `getfrom` / `tryfrom` | `redact` | |
+| c | `sek_try` → `(err, *out)` | `sek_getfrom` / `sek_tryfrom` | `sek_redact_text` | `sek_new(&opts, &out)` |
 | csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` | |
+
+C prefixes everything `sek_` and answers every call with a `sek_err`,
+writing the value through an out parameter, for the same reason Go
+returns one: it has nothing to throw. It is the only port whose caller
+also owns memory, which is why `sek_redact` takes a pool and the chain's
+own redaction is `sek_redact_text`.
 
 Go's `New` returns an error, because building a chain can fail — an
 unknown kind, a store name that is not a valid tag, a provider refusing
