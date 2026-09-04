@@ -1,7 +1,7 @@
 # Working in this repository
 
-sekreto is one library written seventeen times. The rules below exist so
-those seventeen stay one.
+sekreto is one library written eighteen times. The rules below exist so
+those eighteen stay one.
 
 ## The three that matter
 
@@ -12,7 +12,7 @@ those seventeen stay one.
 
 2. **`spec/sekreto.aon` is the contract.** It runs against every port. A
    port that disagrees with the spec is the thing that is wrong — not the
-   spec. Changing the spec means changing seventeen ports, so change it
+   spec. Changing the spec means changing eighteen ports, so change it
    deliberately.
 
    The cases live in `spec/def/*.aon`; `spec/sekreto.json` is **generated**
@@ -306,16 +306,16 @@ between the two.
 
 ## Release and publish
 
-Seventeen ports, **two of which publish a package**:
+Eighteen ports, **two of which publish a package**:
 
 | port | package | tag |
 | --- | --- | --- |
 | `typescript/` | npm `@voxgig/sekreto` | `typescript/v<version>` |
 | `javascript/` | npm `@voxgig/sekreto-js` | `javascript/v<version>` |
 
-The other fifteen (python, ruby, php, perl, go, rust, java, csharp, zig,
-kotlin, scala, clojure, swift, dart, elixir) ship no package and have no
-publish flow yet — they are consumed from this repository.
+The other sixteen (python, ruby, php, perl, go, rust, java, csharp, zig,
+kotlin, scala, clojure, swift, dart, elixir, cpp) ship no package and have
+no publish flow yet — they are consumed from this repository.
 
 ### Releasing
 

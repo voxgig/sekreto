@@ -178,6 +178,8 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends elixir
           elixir --version | tail -1
           erl -eval 'io:format("OTP ~s~n",[erlang:system_info(otp_release)]),halt().' -noshell
+      - name: Setup OpenSSL headers
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libssl-dev
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0'

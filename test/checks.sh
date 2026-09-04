@@ -109,7 +109,7 @@ waithttp() {
 # ------------------------------------------------------------------- ports
 
 # Every port, in the order the top-level Makefile lists them.
-ALL_LANGS="typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure swift dart elixir"
+ALL_LANGS="typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure swift dart elixir cpp"
 
 # How to invoke each port's CLI.
 cli_cmd() {
@@ -131,6 +131,7 @@ cli_cmd() {
   swift) echo "$ROOT/swift/build/sekreto-cli" ;;
   dart) echo "$ROOT/dart/build/sekreto-cli" ;;
   elixir) echo "$ROOT/elixir/build/sekreto-cli" ;;
+  cpp) echo "$ROOT/cpp/build/sekreto-cli" ;;
   *) echo "" ;;
   esac
 }
@@ -158,6 +159,7 @@ cli_ready() {
   swift) [ -x "$ROOT/swift/build/sekreto-cli" ] ;;
   dart) [ -x "$ROOT/dart/build/sekreto-cli" ] ;;
   elixir) [ -x "$ROOT/elixir/build/sekreto-cli" ] ;;
+  cpp) [ -x "$ROOT/cpp/build/sekreto-cli" ] ;;
   *) false ;;
   esac
 }

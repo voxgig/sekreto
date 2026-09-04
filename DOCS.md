@@ -201,6 +201,7 @@ provider, so a typo fails the same way whether or not a vault is reachable.
 | swift | `tryget` → `String?` | `getfrom` / `tryfrom` | `redact` | |
 | dart | `tryget` → `FutureOr<String?>` | `getfrom` / `tryfrom` | `redact` | |
 | elixir | `tryget` | `getfrom` / `tryfrom` | `redactall` | `Sekreto.new(plugins: …, providers: …)` |
+| cpp | `tryget` → `std::optional` | `getfrom` / `tryfrom` | `redact` | |
 | csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` | |
 
 Go's `New` returns an error, because building a chain can fail — an

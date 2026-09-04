@@ -219,13 +219,32 @@ secretspec's box-drawn diagnostics reach that size. Nothing here sets a
 timeout, so that hang would be permanent.
 
 Arguments go as an array and never through a shell, and no secret ever
-reaches a command line, where the process table publishes it. -/
+reaches a command line, where the process table publishes it.
+
+A BINARY THAT CANNOT BE EXECUTED IS ITS OWN FAILURE, not a vault error,
+and Lean makes that awkward: `IO.Process.output` does NOT throw for a
+missing command. It answers exit 255 with the runtime's own wording on
+stderr, which without the check below is reported as `boru vault error:
+could not execute external process` - a store that could not be started
+dressed up as a store that answered. The `tryCatch` stays for the
+platforms and releases where it does throw.
+
+The phrase is Lean's, and matching it can only ever turn one ERROR into
+another, more accurate one: a miss is decided further up, on wording the
+child itself chose. -/
 def runcmd (command : String) (args : List String)
     (env : List (String × Option String) := []) : IO Ran := do
   let done ← tryCatch
     (IO.Process.output { cmd := command, args := args.toArray, env := env.toArray })
     (fun err => fail ("sekreto: cannot run " ++ command ++ ": " ++ why err))
-  return { out := done.stdout, why := done.stderr.trim, status := done.exitCode.toNat }
+
+  let status := done.exitCode.toNat
+  let said := done.stderr.trim
+
+  if 255 == status && hasText said "could not execute external process" then
+    fail ("sekreto: cannot run " ++ command ++ ": " ++ said)
+
+  return { out := done.stdout, why := said, status := status }
 
 -- --------------------------------------------------------------- built in
 

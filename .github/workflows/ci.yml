@@ -116,6 +116,7 @@ jobs:
           - swift
           - dart
           - elixir
+          - cpp
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -276,6 +277,14 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends elixir
           elixir --version | tail -1
           erl -eval 'io:format("OTP ~s~n",[erlang:system_info(otp_release)]),halt().' -noshell
+      # c and cpp need only a compiler and OpenSSL's headers. Both are on
+      # the runner image already, but libssl-dev is installed explicitly
+      # rather than assumed: it is the one piece whose absence would fail
+      # at the link line with a message about -lssl rather than about a
+      # missing toolchain, which reads as a port bug and is not one.
+      - name: Setup OpenSSL headers
+        if: matrix.lang == 'cpp' || matrix.lang == 'c'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libssl-dev
 
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
@@ -448,6 +457,13 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends elixir
           elixir --version | tail -1
           erl -eval 'io:format("OTP ~s~n",[erlang:system_info(otp_release)]),halt().' -noshell
+      # c and cpp need only a compiler and OpenSSL's headers. Both are on
+      # the runner image already, but libssl-dev is installed explicitly
+      # rather than assumed: it is the one piece whose absence would fail
+      # at the link line with a message about -lssl rather than about a
+      # missing toolchain, which reads as a port bug and is not one.
+      - name: Setup OpenSSL headers
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libssl-dev
       - name: Setup Zig
         run: |
           python3 -m pip install --disable-pip-version-check --quiet \
