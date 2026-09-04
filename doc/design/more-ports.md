@@ -1,10 +1,11 @@
 # Bringing sekreto to the languages struct already has
 
 [voxgig/struct](https://github.com/voxgig/struct) has twenty-three ports.
-sekreto now has fourteen — **zig** and **kotlin** landed with this
-document, then **scala** and **clojure**. The remaining nine are:
+sekreto now has fifteen — **zig** and **kotlin** landed with this
+document, then **scala**, **clojure** and **swift**. The remaining eight
+are:
 
-> c, cpp, dart, elixir, haskell, lean, lua, ocaml, swift
+> c, cpp, dart, elixir, haskell, lean, lua, ocaml
 
 Every one of them already has a [voxgig/omni](https://github.com/voxgig/omni)
 runner, so the conformance half of a port has somewhere to plug in. The
@@ -57,7 +58,7 @@ the line.
 ## Seven that can be complete ports today
 
 **zig, kotlin, scala, clojure, dart, swift, elixir** — of which **zig,
-kotlin, scala and clojure are done**.
+kotlin, scala, clojure and swift are done**.
 
 Each has HTTP with TLS in its standard library or platform library, and
 everything else is either there or is the kind of small in-tree piece
@@ -81,9 +82,14 @@ order, easiest first:
    `HTTP_2` and its h2c upgrade sends a `Content-Length` with an empty
    body, which strict servers reject. Scala and Clojure inherit that
    default and must pin HTTP/1.1, as java and kotlin now do.
-3. **dart, swift, elixir** — each has HTTP, TLS and (except Elixir on
-   older OTP) JSON; each needs SHA-256 and HMAC hand-rolled, except
-   Elixir, where OTP's `:crypto` has both.
+3. **dart,** ~~**swift**~~**, elixir** — each has HTTP, TLS and (except
+   Elixir on older OTP) JSON; each needs SHA-256 and HMAC hand-rolled,
+   except Elixir, where OTP's `:crypto` has both. **swift is done**, and
+   the hand-rolled half was the whole of the work there: CryptoKit is
+   Apple-only and swift-crypto is a package, so `src/Crypto.swift` carries
+   FIPS 180-4 SHA-256 and HMAC in-tree. It ships no `Package.swift` at
+   all — the Makefile drives `swiftc` directly — which is what keeps
+   SwiftPM out of a consumer's way entirely.
 
 ## Six that need a TLS binding
 

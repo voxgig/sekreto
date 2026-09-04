@@ -198,6 +198,7 @@ provider, so a typo fails the same way whether or not a vault is reachable.
 | kotlin | `tryget`, and `` `try` `` | `getfrom` / `tryfrom` | `redact` | |
 | scala | `tryget` → `Option` | `getfrom` / `tryfrom` | `redact` | |
 | clojure | `tryget` | `getfrom` / `tryfrom` | `redactall` | |
+| swift | `tryget` → `String?` | `getfrom` / `tryfrom` | `redact` | |
 | csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` | |
 
 Go's `New` returns an error, because building a chain can fail — an

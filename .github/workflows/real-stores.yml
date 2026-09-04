@@ -47,6 +47,7 @@ env:
   KOTLIN_VERSION: '2.1.20'
   SCALA_VERSION: '3.4.2'
   CLOJURE_VERSION: '1.12.0.1530'
+  SWIFT_VERSION: '5.10.1'
 
 jobs:
   real-stores:
@@ -122,6 +123,28 @@ jobs:
           chmod +x /tmp/clojure-install.sh
           /tmp/clojure-install.sh --prefix "$HOME/clojure-cli"
           echo "$HOME/clojure-cli/bin" >> "$GITHUB_PATH"
+      # swift.org publishes one build per Ubuntu release, and 5.10.1 has NO
+      # 24.04 build -- 24.04 support arrived with Swift 6. The 22.04 build
+      # runs on 24.04, which is what ubuntu-latest is: verified, not assumed
+      # (the port was written and its suite run under exactly this tarball on
+      # Ubuntu 24.04.4). Moving to a 6.x build is the alternative and is a
+      # bigger change than it looks -- Swift 6 language mode is a different
+      # concurrency dialect -- so pin what is known to work.
+      #
+      # corelibs-foundation reaches libcurl and libxml2 at RUNTIME, which is
+      # why they are installed rather than assumed: FoundationNetworking is
+      # a libcurl client, and a missing one surfaces as a link error at the
+      # first URLSession call rather than at setup.
+      - name: Setup Swift
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            libcurl4-openssl-dev libxml2-dev libpython3-dev
+          curl -sSLf --retry 3 -o /tmp/swift.tar.gz \
+            "https://download.swift.org/swift-${SWIFT_VERSION}-release/ubuntu2204/swift-${SWIFT_VERSION}-RELEASE/swift-${SWIFT_VERSION}-RELEASE-ubuntu22.04.tar.gz"
+          sudo mkdir -p /opt/swift
+          sudo tar xzf /tmp/swift.tar.gz -C /opt/swift --strip-components=1
+          echo /opt/swift/usr/bin >> "$GITHUB_PATH"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0'

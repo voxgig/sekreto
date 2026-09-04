@@ -315,6 +315,11 @@ PORTS = {
     # would make this entry wrong, and the manifest guard below would say
     # so rather than let it pass.
     'swift':      dict(lib=[], why='no manifest a consumer resolves'),
+    # elixir: the escript is assembled by tool/escript.exs from OTP's own
+    # :escript.create/2 rather than `mix escript.build`, precisely so there
+    # is no mix.exs -- a project manifest whose only content would be the
+    # absence of dependencies. Nothing for a consumer to resolve.
+    'elixir':     dict(lib=[], why='no manifest a consumer resolves'),
     # scala: scalac is handed a file list too - the Makefile drives it
     # directly and there is no build.sbt, so the same applies again.
     'scala':      dict(lib=[], why='no manifest a consumer resolves'),
@@ -359,6 +364,10 @@ SOURCES = {
     'dart':       dict(globs=['dart/src/**/*.dart', 'dart/cli/**/*.dart'],
                        skip=[], pattern=SOURCE),
     'swift':      dict(globs=['swift/src/**/*.swift', 'swift/cli/**/*.swift'],
+                       skip=[], pattern=SOURCE),
+    # elixir/tool is build machinery, not shipped source, and sits outside
+    # the globs exactly as go/testutil and rust/corpus do.
+    'elixir':     dict(globs=['elixir/src/**/*.ex', 'elixir/cli/**/*.ex'],
                        skip=[], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone
