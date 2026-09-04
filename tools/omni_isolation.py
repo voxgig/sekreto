@@ -209,6 +209,35 @@ def read_csproj(path):
         text, re.I)]
 
 
+def read_deps_edn(path):
+    """deps.edn: the CONSUMER-RESOLVED region - everything before `:aliases`.
+
+    tools.deps ignores a dependency's aliases entirely: a consumer taking
+    this port resolves its `:paths` and its `:deps`, and nothing else.  An
+    alias is therefore clojure's devDependencies - the place a conformance
+    runner may legitimately be named - and this reads up to the first one.
+    Both `:paths` and `:deps` are in scope, not `:deps` alone: an external
+    path lands on a consumer's classpath the same way a coordinate does.
+
+    COMMENTS ARE STRIPPED FIRST, and that is not a nicety.  A comment can
+    open the scope by accident: in the struct port of this tool the clojure
+    scan started at `:deps\b`, an explanatory comment ABOVE the map
+    contained `:deps/root "clojure"`, and the read began inside prose -
+    reading the word omni out of an explanation of why omni is NOT declared
+    there.  Measured, not hypothetical.  It strips by line, so a `;` inside
+    a string would be cut too; no deps.edn here has one, and a parse is the
+    real answer if one ever does.
+
+    A textual scan, and saying so plainly matters: it is weaker than a parse
+    and it is what is available without an EDN reader, which python has no
+    more of in its standard library than these ports are allowed as a
+    dependency.
+    """
+    text = re.sub(r';.*$', '', path.read_text(encoding='utf-8'), flags=re.M)
+    head = re.split(r':aliases\b', text, maxsplit=1)[0]
+    return [line for line in head.splitlines() if line.strip()]
+
+
 DYNAMIC_UNRESOLVED = ('<dynamic dependencies with no resolvable source: '
                       'omni cannot be ruled out here>')
 
@@ -229,6 +258,7 @@ PORTS = {
     'csharp':     dict(lib=[('csharp/src/Sekreto.csproj', read_csproj),
                             ('csharp/cli/SekretoCli.csproj', read_csproj)],
                        harness=['csharp/test/SekretoTest.csproj']),
+    'clojure':    dict(lib=[('clojure/deps.edn', read_deps_edn)]),
     'typescript': dict(lib=[('typescript/package.json', read_package_json)]),
     'javascript': dict(lib=[('javascript/package.json', read_package_json)]),
     'python':     dict(lib=[('python/pyproject.toml', read_pyproject)]),
@@ -275,6 +305,13 @@ SOURCES = {
     'kotlin':     dict(globs=['kotlin/src/**/*.kt', 'kotlin/cli/**/*.kt'],
                        skip=[], pattern=SOURCE),
     'scala':      dict(globs=['scala/src/**/*.scala', 'scala/cli/**/*.scala'],
+                       skip=[], pattern=SOURCE),
+    # clojure/test is where omni legitimately appears, and it is excluded by
+    # living outside the globs - as go/testutil and rust/corpus are. Note
+    # that a `;;` comment is NOT skipped by the comment rule below, which
+    # only knows the markers of the languages that were here first: a
+    # clojure source file must not name omni even in prose.
+    'clojure':    dict(globs=['clojure/src/**/*.clj', 'clojure/cli/**/*.clj'],
                        skip=[], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone
