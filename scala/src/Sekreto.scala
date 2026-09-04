@@ -205,8 +205,8 @@ class Sekreto(
   private case class Cached(store: String, name: Name, value: String)
 
   private val entries: List[Entry] = providers.zipWithIndex.map: (provider, index) =>
-    val given = names.lift(index).flatten
-    Entry(given.filter(_.nonEmpty).getOrElse(storename(provider)), provider)
+    val named = names.lift(index).flatten.filter(_.nonEmpty)
+    Entry(named.getOrElse(storename(provider)), provider)
 
   // A buffer, not a map: the store a value came from stays attached, and
   // redaction order does not vary between runs.

@@ -84,6 +84,11 @@ private[sekreto] def uriescape(text: String): String =
 
   out.toString
 
+/** Two hex digits as a byte, or None. `toIntOption` reads decimal only. */
+private def hexbyte(text: String): Option[Int] =
+  try Some(Integer.parseInt(text, 16))
+  catch case _: NumberFormatException => None
+
 /** Percent-decode, and nothing else: `+` stays `+`, as on the wire. */
 private[sekreto] def uridecode(text: String): String =
   val out = ByteArrayOutputStream()
@@ -94,7 +99,7 @@ private[sekreto] def uridecode(text: String): String =
     var taken = false
 
     if '%' == head && index + 2 < text.length then
-      text.substring(index + 1, index + 3).toIntOption(16) match
+      hexbyte(text.substring(index + 1, index + 3)) match
         case Some(code) =>
           out.write(code)
           index += 3
@@ -121,8 +126,8 @@ private[sekreto] def canonicalquery(query: String): String =
         val key = if -1 == eq then pair else pair.substring(0, eq)
         val value = if -1 == eq then "" else pair.substring(eq + 1)
         (uriescape(uridecode(key)), uriescape(uridecode(value)))
-      .sortBy(pair => (pair(0), pair(1)))
-      .map(pair => s"${pair(0)}=${pair(1)}")
+      .sortBy(pair => (pair._1, pair._2))
+      .map((key, value) => s"$key=$value")
       .mkString("&")
 
 /** Sign one request. Returns the headers to attach: authorization,
@@ -153,7 +158,7 @@ def sigv4(input: Signing): ListMap[String, String] =
   headers = headers.updated("x-amz-date", input.datetime)
   session.foreach(value => headers = headers.updated("x-amz-security-token", value))
 
-  val canonicalheaders = headers.map((key, value) => s"$key:$value\n").mkString
+  val canonicalheaders = headers.toList.map((key, value) => s"$key:$value\n").mkString
   val signedheaders = headers.keys.mkString(";")
 
   val rawpath = url.getRawPath
