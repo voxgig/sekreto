@@ -1,6 +1,7 @@
 #include "Tls.hpp"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <unistd.h>
 
 #include <cstdlib>
@@ -109,7 +110,18 @@ class Tlsstream : public Stream {
     // A truncated stream is how many servers close; the framing decides
     // whether what arrived was a whole response.
     if (SSL_ERROR_ZERO_RETURN == reason) return 0;
-    if (SSL_ERROR_SYSCALL == reason && 0 == ERR_peek_error()) return 0;
+
+    if (SSL_ERROR_SYSCALL == reason && 0 == ERR_peek_error()) {
+      // The socket carries the read deadline, so a stalled server arrives
+      // here as EAGAIN. That is a store that could not answer, and reading
+      // it as a clean end of stream would hand back a TRUNCATED body -
+      // which the JSON parser would then reject as a malformed response,
+      // hiding a timeout behind the wrong diagnosis.
+      if (EAGAIN == errno || EWOULDBLOCK == errno) {
+        throw SekretoError("sekreto: cannot reach " + bareurl(url_) + ": timed out");
+      }
+      return 0;
+    }
 
     throw SekretoError("sekreto: cannot reach " + bareurl(url_) + ": " + sslwhy());
   }

@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <signal.h>
 #include <netdb.h>
 #include <poll.h>
 #include <string.h>
@@ -34,7 +35,30 @@ SekretoError unreachable(const std::string& url, const std::string& why) {
 }
 
 std::string oserror() {
+  if (EAGAIN == errno || EWOULDBLOCK == errno) return "timed out";
   return strerror(errno);
+}
+
+/// Stop a write to a closed peer from killing the process.
+///
+/// A vault that closes the connection while the request is still being
+/// written raises SIGPIPE, whose default disposition TERMINATES - so an
+/// application would die rather than see an error from `get()`. The
+/// disposition is only changed if it is still the default, so an
+/// application that has made its own arrangements keeps them.
+void hushsigpipe() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+
+  struct sigaction current;
+  if (0 != sigaction(SIGPIPE, nullptr, &current)) return;
+  if (SIG_DFL != current.sa_handler) return;
+
+  struct sigaction ignore;
+  memset(&ignore, 0, sizeof(ignore));
+  ignore.sa_handler = SIG_IGN;
+  sigaction(SIGPIPE, &ignore, nullptr);
 }
 
 /// A url split into the parts a request needs.
@@ -234,7 +258,7 @@ class Plainstream : public Stream {
     size_t sent = 0;
 
     while (sent < len) {
-      ssize_t put = ::write(fd_, buf + sent, len - sent);
+      ssize_t put = ::send(fd_, buf + sent, len - sent, MSG_NOSIGNAL);
 
       if (0 > put) {
         if (EINTR == errno) continue;
@@ -272,7 +296,9 @@ bool dechunk(const std::string& raw, std::string& out) {
 
     char* stop = nullptr;
     long size = std::strtol(header.c_str(), &stop, 16);
-    if (nullptr == stop || 0 > size) return false;
+    // A length that is not hex at all is a malformed body, not a zero
+    // chunk: strtol answers 0 for both.
+    if (nullptr == stop || stop == header.c_str() || 0 > size) return false;
 
     size_t body = at + 2;
 
@@ -315,6 +341,8 @@ std::vector<std::string> pemcerts(const std::string& text) {
 
 Response httprequest(const std::string& method, const std::string& url,
                      const Ordered& headers, const std::optional<std::string>& body) {
+  hushsigpipe();
+
   Target target = split(url);
 
   int fd = connectto(target, url);

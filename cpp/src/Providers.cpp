@@ -3,9 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <poll.h>
-#include <signal.h>
 #include <string.h>
-#include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -14,7 +12,6 @@
 #include <cstdlib>
 #include <ctime>
 #include <limits>
-#include <map>
 
 #include "Crypto.hpp"
 #include "Http.hpp"
