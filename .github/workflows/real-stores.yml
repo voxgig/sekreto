@@ -180,6 +180,12 @@ jobs:
           erl -eval 'io:format("OTP ~s~n",[erlang:system_info(otp_release)]),halt().' -noshell
       - name: Setup OpenSSL headers
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libssl-dev
+      # lua5.4 from the Ubuntu archive, and the OpenSSL headers the port's
+      # own transport needs. Lua has no sockets at all, so the Makefile
+      # compiles native/sekretonet.c into a helper the library runs -- the
+      # -dev package is a BUILD requirement here, not an optional extra.
+      - name: Setup Lua
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 libssl-dev
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0'

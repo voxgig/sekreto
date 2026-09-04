@@ -1,11 +1,11 @@
 # Bringing sekreto to the languages struct already has
 
 [voxgig/struct](https://github.com/voxgig/struct) has twenty-three ports.
-sekreto now has nineteen — **zig** and **kotlin** landed with this
+sekreto now has twenty — **zig** and **kotlin** landed with this
 document, then **scala**, **clojure**, **swift**, **dart**, **elixir**,
-**cpp** and **c**. The remaining four are:
+**cpp**, **c** and **lua**. The remaining three are:
 
-> haskell, lean, lua, ocaml
+> haskell, lean, ocaml
 
 All five are TLS-binding ports, and nothing else is left. **cpp is the
 first of that set to land, and it landed as a FULL port** — the decision
