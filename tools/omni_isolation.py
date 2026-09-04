@@ -333,6 +333,12 @@ PORTS = {
     # ocaml: no dune-project and no .opam file -- the Makefile drives
     # ocamlopt directly, C stubs included. Nothing a consumer resolves.
     'ocaml':      dict(lib=[], why='no manifest a consumer resolves'),
+    # lean: no lakefile.toml and no lakefile.lean -- only a lean-toolchain,
+    # which pins a compiler version and declares no dependency. Lake never
+    # resolves anything here, so there is nothing for a consumer to take.
+    # Note that lakefile.toml IS on the manifest list below, so if one is
+    # ever added this entry stops being true and the guard will say so.
+    'lean':       dict(lib=[], why='no manifest a consumer resolves'),
     # scala: scalac is handed a file list too - the Makefile drives it
     # directly and there is no build.sbt, so the same applies again.
     'scala':      dict(lib=[], why='no manifest a consumer resolves'),
@@ -408,6 +414,13 @@ SOURCES = {
     'ocaml':      dict(globs=['ocaml/src/**/*.ml', 'ocaml/src/**/*.mli',
                               'ocaml/src/**/*.c', 'ocaml/src/**/*.h',
                               'ocaml/cli/**/*.ml'],
+                       skip=[], pattern=SOURCE),
+    # lean/ffi is the libcurl binding and ships with the library, so it is
+    # scanned like lua/native and ocaml's stubs. A further note for editors
+    # of this port: the COMMENT rule knows Lean's `--` but NOT its block
+    # form `/-`, so a `/-` comment naming omni would be reported.
+    'lean':       dict(globs=['lean/src/**/*.lean', 'lean/cli/**/*.lean',
+                              'lean/ffi/**/*.c', 'lean/ffi/**/*.h'],
                        skip=[], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone

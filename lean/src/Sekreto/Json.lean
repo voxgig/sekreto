@@ -55,14 +55,18 @@ end Pairs
 
 /-- A JSON value. Numbers are `Float` only: there is no integer case
 anywhere in this library, which is what keeps a payload read from one
-store and written to another byte-identical. -/
+store and written to another byte-identical.
+
+The object case spells `List (String × Json)` out rather than using the
+`Pairs` abbreviation: Lean's nested-inductive check unfolds `List` but
+not an `abbrev` over it. -/
 inductive Json where
   | null
   | bool (value : Bool)
   | num (value : Float)
   | str (value : String)
   | arr (value : List Json)
-  | obj (value : Pairs Json)
+  | obj (value : List (String × Json))
   deriving Inhabited
 
 namespace Json
@@ -76,8 +80,7 @@ def quote (text : String) : String :=
     else if '\n' == ch then "\\n"
     else if '\r' == ch then "\\r"
     else if '\t' == ch then "\\t"
-    else if ch.toNat < 0x20 then
-      "\\u00" ++ hexbyte (UInt8.ofNat ch.toNat)
+    else if ch.toNat < 0x20 then "\\u00" ++ hexbyte (UInt8.ofNat ch.toNat)
     else String.singleton ch
   "\"" ++ text.toList.foldl (fun out ch => out ++ escape ch) "" ++ "\""
 
@@ -110,14 +113,14 @@ def asarr : Json → Option (List Json)
   | .arr value => some value
   | _ => none
 
-def asobj : Json → Option (Pairs Json)
+def asobj : Json → Option (List (String × Json))
   | .obj value => some value
   | _ => none
 
 /-- One step into an object; nothing for any other shape. -/
 def get? (value : Json) (key : String) : Option Json :=
   match value with
-  | .obj entries => entries.find? key
+  | .obj entries => Pairs.find? entries key
   | _ => none
 
 /-- This value as the text a caller would print, or none when there is no
@@ -131,24 +134,24 @@ def text : Json → Option String
   | other => some (stringify other)
 
 /-- An object, in the order given: a payload's field order is signed. -/
-def object (entries : Pairs Json) : Json := .obj entries
+def object (entries : List (String × Json)) : Json := .obj entries
 
 end Json
 
-/-- The same reads on an optional value, so a provider can walk a
-response body - which is `Option Json`, because a store may not have
-answered with JSON at all - without unwrapping at every step. -/
+-- The same reads on an optional value, so a provider can walk a response
+-- body - which is `Option Json`, because a store may not have answered
+-- with JSON at all - without unwrapping at every step.
 namespace OptJson
 
 /-- Walk nested objects; nothing the moment a step is not there. -/
 def dig (value : Option Json) (keys : List String) : Option Json :=
-  keys.foldl (fun at key => at.bind (fun held => held.get? key)) value
+  keys.foldl (fun held key => held.bind (fun found => found.get? key)) value
 
 def text (value : Option Json) : Option String := value.bind Json.text
 def asstr (value : Option Json) : Option String := value.bind Json.asstr
 def asnum (value : Option Json) : Option Float := value.bind Json.asnum
 def asarr (value : Option Json) : Option (List Json) := value.bind Json.asarr
-def asobj (value : Option Json) : Option (Pairs Json) := value.bind Json.asobj
+def asobj (value : Option Json) : Option (List (String × Json)) := value.bind Json.asobj
 
 end OptJson
 
@@ -160,7 +163,7 @@ private structure Reader where
 
 /-- The nesting a response body may reach before it is refused. A body
 arrives before any trust check has been made of it, and `[[[[...` on a
-recursive descent parser is a stack overflow - which is the process, not
+recursive-descent parser is a stack overflow - which is the process, not
 an error. -/
 private def MAXDEPTH : Nat := 128
 
@@ -169,6 +172,60 @@ private def skipws (reader : Reader) : Reader :=
 
 private def isnumchar (ch : Char) : Bool :=
   ('0' ≤ ch && ch ≤ '9') || '-' == ch || '+' == ch || '.' == ch || 'e' == ch || 'E' == ch
+
+private def isdigit (ch : Char) : Bool := '0' ≤ ch && ch ≤ '9'
+
+/-- A JSON number, read by hand.
+
+Lean 4.16 has no `String.toFloat?`, so the digits are read into a `Nat`
+mantissa and a decimal exponent and handed to `Float.ofScientific`, which
+is the platform's own decimal-to-binary conversion. A span that is not a
+number at all, and a value that comes back non-finite - `1e999` does -
+are both refused: JSON has no infinity, and an infinite expiry would
+later be arithmetic on something that is not a number. -/
+private def readnum (span : List Char) : Option Float :=
+  let (negative, body) := match span with
+    | '-' :: rest => (true, rest)
+    | rest => (false, rest)
+
+  let whole := body.takeWhile isdigit
+  if whole.isEmpty then none else
+
+  let afterwhole := body.drop whole.length
+
+  let (frac, afterfrac) := match afterwhole with
+    | '.' :: rest =>
+      let digits := rest.takeWhile isdigit
+      (digits, rest.drop digits.length)
+    | rest => ([], rest)
+
+  let expres : Option Int := match afterfrac with
+    | [] => some 0
+    | mark :: rest =>
+      if 'e' != mark && 'E' != mark then none
+      else
+        let (esign, edigits) := match rest with
+          | '-' :: more => (true, more)
+          | '+' :: more => (false, more)
+          | more => (false, more)
+        let digits := edigits.takeWhile isdigit
+        if digits.isEmpty || digits.length != edigits.length then none
+        else match (String.mk digits).toNat? with
+          | none => none
+          | some size => some (if esign then -(Int.ofNat size) else Int.ofNat size)
+
+  match expres with
+  | none => none
+  | some exponent =>
+    match (String.mk (whole ++ frac)).toNat? with
+    | none => none
+    | some mantissa =>
+      let scale := exponent - Int.ofNat frac.length
+      let value :=
+        if scale < 0 then Float.ofScientific mantissa true (Int.toNat (-scale))
+        else Float.ofScientific mantissa false (Int.toNat scale)
+      if value.isNaN || value.isInf then none
+      else some (if negative then -value else value)
 
 /-- Read four hex digits as one UTF-16 code unit. No surrogate-pair
 recombination, in this port or any other. -/
@@ -179,8 +236,7 @@ private def readhex4 (chars : List Char) : Option (Char × List Char) :=
     let hb ← hexdigit b
     let hc ← hexdigit c
     let hd ← hexdigit d
-    let code := ((ha * 16 + hb) * 16 + hc) * 16 + hd
-    if h : code.isValidChar then some (⟨UInt32.ofNat code, h⟩, rest) else some ('�', rest)
+    some (Char.ofNat (((ha * 16 + hb) * 16 + hc) * 16 + hd), rest)
   | _ => none
 
 private partial def readstr (chars : List Char) (out : String) : Option (String × List Char) :=
@@ -191,8 +247,8 @@ private partial def readstr (chars : List Char) (out : String) : Option (String 
     if '"' == escape then readstr rest (out.push '"')
     else if '\\' == escape then readstr rest (out.push '\\')
     else if '/' == escape then readstr rest (out.push '/')
-    else if 'b' == escape then readstr rest (out.push '\x08')
-    else if 'f' == escape then readstr rest (out.push '\x0c')
+    else if 'b' == escape then readstr rest (out.push (Char.ofNat 8))
+    else if 'f' == escape then readstr rest (out.push (Char.ofNat 12))
     else if 'n' == escape then readstr rest (out.push '\n')
     else if 'r' == escape then readstr rest (out.push '\r')
     else if 't' == escape then readstr rest (out.push '\t')
@@ -214,56 +270,62 @@ private partial def readvalue (reader : Reader) : Option (Json × Reader) :=
   let reader := skipws reader
   match reader.rest with
   | [] => none
-  | '{' :: rest => readobj { reader with rest := rest, depth := reader.depth + 1 } []
-  | '[' :: rest => readarr { reader with rest := rest, depth := reader.depth + 1 } []
-  | '"' :: rest => do
-    let (value, more) ← readstr rest ""
-    some (.str value, { reader with rest := more })
-  | 't' :: _ => (word reader.rest "true").map (fun more => (.bool true, { reader with rest := more }))
-  | 'f' :: _ => (word reader.rest "false").map (fun more => (.bool false, { reader with rest := more }))
-  | 'n' :: _ => (word reader.rest "null").map (fun more => (.null, { reader with rest := more }))
+  | '{' :: rest => readobj { rest := rest, depth := reader.depth + 1 } []
+  | '[' :: rest => readarr { rest := rest, depth := reader.depth + 1 } []
+  | '"' :: rest =>
+    match readstr rest "" with
+    | none => none
+    | some (value, more) => some (Json.str value, { reader with rest := more })
+  | 't' :: _ =>
+    (word reader.rest "true").map (fun more => (Json.bool true, { reader with rest := more }))
+  | 'f' :: _ =>
+    (word reader.rest "false").map (fun more => (Json.bool false, { reader with rest := more }))
+  | 'n' :: _ =>
+    (word reader.rest "null").map (fun more => (Json.null, { reader with rest := more }))
   | _ =>
     let span := reader.rest.takeWhile isnumchar
-    if span.isEmpty then none
-    else
-      -- The platform's own float parser, then a finiteness check: `1e999`
-      -- parses to infinity, JSON has no infinity, and an infinite expiry
-      -- would later be arithmetic on a value that is not a number.
-      match (String.mk span).toSubstring.toString.toFloat? with
-      | none => none
-      | some value =>
-        if value.isNaN || value.isInf then none
-        else some (.num value, { reader with rest := reader.rest.drop span.length })
+    match readnum span with
+    | none => none
+    | some value => some (Json.num value, { reader with rest := reader.rest.drop span.length })
 
-private partial def readobj (reader : Reader) (out : Pairs Json) : Option (Json × Reader) :=
+private partial def readobj (reader : Reader) (out : List (String × Json)) : Option (Json × Reader) :=
   let reader := skipws reader
   match reader.rest with
-  | '}' :: rest => some (.obj out, { reader with rest := rest, depth := reader.depth - 1 })
-  | '"' :: rest => do
-    let (key, more) ← readstr rest ""
-    let after := skipws { reader with rest := more }
-    match after.rest with
-    | ':' :: tail => do
-      let (value, next) ← readvalue { after with rest := tail }
-      let next := skipws next
-      match next.rest with
-      | ',' :: tail => readobj { next with rest := tail } (out ++ [(key, value)])
-      | '}' :: tail => some (.obj (out ++ [(key, value)]), { next with rest := tail, depth := next.depth - 1 })
+  | '}' :: rest => some (Json.obj out, { reader with rest := rest, depth := reader.depth - 1 })
+  | '"' :: rest =>
+    match readstr rest "" with
+    | none => none
+    | some (key, more) =>
+      let after := skipws { reader with rest := more }
+      match after.rest with
+      | ':' :: tail =>
+        match readvalue { after with rest := tail } with
+        | none => none
+        | some (value, next) =>
+          let next := skipws next
+          match next.rest with
+          | ',' :: tail => readobj { next with rest := tail } (out ++ [(key, value)])
+          | '}' :: tail =>
+            some (Json.obj (out ++ [(key, value)]),
+              { next with rest := tail, depth := next.depth - 1 })
+          | _ => none
       | _ => none
-    | _ => none
   | _ => none
 
 private partial def readarr (reader : Reader) (out : List Json) : Option (Json × Reader) :=
   let reader := skipws reader
   match reader.rest with
-  | ']' :: rest => some (.arr out, { reader with rest := rest, depth := reader.depth - 1 })
-  | _ => do
-    let (value, next) ← readvalue reader
-    let next := skipws next
-    match next.rest with
-    | ',' :: tail => readarr { next with rest := tail } (out ++ [value])
-    | ']' :: tail => some (.arr (out ++ [value]), { next with rest := tail, depth := next.depth - 1 })
-    | _ => none
+  | ']' :: rest => some (Json.arr out, { reader with rest := rest, depth := reader.depth - 1 })
+  | _ =>
+    match readvalue reader with
+    | none => none
+    | some (value, next) =>
+      let next := skipws next
+      match next.rest with
+      | ',' :: tail => readarr { next with rest := tail } (out ++ [value])
+      | ']' :: tail =>
+        some (Json.arr (out ++ [value]), { next with rest := tail, depth := next.depth - 1 })
+      | _ => none
 
 end
 
@@ -277,9 +339,8 @@ def parse (text : String) : Option Json :=
   else
     match readvalue { rest := text.toList, depth := 0 } with
     | none => none
-    | some (value, reader) =>
-      -- Trailing content after the top-level value is not JSON.
-      if (skipws reader).rest.isEmpty then some value else none
+    -- Trailing content after the top-level value is not JSON.
+    | some (value, reader) => if (skipws reader).rest.isEmpty then some value else none
 
 end Json
 
