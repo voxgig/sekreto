@@ -320,6 +320,9 @@ PORTS = {
     # is no mix.exs -- a project manifest whose only content would be the
     # absence of dependencies. Nothing for a consumer to resolve.
     'elixir':     dict(lib=[], why='no manifest a consumer resolves'),
+    # cpp: the Makefile drives g++ over a file list. There is no CMakeLists,
+    # no vcpkg.json, no conanfile -- nothing a consumer resolves.
+    'cpp':        dict(lib=[], why='no manifest a consumer resolves'),
     # scala: scalac is handed a file list too - the Makefile drives it
     # directly and there is no build.sbt, so the same applies again.
     'scala':      dict(lib=[], why='no manifest a consumer resolves'),
@@ -368,6 +371,11 @@ SOURCES = {
     # elixir/tool is build machinery, not shipped source, and sits outside
     # the globs exactly as go/testutil and rust/corpus do.
     'elixir':     dict(globs=['elixir/src/**/*.ex', 'elixir/cli/**/*.ex'],
+                       skip=[], pattern=SOURCE),
+    # Headers are shipped source too: a cpp port carries much of itself in
+    # .hpp, and scanning only .cpp would leave most of it unread.
+    'cpp':        dict(globs=['cpp/src/**/*.cpp', 'cpp/src/**/*.hpp',
+                              'cpp/cli/**/*.cpp', 'cpp/cli/**/*.hpp'],
                        skip=[], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone
