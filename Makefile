@@ -67,14 +67,35 @@ test:
 build:
 	@for lang in $(LANGS); do $(MAKE) -s build-$$lang; done
 
+# THE API SERVER IS A NODE PROGRAM WITH A DEPENDENCY, AND NOTHING INSTALLED
+# IT. Both suites start `api/server.js`, which requires fastify; on a fresh
+# checkout that is `Cannot find module 'fastify'` before a single port is
+# exercised. CI never saw it because the workflow installs first
+# (`npm --prefix api install`, ci.yml and real-stores.yml) -- so the gate was
+# green while `make integration` was broken for everyone who had not happened
+# to install by hand. The preparation belongs on the same side of the line as
+# `build`: the Makefile prepares, the scripts test, which is why `integration`
+# already depends on `build` rather than building anything itself.
+#
+# A DIRECTORY TARGET RATHER THAN A PHONY ONE, so the install runs when the
+# manifest or the lock is newer than what is installed and not on every run.
+# `install` rather than `ci` is what CI uses, and matching it is the point;
+# `touch` is because npm leaves the directory's mtime older than the lock it
+# just read when nothing needed changing.
+API_DEPS = api/node_modules
+
+$(API_DEPS): api/package.json api/package-lock.json
+	@npm --prefix api install --no-fund --no-audit
+	@touch $(API_DEPS)
+
 # Every CLI is built first: test/integration.sh skips a port it cannot find,
 # and a skipped port proves nothing.
-integration: build
+integration: build $(API_DEPS)
 	@./test/integration.sh
 
 # The same CLIs against the real servers, in docker. Needs docker; brings
 # the stack up and tears it down again. Deliberately not part of `all`.
-realstores: build
+realstores: build $(API_DEPS)
 	@./test/realstores.sh
 
 inspect:
