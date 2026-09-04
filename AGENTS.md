@@ -12,7 +12,7 @@ ten stay one.
 
 2. **`spec/sekreto.aon` is the contract.** It runs against every port. A
    port that disagrees with the spec is the thing that is wrong — not the
-   spec. Changing the spec means changing ten ports, so change it
+   spec. Changing the spec means changing twelve ports, so change it
    deliberately.
 
    The cases live in `spec/def/*.aon`; `spec/sekreto.json` is **generated**
@@ -306,15 +306,16 @@ between the two.
 
 ## Release and publish
 
-Ten ports, **two of which publish a package**:
+Twelve ports, **two of which publish a package**:
 
 | port | package | tag |
 | --- | --- | --- |
 | `typescript/` | npm `@voxgig/sekreto` | `typescript/v<version>` |
 | `javascript/` | npm `@voxgig/sekreto-js` | `javascript/v<version>` |
 
-The other eight (python, ruby, php, perl, go, rust, java, csharp) ship no
-package and have no publish flow yet — they are consumed from this repository.
+The other ten (python, ruby, php, perl, go, rust, java, csharp, zig,
+kotlin) ship no package and have no publish flow yet — they are consumed
+from this repository.
 
 ### Releasing
 
