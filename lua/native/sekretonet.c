@@ -581,9 +581,7 @@ static void dofetch(void) {
  */
 static void doexec(void) {
   char **argv;
-  char **envp;
   size_t argc = 0;
-  size_t envc = 0;
   size_t index;
   int outpipe[2];
   int errpipe[2];
@@ -601,8 +599,6 @@ static void doexec(void) {
   for (index = 0; index < NFIELDS; index++) {
     if (0 == strcmp(FIELDS[index].name, "arg")) {
       argc++;
-    } else if (0 == strcmp(FIELDS[index].name, "env")) {
-      envc++;
     }
   }
 
@@ -611,18 +607,26 @@ static void doexec(void) {
   }
 
   argv = calloc(argc + 1, sizeof(char *));
-  envp = calloc(envc + 1, sizeof(char *));
-  if (NULL == argv || NULL == envp) {
+  if (NULL == argv) {
     answererr("out of memory");
   }
 
   argc = 0;
-  envc = 0;
   for (index = 0; index < NFIELDS; index++) {
     if (0 == strcmp(FIELDS[index].name, "arg")) {
       argv[argc++] = FIELDS[index].value;
-    } else if (0 == strcmp(FIELDS[index].name, "env")) {
-      envp[envc++] = FIELDS[index].value;
+    }
+  }
+
+  /* The child inherits THIS process's environment, which is the Lua
+   * process's environment, plus whatever `setenv` fields the caller sent.
+   * Lua cannot enumerate its own environment - `os.getenv` reads one name
+   * - so a caller-built environment would silently drop every variable
+   * the port did not think to name, and a child like boru reads several
+   * of its own. Inheriting and overriding is the only correct shape. */
+  for (index = 0; index < NFIELDS; index++) {
+    if (0 == strcmp(FIELDS[index].name, "setenv")) {
+      putenv(FIELDS[index].value);
     }
   }
 
@@ -658,7 +662,7 @@ static void doexec(void) {
     close(errpipe[0]);
     close(errpipe[1]);
     close(failpipe[0]);
-    execvpe(argv[0], argv, envp);
+    execvp(argv[0], argv);
     {
       /* execvpe only returns on failure. */
       const char *reason = strerror(errno);

@@ -137,19 +137,22 @@ end
 
 --- Run a child to completion and collect both its streams separately.
 ---
---- `argv` is an array and never a shell string; `env` is the complete
---- environment the child gets.
+--- `argv` is an array and never a shell string. `overrides` is a list of
+--- `NAME=value` entries applied ON TOP of the inherited environment: Lua
+--- cannot enumerate its own environment (`os.getenv` reads one name), so
+--- building a complete one here would silently drop every variable this
+--- port did not think to name, and boru reads several of its own.
 ---
 --- Returns {status, out, why}, or nil plus a reason when the child could
 --- not be started at all.
-function M.exec(argv, env)
+function M.exec(argv, overrides)
   local fields = { field('mode', 'exec') }
 
   for _, arg in ipairs(argv) do
     fields[#fields + 1] = field('arg', arg)
   end
-  for _, entry in ipairs(env) do
-    fields[#fields + 1] = field('env', entry)
+  for _, entry in ipairs(overrides or {}) do
+    fields[#fields + 1] = field('setenv', entry)
   end
 
   local verb, got = call(fields)
@@ -165,49 +168,6 @@ function M.exec(argv, env)
   end
 
   return got
-end
-
---- The process environment, as a list of `NAME=value` entries.
----
---- Lua cannot enumerate the environment (`os.getenv` reads one name), so
---- the child inherits the names sekreto's own providers care about plus
---- the ones any program needs. A child that needs more is configured
---- through the provider's own options.
-local INHERIT = {
-  'PATH', 'HOME', 'USER', 'LOGNAME', 'SHELL', 'TMPDIR', 'TERM',
-  'LANG', 'LC_ALL', 'XDG_RUNTIME_DIR', 'XDG_CONFIG_HOME', 'XDG_DATA_HOME',
-  'DBUS_SESSION_BUS_ADDRESS', 'SSH_AUTH_SOCK',
-  'BORU_HOME', 'BORU_VAULT_PASSPHRASE',
-  'SECRETSPEC_FILE', 'SECRETSPEC_PROFILE', 'SECRETSPEC_PROVIDER',
-  'SECRETSPEC_REASON',
-}
-
-function M.baseenv()
-  local out = {}
-
-  for _, name in ipairs(INHERIT) do
-    local value = os.getenv(name)
-    if nil ~= value then
-      out[#out + 1] = name .. '=' .. value
-    end
-  end
-
-  return out
-end
-
---- The base environment with one name set or replaced.
-function M.envwith(env, name, value)
-  local out = {}
-  local prefix = name .. '='
-
-  for _, entry in ipairs(env) do
-    if prefix ~= entry:sub(1, #prefix) then
-      out[#out + 1] = entry
-    end
-  end
-
-  out[#out + 1] = prefix .. value
-  return out
 end
 
 return M

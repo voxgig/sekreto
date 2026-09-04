@@ -326,6 +326,10 @@ PORTS = {
     # c: a Makefile and a compiler, and nothing else. No manifest exists
     # for C at all, so there is nothing here a consumer could resolve.
     'c':          dict(lib=[], why='no manifest a consumer resolves'),
+    # lua: no rockspec. luarocks is not in play at all -- the port's only
+    # native piece is an in-tree C module the Makefile compiles -- so
+    # there is nothing for a consumer to resolve.
+    'lua':        dict(lib=[], why='no manifest a consumer resolves'),
     # scala: scalac is handed a file list too - the Makefile drives it
     # directly and there is no build.sbt, so the same applies again.
     'scala':      dict(lib=[], why='no manifest a consumer resolves'),
@@ -383,6 +387,12 @@ SOURCES = {
     # Headers again, for the same reason as cpp: .h is shipped source.
     'c':          dict(globs=['c/src/**/*.c', 'c/src/**/*.h',
                               'c/cli/**/*.c', 'c/cli/**/*.h'],
+                       skip=[], pattern=SOURCE),
+    # lua/native is shipped source too: the OpenSSL binding is a C module
+    # the library requires at runtime, so it is as much a part of what a
+    # consumer gets as the .lua files are.
+    'lua':        dict(globs=['lua/src/**/*.lua', 'lua/cli/**/*.lua',
+                              'lua/native/**/*.c', 'lua/native/**/*.h'],
                        skip=[], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone
