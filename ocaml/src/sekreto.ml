@@ -399,4 +399,11 @@ let close (self : t) : unit =
 
 let to_string (self : t) : string = "Sekreto { stores: [ " ^ String.concat ", " (stores self) ^ " ] }"
 let to_json (self : t) : string =
-  "{\"stores\":[" ^ String.concat "," (List.map (fun s -> "\"" ^ s ^ "\"") (stores self)) ^ "]}"
+  (* Built as a Json value and written by the port's own writer, NOT
+     concatenated. Canonical returns an OBJECT here
+     (typescript/src/Sekreto.ts toJSON) and lets JSON.stringify escape it,
+     so a store name carrying a quote, a backslash or a control character
+     is valid JSON in every port. Assembling the text by hand produced
+     invalid JSON for exactly those names, and no spec entry covers this
+     hook -- an audit caught it, not the corpus. *)
+  Json.stringify (Json.obj [ ("stores", Json.arr (List.map Json.str (stores self))) ])
