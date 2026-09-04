@@ -510,9 +510,14 @@ static void remember(sek_sekreto *sek, const char *store, const char *name, cons
 }
 
 /* The one path both readers share. `store` is "" for a transparent read,
- * so a directed read and a transparent one never alias in the cache. */
-static sek_err resolve(sek_sekreto *sek, const char *store, const char *name, const entry *use,
-                       size_t count, char **out) {
+ * so a directed read and a transparent one never alias in the cache.
+ *
+ * `only` is NULL for a transparent read and the store name for a directed
+ * one, rather than a pre-filtered array of entries: filtering inline
+ * keeps the walk allocation-free, and in an arena a per-call allocation
+ * is never handed back. */
+static sek_err resolve(sek_sekreto *sek, const char *store, const char *only, const char *name,
+                       char **out) {
   size_t index;
   sek_err err;
 
@@ -536,13 +541,17 @@ static sek_err resolve(sek_sekreto *sek, const char *store, const char *name, co
     }
   }
 
-  for (index = 0; index < count; index++) {
+  for (index = 0; index < sek->count; index++) {
     char *found = NULL;
+
+    if (NULL != only && 0 != strcmp(sek->entries[index].store, only)) {
+      continue;
+    }
 
     /* A provider that raises is not caught: the error propagates out of
      * get/try/getfrom/tryfrom, because a store that could not answer must
      * not be mistaken for one that answered "no". */
-    err = use[index].provider->lookup(use[index].provider, name, &found);
+    err = sek->entries[index].provider->lookup(sek->entries[index].provider, name, &found);
     if (NULL != err) {
       return err;
     }
@@ -563,7 +572,7 @@ static sek_err resolve(sek_sekreto *sek, const char *store, const char *name, co
 }
 
 sek_err sek_try(sek_sekreto *sek, const char *name, char **out) {
-  return resolve(sek, "", name, sek->entries, sek->count, out);
+  return resolve(sek, "", NULL, name, out);
 }
 
 sek_err sek_get(sek_sekreto *sek, const char *name, char **out) {
@@ -585,24 +594,25 @@ sek_err sek_get(sek_sekreto *sek, const char *name, char **out) {
  * mean "this store may not exist" without hiding a typo. Raised BEFORE
  * the name is validated. */
 sek_err sek_tryfrom(sek_sekreto *sek, const char *store, const char *name, char **out) {
-  entry *matching = (entry *)sek_alloc(sek->pool, (0 == sek->count ? 1 : sek->count) * sizeof(entry));
-  size_t found = 0;
   size_t index;
+  int found = 0;
 
   *out = NULL;
 
+  /* Store names may repeat, and a directed read walks every entry that
+   * answers to the name, in chain order. */
   for (index = 0; index < sek->count; index++) {
     if (0 == strcmp(sek->entries[index].store, store)) {
-      matching[found] = sek->entries[index];
-      found++;
+      found = 1;
+      break;
     }
   }
 
-  if (0 == found) {
+  if (!found) {
     return sek_fmt(sek->pool, "sekreto: unknown store: %s", store);
   }
 
-  return resolve(sek, store, name, matching, found, out);
+  return resolve(sek, store, store, name, out);
 }
 
 sek_err sek_getfrom(sek_sekreto *sek, const char *store, const char *name, char **out) {

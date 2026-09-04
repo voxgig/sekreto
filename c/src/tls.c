@@ -32,6 +32,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -270,14 +271,43 @@ long sek_tls_read(sek_tls_conn *conn, char *data, size_t len, sek_err *err) {
     return got;
   }
 
-  /* A server that closes without close_notify is the ordinary end of a
-   * `Connection: close` exchange, not a failure: the body is already in
-   * hand and refusing it here would turn every such response into an
-   * unreachable store. */
   {
     int why = SSL_get_error(conn->ssl, got);
-    if (SSL_ERROR_ZERO_RETURN == why || SSL_ERROR_SYSCALL == why) {
+
+    /* A clean close_notify is the end of the body. */
+    if (SSL_ERROR_ZERO_RETURN == why) {
       return 0;
+    }
+
+    /* SSL_ERROR_SYSCALL is two different things and they must not be
+     * collapsed. errno 0 means the peer closed WITHOUT close_notify,
+     * which is the ordinary end of a `Connection: close` exchange -
+     * refusing it would turn every such response into an unreachable
+     * store. EAGAIN means the socket's own deadline fired: the body is
+     * TRUNCATED, and reporting that as end-of-stream would hand a half
+     * response to the parser and call whatever it made of it an answer. */
+    /* OpenSSL 3.0 reports a peer that closed without close_notify as
+     * SSL_ERROR_SSL with this reason rather than as SSL_ERROR_SYSCALL.
+     * It is the same ordinary end of a `Connection: close` exchange, so
+     * it is read the same way - and the HTTP framing above still decides
+     * whether what arrived is a whole response. */
+    if (SSL_ERROR_SSL == why &&
+        SSL_R_UNEXPECTED_EOF_WHILE_READING == ERR_GET_REASON(ERR_peek_error())) {
+      while (0 != ERR_get_error()) {
+      }
+      return 0;
+    }
+
+    if (SSL_ERROR_SYSCALL == why) {
+      if (EAGAIN == errno || EWOULDBLOCK == errno) {
+        *err = "timed out";
+        return -1;
+      }
+      if (0 == errno) {
+        return 0;
+      }
+      *err = strerror(errno);
+      return -1;
     }
   }
 

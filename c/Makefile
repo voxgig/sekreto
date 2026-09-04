@@ -1,4 +1,4 @@
-.PHONY: build test clean inspect check-tls
+.PHONY: build test clean inspect check-tls tlscheck
 
 # voxgig/omni is a sibling checkout, not a published artifact, and it may
 # sit anywhere. Find it, and build it if it has not been built yet.
@@ -62,6 +62,15 @@ check-tls: build/libsekreto.a
 	  exit 1; \
 	fi; \
 	echo "check-tls: OpenSSL confined to src/tls.c"
+
+# The TLS gate. `make test` runs spec/sekreto.json and NO CASE IN THAT
+# SPEC OPENS A SOCKET, so a port with no verification - or no networking
+# at all - passes it. This is the one that fails: it stands up a real TLS
+# server behind a private CA and proves the chain check, the HOSTNAME
+# check (both the DNS-name and the IP-literal path), SNI in both
+# directions, and that SEKRETO_CA_BUNDLE adds roots without replacing any.
+tlscheck: build
+	./test/tlscheck.sh $(PORT)
 
 clean:
 	rm -rf build
