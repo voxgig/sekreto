@@ -393,7 +393,7 @@ checkaddr addr = do
     let host =
           map toLower $
             if "[" `isPrefixOf` authority
-              then take (maybe 0 (+ 1) (lastindex ']' authority)) authority
+              then takeWhile (']' /=) authority ++ "]"
               else takeWhile (':' /=) authority
 
     when (not (elem host ["localhost", "127.0.0.1", "::1", "[::1]"])) $

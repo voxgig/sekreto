@@ -303,7 +303,18 @@ void *sekreto_tls_connect(int fd, const char *host, const char *cabundle, char *
   }
 
   if (1 != SSL_connect(conn->ssl)) {
-    saysslerr(err, errlen, "handshake failed");
+    /* A verification failure aborts the handshake with a generic
+     * "certificate verify failed", which cannot tell an untrusted chain
+     * from a name that does not match - and those call for opposite
+     * fixes. The verify result names which one it was. */
+    long verdict = SSL_get_verify_result(conn->ssl);
+
+    if (X509_V_OK != verdict) {
+      say(err, errlen, X509_verify_cert_error_string(verdict));
+    } else {
+      saysslerr(err, errlen, "handshake failed");
+    }
+
     sekreto_tls_free(conn);
     return NULL;
   }
