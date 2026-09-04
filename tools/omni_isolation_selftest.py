@@ -73,6 +73,10 @@ MANIFEST = [
     # which is not.
     ('clojure', 'clojure/deps.edn', ' :deps {}',
      ' :deps {io.github.voxgig/omni {:local/root "../../omni/clojure"}}'),
+    # A dart dependency, which IS what a consumer resolves. The exempt case
+    # below is the same declaration under dev_dependencies, which is not.
+    ('dart', 'dart/pubspec.yaml', 'environment:',
+     'dependencies:\n  voxgig_omni:\n    path: ../../omni/dart\nenvironment:'),
 
     # THE FIVE EVASIONS Codex found after the first version shipped. Each
     # declares omni in a way that read clean, and each is here so it cannot
@@ -111,6 +115,9 @@ EXEMPT = [
      '  :omni {:extra-deps {io.github.voxgig/omni {:local/root "../../omni/clojure"}}}\n'
      '  :test {:extra-paths ["test"]}',
      'a deps.edn alias is never resolved transitively'),
+    ('dart', 'dart/pubspec.yaml', 'environment:',
+     'dev_dependencies:\n  voxgig_omni:\n    path: ../../omni/dart\nenvironment:',
+     'pub never resolves a dependency\'s dev_dependencies'),
 ]
 
 

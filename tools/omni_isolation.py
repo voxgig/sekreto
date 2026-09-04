@@ -238,6 +238,43 @@ def read_deps_edn(path):
     return [line for line in head.splitlines() if line.strip()]
 
 
+def read_pubspec(path):
+    """pubspec.yaml: the CONSUMER-RESOLVED sections.
+
+    `dependencies:` and `dependency_overrides:` are what a consumer taking
+    this package resolves.  `dev_dependencies:` is not - pub resolves those
+    only for the package's own development, exactly as npm does with
+    devDependencies, which this tool already exempts for the two Node
+    ports.  A conformance runner may legitimately be named there.
+
+    COMMENTS ARE STRIPPED FIRST, and this port is the proof rather than the
+    theory: dart/pubspec.yaml opens by saying "nothing here names
+    voxgig/omni", so a reader that kept comments would read the word omni
+    out of the very sentence promising it is absent, and report the port
+    for the presence of its own documentation.  That is the same failure
+    read_deps_edn records from struct's port of this tool, met a second
+    time in a different language.
+
+    A textual scan, said plainly: it is weaker than a YAML parse, and
+    python's standard library has no YAML reader - which these tools are no
+    more entitled to take as a dependency than a port is.
+    """
+    text = re.sub(r'#.*$', '', path.read_text(encoding='utf-8'), flags=re.M)
+    want, out = False, []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if re.match(r'^\S', line):
+            # Any top-level key closes the previous section.
+            want = bool(re.match(r'^(dependencies|dependency_overrides)\s*:', line))
+            if want:
+                out.append(line)
+            continue
+        if want:
+            out.append(line)
+    return out
+
+
 DYNAMIC_UNRESOLVED = ('<dynamic dependencies with no resolvable source: '
                       'omni cannot be ruled out here>')
 
@@ -259,6 +296,7 @@ PORTS = {
                             ('csharp/cli/SekretoCli.csproj', read_csproj)],
                        harness=['csharp/test/SekretoTest.csproj']),
     'clojure':    dict(lib=[('clojure/deps.edn', read_deps_edn)]),
+    'dart':       dict(lib=[('dart/pubspec.yaml', read_pubspec)]),
     'typescript': dict(lib=[('typescript/package.json', read_package_json)]),
     'javascript': dict(lib=[('javascript/package.json', read_package_json)]),
     'python':     dict(lib=[('python/pyproject.toml', read_pyproject)]),
@@ -272,6 +310,11 @@ PORTS = {
     # kotlin: kotlinc is handed a file list, exactly as javac is for the
     # java port, so the same applies.
     'kotlin':     dict(lib=[], why='no manifest a consumer resolves'),
+    # swift: the Makefile drives swiftc over a file list and there is no
+    # Package.swift, so SwiftPM has nothing to resolve. Introducing one
+    # would make this entry wrong, and the manifest guard below would say
+    # so rather than let it pass.
+    'swift':      dict(lib=[], why='no manifest a consumer resolves'),
     # scala: scalac is handed a file list too - the Makefile drives it
     # directly and there is no build.sbt, so the same applies again.
     'scala':      dict(lib=[], why='no manifest a consumer resolves'),
@@ -312,6 +355,10 @@ SOURCES = {
     # only knows the markers of the languages that were here first: a
     # clojure source file must not name omni even in prose.
     'clojure':    dict(globs=['clojure/src/**/*.clj', 'clojure/cli/**/*.clj'],
+                       skip=[], pattern=SOURCE),
+    'dart':       dict(globs=['dart/src/**/*.dart', 'dart/cli/**/*.dart'],
+                       skip=[], pattern=SOURCE),
+    'swift':      dict(globs=['swift/src/**/*.swift', 'swift/cli/**/*.swift'],
                        skip=[], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone

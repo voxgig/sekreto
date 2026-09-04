@@ -190,23 +190,24 @@ public func parsedotenv(_ text: Any?) -> Ordered<String> {
   guard let body = text as? String else { return out }
 
   for rawline in body.components(separatedBy: "\n") {
-    let line = dropsuffix(rawline, "\r").trimmingCharacters(in: .whitespaces)
+    let line = dropsuffix(rawline, "\r").trimmingCharacters(in: .whitespacesAndNewlines)
 
     if line.isEmpty || line.hasPrefix("#") { continue }
 
     let entry =
       line.hasPrefix("export ")
-      ? String(line.dropFirst(7)).trimmingCharacters(in: .whitespaces) : line
+      ? String(line.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines) : line
 
     guard let mark = entry.firstIndex(of: "=") else { continue }
 
-    let key = String(entry[entry.startIndex..<mark]).trimmingCharacters(in: .whitespaces)
+    let key = String(entry[entry.startIndex..<mark])
+      .trimmingCharacters(in: .whitespacesAndNewlines)
 
     // Both "no =" and "empty key" are skipped, silently.
     if key.isEmpty { continue }
 
     var value = String(entry[entry.index(after: mark)...])
-      .trimmingCharacters(in: .whitespaces)
+      .trimmingCharacters(in: .whitespacesAndNewlines)
 
     if 2 <= value.count && value.hasPrefix("\"") && value.hasSuffix("\"") {
       value = unescape(String(value.dropFirst().dropLast()))
