@@ -214,7 +214,11 @@ defmodule Sekreto.Http do
         match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
       ],
       # (3) send SNI - but never for an IP literal, which RFC 6066 forbids.
-      server_name_indication: if(literal, do: :disable, else: String.to_charlist(host))
+      server_name_indication: if(literal, do: :disable, else: String.to_charlist(host)),
+      # A refused handshake is reported by the error this raises; OTP's own
+      # notice would put a second copy of it on the host application's
+      # stderr, which is not this library's to write on.
+      log_level: :none
     ]
   end
 
