@@ -167,7 +167,14 @@ LEAN_EXPORT lean_obj_res sekreto_curl_fetch(b_lean_obj_arg method, b_lean_obj_ar
   /* One header per line, and the caller has already trimmed them.
    * `Expect:` with no value removes libcurl's own 100-continue header,
    * which some of the vault APIs answer badly. */
-  char *lines = strdup(useheaders);
+  /* A private copy, so the header lines can be split in place. Written
+   * out rather than reached for through strdup, which is POSIX and not
+   * C11, and this file compiles under -std=c11 -Wall -Wextra -Werror. */
+  size_t headerlen = strlen(useheaders);
+  char *lines = (char *)malloc(headerlen + 1);
+  if (NULL != lines) {
+    memcpy(lines, useheaders, headerlen + 1);
+  }
   if (NULL != lines) {
     char *at = lines;
     while ('\0' != *at) {

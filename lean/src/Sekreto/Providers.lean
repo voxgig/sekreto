@@ -70,7 +70,7 @@ structure ProviderSpec where
   kind : String := ""
   /-- The store name `Sekreto.getfrom` addresses. Defaults to `kind`. -/
   name : String := ""
-  prefix : String := ""
+  «prefix» : String := ""
   /-- dotenv: the file to read. secretspec: the declaration to read. -/
   file : String := ""
   /-- memory: literal values, keyed like environment variables. -/
@@ -103,7 +103,7 @@ structure ProviderSpec where
   SecretSpec refuses to read without one. -/
   reason : String := ""
   /-- boru: the namespace qualifying the alias. -/
-  namespace_ : String := ""
+  «namespace» : String := ""
   /-- boru: the vault home, passed as BORU_HOME. -/
   home : String := ""
   /-- aws: region and credentials; the standard AWS_* variables fill the
@@ -157,6 +157,16 @@ def why (err : IO.Error) : String :=
   ((toString err).splitOn "\n").headD (toString err)
 
 private def trimslash (text : String) : String := dropsuffix text "/"
+
+/-- An expiry in seconds, from a JSON number OR a numeric string: Azure
+IMDS sends `expires_in` as `"3599"`, and a port that reads only numbers
+renews a managed-identity token every request. Anything else is zero,
+which means never renew. -/
+def expiryof (value : Option Json) : Float :=
+  match value with
+  | some (.num held) => held
+  | some (.str held) => ((Json.parse held).bind Json.asnum).getD 0.0
+  | _ => 0.0
 
 /-- Does this read failure mean "no secrets here", rather than "I could
 not answer"?
@@ -343,8 +353,7 @@ def hashicorpprovider (addr : String) (token mount vaultnamespace : String := ""
     | some value =>
       if 200 != res.status || value.isEmpty then
         fail ("sekreto: hashicorp login failed: " ++ toString res.status ++ ": " ++ url)
-      renewat.set (← Sekreto.renewat ((OptJson.asnum
-        (OptJson.dig res.body ["auth", "lease_duration"])).getD 0.0))
+      renewat.set (← Sekreto.renewat (expiryof (OptJson.dig res.body ["auth", "lease_duration"])))
       return value
     | none => fail ("sekreto: hashicorp login failed: " ++ toString res.status ++ ": " ++ url)
 
@@ -394,7 +403,7 @@ already a valid boru alias, and BORU ALIASES KEEP THEIR DOTS, so
 `api.token` is the single path segment `api.token` - not the `api`/`token`
 split a HashiCorp KV gets. A 404 is a miss; anything else the server
 refuses is an error. -/
-def boruprovider (command namespace_ home addrgiven token mount : String := "") : Provider :=
+def boruprovider (command space home addrgiven token mount : String := "") : Provider :=
   let usecommand := if command.isEmpty then "boru" else command
   let addr := trimslash addrgiven
   let usemount := if mount.isEmpty then "secret" else mount
@@ -404,7 +413,7 @@ def boruprovider (command namespace_ home addrgiven token mount : String := "") 
 
       if !addr.isEmpty then
         ofResult (checkaddr addr)
-        let alias := if namespace_.isEmpty then name else namespace_ ++ "/" ++ name
+        let alias := if space.isEmpty then name else space ++ "/" ++ name
         let url := addr ++ "/v1/" ++ usemount ++ "/data/" ++ alias
         let res ← fetchjson "GET" url [("X-Vault-Token", token)]
         if 404 == res.status then return none
@@ -412,7 +421,7 @@ def boruprovider (command namespace_ home addrgiven token mount : String := "") 
           fail ("sekreto: boru serve error: " ++ toString res.status ++ ": " ++ url)
         return OptJson.text (OptJson.dig res.body ["data", "data", "value"])
       else
-        let alias := if namespace_.isEmpty then name else namespace_ ++ ":" ++ name
+        let alias := if space.isEmpty then name else space ++ ":" ++ name
         let env := if home.isEmpty then [] else [("BORU_HOME", some home)]
         let ran ← runcmd usecommand ["vault", "get", "--reveal", alias] env
 
@@ -426,7 +435,7 @@ def boruprovider (command namespace_ home addrgiven token mount : String := "") 
           (if ran.why.isEmpty then "exit " ++ toString ran.status else ran.why))
     describe :=
       if !addr.isEmpty then "boru:" ++ addr
-      else "boru" ++ (if namespace_.isEmpty then "" else ":" ++ namespace_) }
+      else "boru" ++ (if space.isEmpty then "" else ":" ++ space) }
 
 -- ------------------------------------------------------------ secretspec
 
@@ -617,7 +626,7 @@ def gcpsecretsprovider (project token addr metadataaddr : String := "") : IO Pro
     | some value =>
       if 200 != res.status || value.isEmpty then
         fail "sekreto: gcp: no token and metadata server did not answer"
-      renewat.set (← Sekreto.renewat ((OptJson.asnum (OptJson.dig res.body ["expires_in"])).getD 0.0))
+      renewat.set (← Sekreto.renewat (expiryof (OptJson.dig res.body ["expires_in"])))
       return value
     | none => fail "sekreto: gcp: no token and metadata server did not answer"
 
@@ -687,7 +696,7 @@ def azuresecretsprovider (vault token tenant clientid clientsecret loginaddr imd
       | some value =>
         if 200 != res.status || value.isEmpty then
           fail ("sekreto: azure login failed: " ++ toString res.status)
-        renewat.set (← Sekreto.renewat (expiryof res.body))
+        renewat.set (← Sekreto.renewat (expiryof (OptJson.dig res.body ["expires_in"])))
         return value
       | none => fail ("sekreto: azure login failed: " ++ toString res.status)
     else
@@ -701,7 +710,7 @@ def azuresecretsprovider (vault token tenant clientid clientsecret loginaddr imd
       | some value =>
         if 200 != res.status || value.isEmpty then
           fail "sekreto: azure: no token, no client credentials, and IMDS did not answer"
-        renewat.set (← Sekreto.renewat (expiryof res.body))
+        renewat.set (← Sekreto.renewat (expiryof (OptJson.dig res.body ["expires_in"])))
         return value
       | none => fail "sekreto: azure: no token, no client credentials, and IMDS did not answer"
 
@@ -872,8 +881,7 @@ def infisicalprovider (addr token clientid clientsecret project environment
     | some value =>
       if 200 != res.status || value.isEmpty then
         fail ("sekreto: infisical login failed: " ++ toString res.status)
-      renewat.set (← Sekreto.renewat
-        ((OptJson.asnum (OptJson.dig res.body ["expiresIn"])).getD 0.0))
+      renewat.set (← Sekreto.renewat (expiryof (OptJson.dig res.body ["expiresIn"])))
       return value
     | none => fail ("sekreto: infisical login failed: " ++ toString res.status)
 
@@ -907,22 +915,22 @@ def infisicalprovider (addr token clientid clientsecret project environment
 /-- Build a provider from its declarative form - the same shape the
 shared spec and an app's config file use. -/
 def makeprovider (spec : ProviderSpec) : IO Provider :=
-  if "env" == spec.kind then pure (envprovider spec.prefix)
+  if "env" == spec.kind then pure (envprovider spec.«prefix»)
   else if "dotenv" == spec.kind then
-    dotenvprovider (if spec.file.isEmpty then ".env" else spec.file) spec.prefix
-  else if "memory" == spec.kind then pure (memoryprovider spec.values spec.prefix)
-  else if "file" == spec.kind then pure (fileprovider spec.dir spec.prefix)
+    dotenvprovider (if spec.file.isEmpty then ".env" else spec.file) spec.«prefix»
+  else if "memory" == spec.kind then pure (memoryprovider spec.values spec.«prefix»)
+  else if "file" == spec.kind then pure (fileprovider spec.dir spec.«prefix»)
   else if "hashicorp" == spec.kind then
     hashicorpprovider spec.addr spec.token spec.mount spec.vaultnamespace spec.kv spec.auth
   else if "boru" == spec.kind then
-    pure (boruprovider spec.command spec.namespace_ spec.home spec.addr spec.token spec.mount)
+    pure (boruprovider spec.command spec.«namespace» spec.home spec.addr spec.token spec.mount)
   else if "secretspec" == spec.kind then
     pure (secretspecprovider spec.command spec.file spec.profile spec.backend spec.reason
-      spec.prefix)
+      spec.«prefix»)
   else if "awssecrets" == spec.kind then
     pure (awssecretsprovider spec.region spec.keyid spec.secret spec.session spec.addr)
   else if "awsparams" == spec.kind then
-    pure (awsparamsprovider spec.region spec.keyid spec.secret spec.session spec.addr spec.prefix)
+    pure (awsparamsprovider spec.region spec.keyid spec.secret spec.session spec.addr spec.«prefix»)
   else if "gcpsecrets" == spec.kind then
     gcpsecretsprovider spec.project spec.token spec.addr spec.metadataaddr
   else if "azuresecrets" == spec.kind then

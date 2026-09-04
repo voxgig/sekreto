@@ -10,7 +10,10 @@
 # ships no `Package.swift` for the same reason.
 #
 # elan installs to ~/.elan/bin; prepend it so a stock elan install works.
-export PATH := $(HOME)/.elan/bin:$(PATH)
+# Named separately as well, because GNU make's `$(shell ...)` does not
+# see a PATH exported from inside the makefile.
+ELANBIN := $(HOME)/.elan/bin
+export PATH := $(ELANBIN):$(PATH)
 
 .PHONY: build test clean inspect ffi
 
@@ -33,8 +36,8 @@ IR := $(B)/ir
 # In dependency order: `lean` compiles one module at a time and every
 # import must already have an .olean on LEAN_PATH.
 MODULES := Sekreto.Text Sekreto.Json Sekreto.Crypto Sekreto.Provider \
-           Sekreto.Core Sekreto.Sigv4 Sekreto.Addr Sekreto.Curl \
-           Sekreto.Providers Sekreto
+           Sekreto.Core Sekreto.Sigv4 Sekreto.Clock Sekreto.Addr \
+           Sekreto.Curl Sekreto.Providers Sekreto
 
 OBJS := $(patsubst %,$(IR)/%.o,$(MODULES))
 
@@ -55,9 +58,18 @@ build: $(B)/sekreto-cli
 
 ffi: $(FFIOBJS)
 
+# The C stubs are compiled by the SYSTEM compiler, not by `leanc`.
+# `leanc` runs its bundled clang under `-nostdinc` with the toolchain as
+# its sysroot, so it can see <lean/lean.h> and nothing else - not
+# <string.h>, and certainly not <curl/curl.h>. `leanc` still does the
+# LINKING, because it knows where the Lean runtime lives.
+CC ?= cc
+LEANINCLUDE := $(shell PATH="$(ELANBIN):$$PATH" $(LEAN) --print-prefix)/include
+SYSLIB := -L/usr/lib/$(shell $(CC) -dumpmachine)
+
 $(IR)/%.o: ffi/%.c
 	@mkdir -p $(IR)
-	$(LEANC) -c -o $@ $< -Wall -Wextra -Werror
+	$(CC) -c -o $@ $< -I$(LEANINCLUDE) -fPIC -std=c11 -Wall -Wextra -Werror
 
 # One rule per module would need a hand-written dependency graph; the
 # list above IS that graph, so the whole library is compiled in one pass.
@@ -78,7 +90,7 @@ $(B)/sekreto-cli: $(LIB)/.stamp $(FFIOBJS) cli/Cli.lean
 	LEAN_PATH=$(CURDIR)/$(LIB) $(LEAN) --root=cli \
 	  -o $(LIB)/Cli.olean -i $(LIB)/Cli.ilean -c $(IR)/Cli.c cli/Cli.lean
 	$(LEANC) -c -o $(IR)/Cli.o $(IR)/Cli.c
-	$(LEANC) -o $@ $(OBJS) $(FFIOBJS) $(IR)/Cli.o $(FFILIBS)
+	$(LEANC) -o $@ $(OBJS) $(FFIOBJS) $(IR)/Cli.o $(SYSLIB) $(FFILIBS)
 
 # The suite compiles against the library `build` just made, so the
 # library is compiled once however many times the tests are run.
@@ -100,7 +112,7 @@ test: build
 	  -c $(B)/omni/SekretoTest.c test/SekretoTest.lean
 	$(LEANC) -c -o $(B)/omni/SekretoTest.o $(B)/omni/SekretoTest.c
 	$(LEANC) -o $(B)/sekreto-test $(OBJS) $(FFIOBJS) \
-	  $(B)/omni/Omni.o $(B)/omni/SekretoTest.o $(FFILIBS)
+	  $(B)/omni/Omni.o $(B)/omni/SekretoTest.o $(SYSLIB) $(FFILIBS)
 	./$(B)/sekreto-test $(GROUP)
 
 clean:
