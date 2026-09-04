@@ -587,6 +587,9 @@ static void doexec(void) {
   size_t index;
   int outpipe[2];
   int errpipe[2];
+  int failpipe[2];
+  char failure[256];
+  ssize_t failed;
   pid_t child;
   buf out;
   buf why;
@@ -623,7 +626,15 @@ static void doexec(void) {
     }
   }
 
-  if (0 != pipe(outpipe) || 0 != pipe(errpipe)) {
+  if (0 != pipe(outpipe) || 0 != pipe(errpipe) || 0 != pipe(failpipe)) {
+    answererr("cannot create a pipe");
+  }
+
+  /* The exec status pipe: close-on-exec, so a SUCCESSFUL exec closes it
+   * with nothing written and the parent reads EOF. Anything that does
+   * arrive is the reason exec failed. Guessing from an exit code cannot
+   * do this - a real child is free to exit 127 too. */
+  if (0 != fcntl(failpipe[1], F_SETFD, FD_CLOEXEC)) {
     answererr("cannot create a pipe");
   }
 
@@ -646,14 +657,39 @@ static void doexec(void) {
     close(outpipe[1]);
     close(errpipe[0]);
     close(errpipe[1]);
+    close(failpipe[0]);
     execvpe(argv[0], argv, envp);
-    /* execve only returns on failure; 127 is the shell's own convention
-     * for "could not be executed", and the parent reports it as such. */
+    {
+      /* execvpe only returns on failure. */
+      const char *reason = strerror(errno);
+      ssize_t ignored = write(failpipe[1], reason, strlen(reason));
+      (void)ignored;
+    }
     _exit(127);
   }
 
   close(outpipe[1]);
   close(errpipe[1]);
+  close(failpipe[1]);
+
+  failed = read(failpipe[0], failure, sizeof failure - 1);
+  close(failpipe[0]);
+
+  if (0 < failed) {
+    failure[failed] = '\0';
+    close(outpipe[0]);
+    close(errpipe[0]);
+    while (0 > waitpid(child, &status, 0)) {
+      if (EINTR != errno) {
+        break;
+      }
+    }
+    {
+      char message[512];
+      snprintf(message, sizeof message, "EXECFAIL %s", failure);
+      answererr(message);
+    }
+  }
 
   bufinit(&out);
   bufinit(&why);

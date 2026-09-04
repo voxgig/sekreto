@@ -166,6 +166,19 @@ haskell/build/
 haskell/dist-newstyle/
 lean/build/
 lean/.lake/
+
+# COMPILERS THAT BUILD IN PLACE, not into a build directory. ocamlopt and
+# ghc drop their intermediates next to the source unless told otherwise,
+# so a `<lang>/build/` line does not cover them and the objects land in
+# `src/`. Found the first time ocaml compiled here.
+ocaml/**/*.cm[ioxta]
+ocaml/**/*.cmx[as]
+ocaml/**/*.[oa]
+haskell/**/*.hi
+haskell/**/*.dyn_hi
+haskell/**/*.[oa]
+lua/**/*.so
+lua/**/*.[oa]
 csharp/**/bin/
 csharp/**/obj/
 **/__pycache__/
