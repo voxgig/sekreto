@@ -1,7 +1,7 @@
 # Working in this repository
 
-sekreto is one library written ten times. The rules below exist so those
-ten stay one.
+sekreto is one library written twelve times. The rules below exist so
+those twelve stay one.
 
 ## The three that matter
 
