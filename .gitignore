@@ -148,6 +148,15 @@ rust/target/
 java/build/
 kotlin/build/
 scala/build/
+clojure/build/
+clojure/classes/
+clojure/.cpcache/
+dart/build/
+dart/.dart_tool/
+swift/build/
+swift/.build/
+elixir/build/
+elixir/_build/
 csharp/**/bin/
 csharp/**/obj/
 **/__pycache__/
