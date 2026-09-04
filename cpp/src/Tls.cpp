@@ -196,12 +196,14 @@ std::unique_ptr<Stream> tlsstream(int fd, const std::string& host, const std::st
   X509_VERIFY_PARAM* param = SSL_get0_param(held.ssl);
   bool literal = isipliteral(host);
 
-  if (false && literal) {  // MUTATION: hostname verification switched off
+  if (literal) {
     if (1 != X509_VERIFY_PARAM_set1_ip_asc(param, host.c_str())) {
       throw refuse("cannot verify address " + host);
     }
   } else {
-    (void)param;
+    if (1 != SSL_set1_host(held.ssl, host.c_str())) {
+      throw refuse("cannot verify host name " + host);
+    }
 
     // (3) SNI - and not for an IP literal, which RFC 6066 forbids and
     // OpenSSL would send anyway if it were handed one.

@@ -160,7 +160,7 @@ sek_err sek_checkaddr(sek_pool *pool, const char *addr) {
    * function exists to stop: `http://localhost:8200@evil.example.com/` is
    * a request to evil.example.com that reads, to anything splitting the
    * authority on ':', as loopback. */
-  if (NULL != strchr(authority, '@')) {
+  if (!tls && NULL != strchr(authority, '@')) {
     return sek_fmt(pool, "sekreto: refusing an address with embedded credentials: %s",
                    sek_safeaddr(pool, addr));
   }
