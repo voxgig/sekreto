@@ -145,18 +145,30 @@ def run (args : List String) : IO UInt32 := do
   -- not from whichever provider happens to answer first.
   let store := flag args "--store"
 
-  let built ← tryCatch (do
-      let secrets ← sekreto (← chainfor source)
-      let token ← if store.isEmpty then secrets.get "api.token"
-                  else secrets.getfrom store "api.token"
-      return some (secrets, token))
+  -- The chain is built first and on its own, so that everything after it
+  -- can route its own failure through `redactText`: once a provider has
+  -- answered, an error message may quote what it answered, and the suite
+  -- greps stderr as well as stdout on both the pass and the fail path.
+  let chain ← tryCatch (do return some (← sekreto (← chainfor source)))
     (fun err => do
       IO.eprintln ("sekreto-cli: " ++ why err)
       return none)
 
-  match built with
+  match chain with
   | none => return 2
-  | some (secrets, token) =>
+  | some secrets =>
+
+  let held ← tryCatch (do
+      let token ← if store.isEmpty then secrets.get "api.token"
+                  else secrets.getfrom store "api.token"
+      return some token)
+    (fun err => do
+      IO.eprintln ("sekreto-cli: " ++ (← secrets.redactText (why err)))
+      return none)
+
+  match held with
+  | none => return 2
+  | some token =>
 
   let res ← tryCatch (do
       let answer ← fetchjson "GET" url [

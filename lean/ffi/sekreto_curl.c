@@ -164,12 +164,10 @@ LEAN_EXPORT lean_obj_res sekreto_curl_fetch(b_lean_obj_arg method, b_lean_obj_ar
   sekreto_buffer buf = {NULL, 0, 0};
   struct curl_slist *list = NULL;
 
-  /* One header per line, and the caller has already trimmed them.
-   * `Expect:` with no value removes libcurl's own 100-continue header,
-   * which some of the vault APIs answer badly. */
-  /* A private copy, so the header lines can be split in place. Written
-   * out rather than reached for through strdup, which is POSIX and not
-   * C11, and this file compiles under -std=c11 -Wall -Wextra -Werror. */
+  /* One header per line, as the Lean side framed them. A private copy,
+   * so they can be split in place - written out rather than reached for
+   * through strdup, which is POSIX and not C11, and this file compiles
+   * under -std=c11 -Wall -Wextra -Werror. */
   size_t headerlen = strlen(useheaders);
   char *lines = (char *)malloc(headerlen + 1);
   if (NULL != lines) {
@@ -191,6 +189,8 @@ LEAN_EXPORT lean_obj_res sekreto_curl_fetch(b_lean_obj_arg method, b_lean_obj_ar
       at = stop + 1;
     }
   }
+  /* `Expect:` with no value removes libcurl's own 100-continue header,
+   * which several of these vault APIs answer badly. */
   list = curl_slist_append(list, "Expect:");
 
   curl_easy_setopt(handle, CURLOPT_URL, useurl);
