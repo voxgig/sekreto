@@ -52,6 +52,9 @@
  *             EXEC <status> <outlen> <errlen>\n<out><err>
  */
 
+#define _GNU_SOURCE
+
+#include <arpa/inet.h>
 #include <errno.h>
 #include <netdb.h>
 #include <poll.h>
@@ -216,6 +219,13 @@ static void readrequest(const char *path) {
   }
   fclose(handle);
 
+  /* Two NUL bytes past the end, not counted, so that the terminator
+   * written over each payload's trailing newline is always in bounds. */
+  if (!bufput(&whole, "\0\0", 2)) {
+    answererr("out of memory reading the transport request");
+  }
+  whole.len -= 2;
+
   at = 0;
   while (at < whole.len) {
     char *head = whole.data + at;
@@ -260,7 +270,6 @@ static void readrequest(const char *path) {
     if (at < whole.len && '\n' == whole.data[at]) {
       at++;
     }
-    whole.data[(size_t)(nl - whole.data)] = '\0';
   }
 
   /* Every value is NUL-terminated for the string fields; the payload
@@ -582,7 +591,7 @@ static void doexec(void) {
   buf out;
   buf why;
   int status = 0;
-  int open = 2;
+  int alive = 2;
   char head[128];
   int head_n;
 
@@ -637,7 +646,7 @@ static void doexec(void) {
     close(outpipe[1]);
     close(errpipe[0]);
     close(errpipe[1]);
-    execve(argv[0], argv, envp);
+    execvpe(argv[0], argv, envp);
     /* execve only returns on failure; 127 is the shell's own convention
      * for "could not be executed", and the parent reports it as such. */
     _exit(127);
@@ -649,7 +658,7 @@ static void doexec(void) {
   bufinit(&out);
   bufinit(&why);
 
-  while (0 < open) {
+  while (0 < alive) {
     struct pollfd waiting[2];
     int count = 0;
     int at;
@@ -684,15 +693,19 @@ static void doexec(void) {
 
       got = read(waiting[at].fd, chunk, sizeof chunk);
       if (0 < got) {
-        bufput(waiting[at].fd == outpipe[0] ? &out : &why, chunk, (size_t)got);
-      } else if (0 >= got && EINTR != errno) {
+        if (!bufput(waiting[at].fd == outpipe[0] ? &out : &why, chunk, (size_t)got)) {
+          answererr("out of memory reading the child");
+        }
+      } else if (0 > got && EINTR == errno) {
+        continue;
+      } else {
         close(waiting[at].fd);
         if (waiting[at].fd == outpipe[0]) {
           outpipe[0] = -1;
         } else {
           errpipe[0] = -1;
         }
-        open--;
+        alive--;
       }
     }
   }
