@@ -330,6 +330,9 @@ PORTS = {
     # native piece is an in-tree C module the Makefile compiles -- so
     # there is nothing for a consumer to resolve.
     'lua':        dict(lib=[], why='no manifest a consumer resolves'),
+    # ocaml: no dune-project and no .opam file -- the Makefile drives
+    # ocamlopt directly, C stubs included. Nothing a consumer resolves.
+    'ocaml':      dict(lib=[], why='no manifest a consumer resolves'),
     # scala: scalac is handed a file list too - the Makefile drives it
     # directly and there is no build.sbt, so the same applies again.
     'scala':      dict(lib=[], why='no manifest a consumer resolves'),
@@ -393,6 +396,18 @@ SOURCES = {
     # consumer gets as the .lua files are.
     'lua':        dict(globs=['lua/src/**/*.lua', 'lua/cli/**/*.lua',
                               'lua/native/**/*.c', 'lua/native/**/*.h'],
+                       skip=[], pattern=SOURCE),
+    # The .c stubs are the OpenSSL binding and ship with the library, so
+    # they are scanned alongside the .ml -- same reasoning as lua/native.
+    # Note for anyone editing this port: the COMMENT rule below does not
+    # know OCaml's `(*`, any more than it knows Clojure's `;`, so an .ml
+    # file must not name omni even in prose. It caught exactly that here --
+    # a comment explaining which reader consumes `Printexc.to_string` --
+    # and the comment was reworded rather than the guard widened. Widening
+    # a guard so a port passes is the move this whole tool exists to stop.
+    'ocaml':      dict(globs=['ocaml/src/**/*.ml', 'ocaml/src/**/*.mli',
+                              'ocaml/src/**/*.c', 'ocaml/src/**/*.h',
+                              'ocaml/cli/**/*.ml'],
                        skip=[], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone

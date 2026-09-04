@@ -1,4 +1,4 @@
-.PHONY: build test clean inspect
+.PHONY: build test conformance tlscheck clean inspect
 
 # voxgig/omni is a sibling checkout, not a published artifact, and it may
 # sit anywhere. Find it, and build it if it has not been built yet.
@@ -31,12 +31,27 @@ build/sekreto-net: native/sekretonet.c
 	@$(LUA) -e "package.path='src/?.lua;'..package.path; require('sekreto')" \
 	  && echo "lua: src/ loads"
 
-# The suite needs omni; the library and the CLI do not, and omni is only
-# ever on the test's own package.path.
-test: build
+# Two suites, because one of them cannot see the thing this port most
+# needs proved. No corpus case opens a socket, so `conformance` would pass
+# on a build with no transport at all; `tlscheck` is what says the TLS
+# binding verifies rather than merely connects.
+test: conformance tlscheck
+
+# The conformance suite needs omni; the library and the CLI do not, and
+# omni is only ever on the test's own package.path.
+conformance: build
 	@test -n "$(OMNI)" || { echo "sekreto: voxgig/omni not found - set OMNI_HOME" >&2; exit 1; }
 	$(MAKE) -C $(OMNI)/lua build
 	OMNI_HOME=$(OMNI) $(LUA) test/sekreto_test.lua $(GROUP)
+
+# The TLS obligations, against `openssl s_server`: the chain, the
+# hostname (a different call for an address than for a name), and
+# SEKRETO_CA_BUNDLE. Nothing else in either shared suite reaches a
+# handshake.
+tlscheck: build
+	@command -v openssl >/dev/null 2>&1 \
+	  || { echo "skip - tlscheck: no openssl s_server on this machine"; exit 0; }
+	@LUA=$(LUA) sh test/tlscheck.sh
 
 clean:
 	rm -rf build

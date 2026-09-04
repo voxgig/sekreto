@@ -18,10 +18,11 @@
    no fields, no cause. *)
 exception Sekreto_error of string
 
-(* omni reads a subject's failure with `Printexc.to_string`, and so does any
-   OCaml host that catches this. Without a printer the message would be
-   reported as `Sekreto.Sekreto_error("...")`, and the corpus pins refusal
-   messages byte for byte. *)
+(* The conformance runner reads a subject's failure with
+   `Printexc.to_string`, and so does any OCaml host that catches this.
+   Without a printer the message would be reported as
+   `Sekreto.Sekreto_error("...")`, and the corpus pins refusal messages
+   byte for byte. *)
 let () = Printexc.register_printer (function Sekreto_error m -> Some m | _ -> None)
 
 let fail message = raise (Sekreto_error message)
