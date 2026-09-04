@@ -109,6 +109,8 @@ unbase64 text
       where
         pad = dropWhile ('=' /=) payload
 
+    -- A sliding six-bit accumulator, masked back down after every byte is
+    -- taken off it so that it cannot grow without bound.
     decode [] _ _ = Just []
     decode (head : rest) acc bits =
       case elemIndex head alphabet of
@@ -118,8 +120,9 @@ unbase64 text
               held = bits + 6
            in if 8 <= held
                 then
-                  (fromIntegral (widened `shiftR` (held - 8)) :)
-                    <$> decode rest widened (held - 8)
+                  let left = held - 8
+                      kept = widened .&. ((1 `shiftL` left) - 1)
+                   in (fromIntegral (widened `shiftR` left) :) <$> decode rest kept left
                 else decode rest widened held
 
 alphabet :: String
