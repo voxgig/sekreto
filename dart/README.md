@@ -41,8 +41,8 @@ values, a signed request body and the SigV4 output all need.
 
 | | |
 |---|---|
-| `src/sekreto.dart` | the facade, the name helpers, `parsedotenv`, `redact` |
-| `src/providers.dart` | the provider kinds, `ProviderSpec`, `checkaddr`, the transport |
+| `src/sekreto.dart` | the facade, the name helpers, `redact` |
+| `src/providers.dart` | the provider kinds, `ProviderSpec`, `checkaddr` |
 | `src/sigv4.dart` | AWS request signing |
 | `src/crypto.dart` | SHA-256 and HMAC-SHA256 |
 | `src/json.dart` | the JSON value model, reader and writer |
@@ -59,8 +59,11 @@ final secrets = sekreto([
   ProviderSpec(kind: 'hashicorp', addr: vaultaddr, token: vaulttoken),
 ]);
 
-final token = await secrets.get('api.token');                 // the chain answers
-final same = await secrets.getfrom('hashicorp', 'api.token'); // one named store
+// the chain answers
+final token = await secrets.get('api.token');
+
+// one named store
+final same = await secrets.getfrom('hashicorp', 'api.token');
 ```
 
 `ProviderSpec` takes named arguments, so a chain reads as configuration
