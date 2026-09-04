@@ -8,7 +8,7 @@ and it does not have to change when the answer changes. Moving from
 `.env` in development to a vault in production is a config change, not a
 code change.
 
-The same library is available in twenty languages, all behaving
+The same library is available in twenty-three languages, all behaving
 identically, because they all run the same shared test spec through
 [voxgig/omni](https://github.com/voxgig/omni).
 
@@ -115,6 +115,9 @@ clients are loaded differs.
 | [cpp](cpp/) | switch — pending | | exists |
 | [c](c/) | switch — pending | | exists |
 | [lua](lua/) | switch — pending | | exists |
+| [ocaml](ocaml/) | switch — pending | | exists |
+| [haskell](haskell/) | switch — pending | | exists |
+| [lean](lean/) | switch — pending | | exists |
 | [zig](zig/) | ✅ | `zig/plugins/` | plugin's zig port as a named module — a checkout, found or fetched by `make deps` |
 
 **typescript** — one import per plugin, or the full set from
@@ -249,6 +252,9 @@ joins the chain like any shipped plugin. See [DOCS.md](DOCS.md#plugins).
 | [cpp](cpp/) | ✅ | ✅ |
 | [c](c/) | ✅ | ✅ |
 | [lua](lua/) | ✅ | ✅ |
+| [ocaml](ocaml/) | ✅ | ✅ |
+| [haskell](haskell/) | ✅ | ✅ |
+| [lean](lean/) | ✅ | ✅ |
 
 Every port is tested three ways: the shared conformance spec, an
 integration run against mock servers, and — on demand and weekly — the

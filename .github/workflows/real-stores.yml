@@ -186,6 +186,25 @@ jobs:
       # -dev package is a BUILD requirement here, not an optional extra.
       - name: Setup Lua
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 libssl-dev
+      # ocaml and haskell from the Ubuntu archive; neither port uses a
+      # package manager, so the compiler is all that is needed. libssl-dev
+      # is a BUILD requirement for both -- ocaml binds OpenSSL through C
+      # stubs and haskell through the FFI, since GHC's boot libraries have
+      # no networking at all, not even a socket.
+      - name: Setup OCaml
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ocaml libssl-dev
+      - name: Setup Haskell
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ghc libssl-dev
+      # Lean via elan, pinned by the port's own lean-toolchain. libcurl is
+      # the binding more-ports.md names for Lean specifically -- it handles
+      # chain and hostname verification itself.
+      - name: Setup Lean
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libcurl4-openssl-dev
+          curl -sSLf --retry 3 https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan.sh
+          sh /tmp/elan.sh -y --default-toolchain "$(cat lean/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0'

@@ -119,6 +119,9 @@ jobs:
           - cpp
           - c
           - lua
+          - ocaml
+          - haskell
+          - lean
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -294,6 +297,28 @@ jobs:
       - name: Setup Lua
         if: matrix.lang == 'lua'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 libssl-dev
+      # ocaml and haskell from the Ubuntu archive; neither port uses a
+      # package manager, so the compiler is all that is needed. libssl-dev
+      # is a BUILD requirement for both -- ocaml binds OpenSSL through C
+      # stubs and haskell through the FFI, since GHC's boot libraries have
+      # no networking at all, not even a socket.
+      - name: Setup OCaml
+        if: matrix.lang == 'ocaml'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ocaml libssl-dev
+      - name: Setup Haskell
+        if: matrix.lang == 'haskell'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ghc libssl-dev
+      # Lean via elan, pinned by the port's own lean-toolchain. libcurl is
+      # the binding more-ports.md names for Lean specifically -- it handles
+      # chain and hostname verification itself.
+      - name: Setup Lean
+        if: matrix.lang == 'lean'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libcurl4-openssl-dev
+          curl -sSLf --retry 3 https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan.sh
+          sh /tmp/elan.sh -y --default-toolchain "$(cat lean/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
 
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
@@ -479,6 +504,25 @@ jobs:
       # -dev package is a BUILD requirement here, not an optional extra.
       - name: Setup Lua
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 libssl-dev
+      # ocaml and haskell from the Ubuntu archive; neither port uses a
+      # package manager, so the compiler is all that is needed. libssl-dev
+      # is a BUILD requirement for both -- ocaml binds OpenSSL through C
+      # stubs and haskell through the FFI, since GHC's boot libraries have
+      # no networking at all, not even a socket.
+      - name: Setup OCaml
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ocaml libssl-dev
+      - name: Setup Haskell
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ghc libssl-dev
+      # Lean via elan, pinned by the port's own lean-toolchain. libcurl is
+      # the binding more-ports.md names for Lean specifically -- it handles
+      # chain and hostname verification itself.
+      - name: Setup Lean
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libcurl4-openssl-dev
+          curl -sSLf --retry 3 https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan.sh
+          sh /tmp/elan.sh -y --default-toolchain "$(cat lean/lean-toolchain)"
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
       - name: Setup Zig
         run: |
           python3 -m pip install --disable-pip-version-check --quiet \

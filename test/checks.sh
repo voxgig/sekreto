@@ -109,7 +109,7 @@ waithttp() {
 # ------------------------------------------------------------------- ports
 
 # Every port, in the order the top-level Makefile lists them.
-ALL_LANGS="typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure swift dart elixir cpp c lua"
+ALL_LANGS="typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure swift dart elixir cpp c lua ocaml haskell lean"
 
 # How to invoke each port's CLI.
 cli_cmd() {
@@ -134,6 +134,9 @@ cli_cmd() {
   cpp) echo "$ROOT/cpp/build/sekreto-cli" ;;
   c) echo "$ROOT/c/build/sekreto-cli" ;;
   lua) echo "lua5.4 $ROOT/lua/cli/sekreto-cli.lua" ;;
+  ocaml) echo "$ROOT/ocaml/build/sekreto-cli" ;;
+  haskell) echo "$ROOT/haskell/build/sekreto-cli" ;;
+  lean) echo "$ROOT/lean/build/sekreto-cli" ;;
   *) echo "" ;;
   esac
 }
@@ -167,6 +170,9 @@ cli_ready() {
   # helper binary the Makefile compiles. A built script with no helper
   # would pass a one-file check and then fail at the first socket.
   lua) [ -f "$ROOT/lua/cli/sekreto-cli.lua" ] && [ -x "$ROOT/lua/build/sekreto-net" ] ;;
+  ocaml) [ -x "$ROOT/ocaml/build/sekreto-cli" ] ;;
+  haskell) [ -x "$ROOT/haskell/build/sekreto-cli" ] ;;
+  lean) [ -x "$ROOT/lean/build/sekreto-cli" ] ;;
   *) false ;;
   esac
 }

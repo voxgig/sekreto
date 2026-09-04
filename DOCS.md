@@ -204,6 +204,9 @@ provider, so a typo fails the same way whether or not a vault is reachable.
 | cpp | `tryget` → `std::optional` | `getfrom` / `tryfrom` | `redact` | |
 | c | `sek_try` → `(err, *out)` | `sek_getfrom` / `sek_tryfrom` | `sek_redact_text` | `sek_new(&opts, &out)` |
 | lua | `tryget` → `nil` on a miss | `getfrom` / `tryfrom` | `redact` | |
+| ocaml | `tryget` → `string option` | `getfrom` / `tryfrom` | `redact` | |
+| haskell | `tryget` → `IO (Maybe String)` | `getfrom` / `tryfrom` | `redact` | |
+| lean | `tryget` → `IO (Option String)` | `getfrom` / `tryfrom` | `redact` | |
 | csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` | |
 
 C prefixes everything `sek_` and answers every call with a `sek_err`,

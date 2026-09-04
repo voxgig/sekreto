@@ -1,17 +1,23 @@
 # Bringing sekreto to the languages struct already has
 
 [voxgig/struct](https://github.com/voxgig/struct) has twenty-three ports.
-sekreto now has twenty — **zig** and **kotlin** landed with this
-document, then **scala**, **clojure**, **swift**, **dart**, **elixir**,
-**cpp**, **c** and **lua**. The remaining three are:
+**ALL OF THEM ARE DONE.** sekreto now has twenty-three ports, the same
+set. **zig** and **kotlin** landed with this document; **scala**,
+**clojure**, **swift**, **dart**, **elixir**, **cpp**, **c**, **lua**,
+**ocaml**, **haskell** and **lean** landed after it. Nothing on the list
+below is outstanding.
 
-> haskell, lean, ocaml
+Two things this document predicted, and one it did not.
 
-All five are TLS-binding ports, and nothing else is left. **cpp is the
-first of that set to land, and it landed as a FULL port** — the decision
-this document took, "bind the platform's audited TLS library", is
-implemented rather than deferred, and the local-providers-only
-intermediate state was not needed.
+It said seven could be built today with no rule bent, and seven were. It
+said six needed a TLS binding, and all six took one — **every one a full
+port**, none falling back to the local-providers-only state offered as an
+intermediate. What it did not anticipate is that the corpus would not be
+the thing that caught the remaining bugs: three defects were found by
+adversarial audit in code paths no spec entry reaches — an escape case,
+a hand-built JSON string, and a credential field whose null value made
+one port answer with a DIFFERENT field's secret. The spec pins behaviour
+it describes; it cannot pin behaviour it does not.
 
 Every one of them already has a [voxgig/omni](https://github.com/voxgig/omni)
 runner, so the conformance half of a port has somewhere to plug in. The
@@ -109,9 +115,22 @@ order, easiest first:
    is async-only while omni's dart runner is synchronous: an all-`Future`
    API could not have been driven by the shared suite at all.
 
-## Six that need a TLS binding
+## Six that need a TLS binding — all six done
 
-**c, cpp, ocaml, haskell, lua, lean.**
+**c, cpp, ocaml, haskell, lua, lean**, and **every one landed as a FULL
+port.** The intermediate state this document allows — local providers
+working, network kinds raising "this build has no TLS backend" — was
+offered to each and needed by none.
+
+The decision below was taken here and is now implemented. What it cost,
+measured rather than estimated: one binding per language, and OpenSSL
+reached from exactly one file in each. c enforces that mechanically —
+`make check-tls` runs `nm` over the archive and fails if any object but
+`tls.o` names `SSL_*`, `X509_*`, `EVP_*` or `HMAC` — and cpp's audit
+proved the same property by counting undefined symbols per object:
+`Tls.o` 27, every other object 0.
+
+The original analysis follows, unchanged.
 
 For all six the obstacle is the same and it is TLS. None has it in the
 standard library, and there is no in-tree answer: TLS is the one thing
