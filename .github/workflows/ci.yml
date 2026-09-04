@@ -30,6 +30,7 @@ permissions:
 env:
   # One place, because three jobs install it.
   KOTLIN_VERSION: '2.1.20'
+  SCALA_VERSION: '3.4.2'
 
 jobs:
   omni-isolation:
@@ -108,6 +109,7 @@ jobs:
           - csharp
           - zig
           - kotlin
+          - scala
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -164,7 +166,7 @@ jobs:
         if: matrix.lang == 'rust'
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        if: matrix.lang == 'java' || matrix.lang == 'kotlin'
+        if: matrix.lang == 'java' || matrix.lang == 'kotlin' || matrix.lang == 'scala'
         with:
           distribution: temurin
           java-version: '21'
@@ -186,6 +188,22 @@ jobs:
             "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
           unzip -q /tmp/kotlinc.zip -d /opt
           echo /opt/kotlinc/bin >> "$GITHUB_PATH"
+
+      # scalac from the scala3 release tarball. Same reasoning as kotlinc
+      # above: there is no scala3 package in Ubuntu's archives, and the
+      # alternative -- coursier -- resolves the compiler from Maven at run
+      # time, which is a second network dependency to pin rather than one.
+      # The tarball is the whole distribution and needs only the JDK the
+      # setup-java step installs. scala/Makefile finds the two runtime jars
+      # from scalac's own location on PATH, so no path is written twice.
+      - name: Setup Scala
+        if: matrix.lang == 'scala'
+        run: |
+          curl -sSLf --retry 3 -o /tmp/scala3.tar.gz \
+            "https://github.com/scala/scala3/releases/download/${SCALA_VERSION}/scala3-${SCALA_VERSION}.tar.gz"
+          mkdir -p /opt/scala3
+          tar xzf /tmp/scala3.tar.gz -C /opt/scala3 --strip-components=1
+          echo /opt/scala3/bin >> "$GITHUB_PATH"
 
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
@@ -284,6 +302,13 @@ jobs:
             "https://github.com/JetBrains/kotlin/releases/download/v${KOTLIN_VERSION}/kotlin-compiler-${KOTLIN_VERSION}.zip"
           unzip -q /tmp/kotlinc.zip -d /opt
           echo /opt/kotlinc/bin >> "$GITHUB_PATH"
+      - name: Setup Scala
+        run: |
+          curl -sSLf --retry 3 -o /tmp/scala3.tar.gz \
+            "https://github.com/scala/scala3/releases/download/${SCALA_VERSION}/scala3-${SCALA_VERSION}.tar.gz"
+          mkdir -p /opt/scala3
+          tar xzf /tmp/scala3.tar.gz -C /opt/scala3 --strip-components=1
+          echo /opt/scala3/bin >> "$GITHUB_PATH"
       - name: Setup Zig
         run: |
           python3 -m pip install --disable-pip-version-check --quiet \

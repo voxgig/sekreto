@@ -196,6 +196,7 @@ provider, so a typo fails the same way whether or not a vault is reachable.
 | rust | `trysecret` → `Option` | `getfrom` / `tryfrom` | `redact` | |
 | java | `tryget` | `getfrom` / `tryfrom` | `redact` | |
 | kotlin | `tryget`, and `` `try` `` | `getfrom` / `tryfrom` | `redact` | |
+| scala | `tryget` → `Option` | `getfrom` / `tryfrom` | `redact` | |
 | csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` | |
 
 Go's `New` returns an error, because building a chain can fail — an
@@ -204,11 +205,14 @@ its configuration — and Go has nothing to throw. Its `Options.Providers`
 is a list of specs; a spec may carry a `Provider` already built, which is
 how a custom provider that is not a plugin joins the chain.
 
-`try` is a keyword in Java and Kotlin, and Python needs to avoid shadowing
-the statement, hence `tryget` and `try_`. Kotlin can escape a keyword with
-backticks, so it carries `` `try` `` as well. Go and Rust have no exceptions, so
-they answer with `(value, found, error)` and `Result<Option<..>>`
-respectively rather than throwing.
+`try` is a keyword in Java, Kotlin and Scala, and Python needs to avoid
+shadowing the statement, hence `tryget` and `try_`. Kotlin can escape a
+keyword with backticks, so it carries `` `try` `` as well. Go and Rust have no
+exceptions, so they answer with `(value, found, error)` and
+`Result<Option<..>>` respectively rather than throwing. Scala has
+exceptions and throws like the other JVM ports, but its optional lookup
+answers with `Option[String]`, which is what the language reaches for
+where Java returns `Optional`.
 
 ---
 
