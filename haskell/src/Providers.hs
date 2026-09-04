@@ -1260,15 +1260,33 @@ onepasswordprovider spec = do
 
               let fields = fromMaybe [] (Json.asarr (Json.dig (ansbody item) ["fields"]))
 
-                  byrole role wanted =
+                  -- The FIRST field carrying this role, if any. Deliberately
+                  -- NOT "the first field carrying this role whose value is
+                  -- text": those are different, and conflating them is a
+                  -- wrong-secret bug rather than a cosmetic one.
+                  firstwith role wanted =
                     case filter
                       (\field -> Just wanted == Json.asstr (Json.dig (Just field) [role]))
                       fields of
-                      (field : _) -> Json.text (Json.dig (Just field) ["value"])
+                      (field : _) -> Just field
                       [] -> Nothing
 
-              -- Two full passes, in order: purpose first, then label.
-              pure (maybe (byrole "label" "value") Just (byrole "purpose" "PASSWORD")),
+                  valueof field = Json.text (Json.dig (Just field) ["value"])
+
+              -- Two passes, purpose first -- and the FIRST pass is TERMINAL.
+              -- Canonical returns from inside the loop
+              -- (kotlin/src/Providers.kt:1417 and the typescript plugin), so
+              -- a PASSWORD field whose value is null is a MISS and must not
+              -- fall through to the label pass. Returning Nothing from the
+              -- purpose lookup for both "no such field" and "field with a
+              -- null value" made it fall through, and the label pass then
+              -- answered with a DIFFERENT field's value: the caller got a
+              -- secret where canonical gives it nothing.
+              pure
+                ( case firstwith "purpose" "PASSWORD" of
+                    Just field -> valueof field
+                    Nothing -> maybe Nothing valueof (firstwith "label" "value")
+                ),
         describe = "onepassword:" ++ specvault spec
       }
 
