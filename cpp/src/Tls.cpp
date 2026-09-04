@@ -212,7 +212,17 @@ std::unique_ptr<Stream> tlsstream(int fd, const std::string& host, const std::st
 
   if (1 != SSL_set_fd(held.ssl, fd)) throw refuse(sslwhy());
 
-  if (1 != SSL_connect(held.ssl)) throw refuse(sslwhy());
+  if (1 != SSL_connect(held.ssl)) {
+    // The verification reason first, when there is one: "certificate
+    // verify failed" alone does not say whether the chain or the HOSTNAME
+    // was refused, and those are two different misconfigurations.
+    long refused = SSL_get_verify_result(held.ssl);
+    if (X509_V_OK != refused) {
+      throw refuse(std::string("certificate verify failed: ") +
+                   X509_verify_cert_error_string(refused));
+    }
+    throw refuse(sslwhy());
+  }
 
   // Belt and braces. SSL_VERIFY_PEER already aborts on a bad chain, but
   // the two checks below are cheap and they are what makes "verification

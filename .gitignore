@@ -157,6 +157,15 @@ swift/build/
 swift/.build/
 elixir/build/
 elixir/_build/
+c/build/
+cpp/build/
+lua/build/
+ocaml/build/
+ocaml/_build/
+haskell/build/
+haskell/dist-newstyle/
+lean/build/
+lean/.lake/
 csharp/**/bin/
 csharp/**/obj/
 **/__pycache__/
