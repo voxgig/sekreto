@@ -37,14 +37,21 @@ build/libsekreto.a: $(OBJ)
 build/sekreto-cli: cli/Cli.cpp build/libsekreto.a
 	$(CXX) $(CXXFLAGS) -Isrc -o $@ cli/Cli.cpp build/libsekreto.a $(LIBS)
 
+# The TLS obligations, proved in-tree. Neither `make test`'s corpus nor
+# `make integration` opens an https socket, so without this a build with
+# its certificate checking switched off would pass both.
+build/sekreto-tlstest: test/TlsTest.cpp build/libsekreto.a
+	$(CXX) $(CXXFLAGS) -Isrc -pthread -o $@ test/TlsTest.cpp build/libsekreto.a $(LIBS)
+
 # The suite links the archive `build` just made, so the library is compiled
 # once however many times the tests are run.
-test: build
+test: build build/sekreto-tlstest
 	@test -n "$(OMNI)" || { echo "sekreto: voxgig/omni not found - set OMNI_HOME" >&2; exit 1; }
 	$(MAKE) -C $(OMNI)/cpp build
 	$(CXX) $(CXXFLAGS) -Isrc -I$(OMNI)/cpp/src -o build/sekreto-test \
 	  test/SekretoTest.cpp build/libsekreto.a $(LIBS)
 	./build/sekreto-test
+	./build/sekreto-tlstest
 
 clean:
 	rm -rf build

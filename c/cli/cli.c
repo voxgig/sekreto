@@ -90,6 +90,8 @@ static size_t chainfor(sek_pool *pool, const char *source, sek_spec *specs) {
   }
   hashicorpspec.vaultnamespace = env("VAULT_NAMESPACE");
   if (NULL != env("VAULT_AUTH")) {
+    /* Static, because the spec keeps a pointer to it and the specs
+     * outlive this function. The CLI builds one chain and exits. */
     static sek_authspec auth;
     memset(&auth, 0, sizeof(auth));
     auth.method = env("VAULT_AUTH");
@@ -223,21 +225,17 @@ static size_t chainfor(sek_pool *pool, const char *source, sek_spec *specs) {
   return 4;
 }
 
-/* The API call. Not sek_http: that is the library's private transport,
- * and the CLI is a consumer like any other. This is the same handful of
- * lines every port's CLI writes against its own HTTP client - here, one
- * plain GET over a socket. */
-static int callapi(sek_pool *pool, const char *url, const char *token, int *status,
-                   char **body) {
+/* The API call. Every other port reaches for its platform's HTTP client
+ * here; C has none, so this uses the one the library publishes - the same
+ * verified transport the providers use. */
+static sek_err callapi(sek_pool *pool, const char *url, const char *token, int *status,
+                       char **body) {
   sek_map *headers = sek_map_new(pool);
-  sek_spec probe;
-
-  (void)probe;
 
   sek_map_set(headers, "Authorization", sek_fmt(pool, "Bearer %s", token));
   sek_map_set(headers, "X-Sekreto-Lang", LANG);
 
-  return sek_cli_fetch(pool, url, headers, status, body);
+  return sek_fetch(pool, "GET", url, headers, NULL, status, body);
 }
 
 int main(int argc, char **argv) {
@@ -286,11 +284,12 @@ int main(int argc, char **argv) {
     return 2;
   }
 
-  if (0 != callapi(pool, url, token, &status, &body)) {
+  err = callapi(pool, url, token, &status, &body);
+  if (NULL != err) {
     /* Every failure path is redacted: the suite greps stdout AND stderr
      * on both the pass and the fail path, and a leak fails the check
      * whatever the exit code was. */
-    fprintf(stderr, "sekreto-cli: %s\n", sek_redact_text(secrets, body));
+    fprintf(stderr, "sekreto-cli: %s\n", sek_redact_text(secrets, err));
     sek_pool_free(pool);
     return 1;
   }

@@ -575,3 +575,23 @@ sek_err sek_fetchjson(sek_pool *pool, const char *method, const char *url, const
 
   return NULL;
 }
+
+/* The published round-trip. Thin on purpose: a consumer gets the status
+ * and the body and decides for itself, exactly as the providers do. */
+sek_err sek_fetch(sek_pool *pool, const char *method, const char *url, const sek_map *headers,
+                  const char *body, int *status, char **out) {
+  sek_response res;
+  sek_err err = sek_http(pool, method, url, headers, body, &res);
+
+  *status = 0;
+  *out = NULL;
+
+  if (NULL != err) {
+    return err;
+  }
+
+  *status = res.status;
+  *out = res.body;
+
+  return NULL;
+}

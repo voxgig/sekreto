@@ -339,6 +339,18 @@ void sek_close(sek_sekreto *sek);
  * cannot reach a value. */
 char *sek_show(sek_sekreto *sek);
 
+/* ---- transport ----------------------------------------------------- */
+
+/* One HTTP round-trip, published because a C consumer has no HTTP client
+ * of its own to reach the API it just fetched a token for - and the CLI
+ * every port ships is exactly such a consumer. Every other port calls its
+ * platform's client here.
+ *
+ * https is verified: chain, hostname, SNI, and `SEKRETO_CA_BUNDLE` for
+ * extra roots. A non-2xx status is returned rather than raised. */
+sek_err sek_fetch(sek_pool *pool, const char *method, const char *url, const sek_map *headers,
+                  const char *body, int *status, char **out);
+
 /* ---- sigv4 --------------------------------------------------------- */
 
 /* One request to sign. `datetime` is `YYYYMMDDTHHMMSSZ` and it is the

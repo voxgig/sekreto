@@ -33,7 +33,6 @@ env:
   SCALA_VERSION: '3.4.2'
   CLOJURE_VERSION: '1.12.0.1530'
   SWIFT_VERSION: '5.10.1'
-  DART_VERSION: '3.13.3'
 
 jobs:
   omni-isolation:
@@ -249,13 +248,21 @@ jobs:
           sudo mkdir -p /opt/swift
           sudo tar xzf /tmp/swift.tar.gz -C /opt/swift --strip-components=1
           echo /opt/swift/usr/bin >> "$GITHUB_PATH"
+      # Dart from Google's APT repository, not the dart-archive bucket -- see
+      # the fuller note on the integration job's copy of this step. The
+      # bucket URL the SDK docs give answered 404 for every version tried
+      # and took this job down with it.
       - name: Setup Dart
         if: matrix.lang == 'dart'
         run: |
-          curl -sSLf --retry 3 -o /tmp/dart.zip \
-            "https://storage.googleapis.com/dart-archive/channels/stable/release/${DART_VERSION}/sdk/dartsdk-linux-x64.release.zip"
-          sudo unzip -q /tmp/dart.zip -d /opt
-          echo /opt/dart-sdk/bin >> "$GITHUB_PATH"
+          curl -sSLf --retry 3 https://dl.google.com/linux/linux_signing_key.pub \
+            | sudo gpg --dearmor -o /usr/share/keyrings/dart.gpg
+          echo "deb [signed-by=/usr/share/keyrings/dart.gpg] https://storage.googleapis.com/download.dartlang.org/linux/debian stable main" \
+            | sudo tee /etc/apt/sources.list.d/dart.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends dart
+          echo /usr/lib/dart/bin >> "$GITHUB_PATH"
+          /usr/lib/dart/bin/dart --version
       # Elixir from the Ubuntu archive rather than a pinned tarball, and the
       # OTP version is PRINTED rather than assumed. more-ports.md records
       # that Ubuntu ships OTP 25, where neither :json nor Elixir's JSON
@@ -408,12 +415,27 @@ jobs:
           sudo mkdir -p /opt/swift
           sudo tar xzf /tmp/swift.tar.gz -C /opt/swift --strip-components=1
           echo /opt/swift/usr/bin >> "$GITHUB_PATH"
+      # Dart from Google's APT repository, not the dart-archive bucket. The
+      # bucket URL that the SDK docs give --
+      # storage.googleapis.com/dart-archive/channels/stable/release/<v>/sdk/
+      # dartsdk-linux-x64.release.zip -- answered 404 for every version
+      # tried, both the pinned one and an older known-good one, and took
+      # `conformance / dart` down with it. The APT repo is the route that
+      # actually works and is the one this port was developed against.
+      #
+      # The version therefore comes from the repo rather than from a pin
+      # here, so `dart --version` is printed: a silent major bump is the
+      # thing worth seeing in the log.
       - name: Setup Dart
         run: |
-          curl -sSLf --retry 3 -o /tmp/dart.zip \
-            "https://storage.googleapis.com/dart-archive/channels/stable/release/${DART_VERSION}/sdk/dartsdk-linux-x64.release.zip"
-          sudo unzip -q /tmp/dart.zip -d /opt
-          echo /opt/dart-sdk/bin >> "$GITHUB_PATH"
+          curl -sSLf --retry 3 https://dl.google.com/linux/linux_signing_key.pub \
+            | sudo gpg --dearmor -o /usr/share/keyrings/dart.gpg
+          echo "deb [signed-by=/usr/share/keyrings/dart.gpg] https://storage.googleapis.com/download.dartlang.org/linux/debian stable main" \
+            | sudo tee /etc/apt/sources.list.d/dart.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends dart
+          echo /usr/lib/dart/bin >> "$GITHUB_PATH"
+          /usr/lib/dart/bin/dart --version
       # Elixir from the Ubuntu archive rather than a pinned tarball, and the
       # OTP version is PRINTED rather than assumed. more-ports.md records
       # that Ubuntu ships OTP 25, where neither :json nor Elixir's JSON

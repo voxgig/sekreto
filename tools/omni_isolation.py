@@ -323,6 +323,9 @@ PORTS = {
     # cpp: the Makefile drives g++ over a file list. There is no CMakeLists,
     # no vcpkg.json, no conanfile -- nothing a consumer resolves.
     'cpp':        dict(lib=[], why='no manifest a consumer resolves'),
+    # c: a Makefile and a compiler, and nothing else. No manifest exists
+    # for C at all, so there is nothing here a consumer could resolve.
+    'c':          dict(lib=[], why='no manifest a consumer resolves'),
     # scala: scalac is handed a file list too - the Makefile drives it
     # directly and there is no build.sbt, so the same applies again.
     'scala':      dict(lib=[], why='no manifest a consumer resolves'),
@@ -376,6 +379,10 @@ SOURCES = {
     # .hpp, and scanning only .cpp would leave most of it unread.
     'cpp':        dict(globs=['cpp/src/**/*.cpp', 'cpp/src/**/*.hpp',
                               'cpp/cli/**/*.cpp', 'cpp/cli/**/*.hpp'],
+                       skip=[], pattern=SOURCE),
+    # Headers again, for the same reason as cpp: .h is shipped source.
+    'c':          dict(globs=['c/src/**/*.c', 'c/src/**/*.h',
+                              'c/cli/**/*.c', 'c/cli/**/*.h'],
                        skip=[], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone
