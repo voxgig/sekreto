@@ -1,10 +1,10 @@
 # Bringing sekreto to the languages struct already has
 
 [voxgig/struct](https://github.com/voxgig/struct) has twenty-three ports.
-sekreto now has thirteen — **zig** and **kotlin** landed with this
-document, and **scala** after it. The remaining ten are:
+sekreto now has fourteen — **zig** and **kotlin** landed with this
+document, then **scala** and **clojure**. The remaining nine are:
 
-> c, clojure, cpp, dart, elixir, haskell, lean, lua, ocaml, swift
+> c, cpp, dart, elixir, haskell, lean, lua, ocaml, swift
 
 Every one of them already has a [voxgig/omni](https://github.com/voxgig/omni)
 runner, so the conformance half of a port has somewhere to plug in. The
@@ -57,7 +57,7 @@ the line.
 ## Seven that can be complete ports today
 
 **zig, kotlin, scala, clojure, dart, swift, elixir** — of which **zig,
-kotlin and scala are done**.
+kotlin, scala and clojure are done**.
 
 Each has HTTP with TLS in its standard library or platform library, and
 everything else is either there or is the kind of small in-tree piece
@@ -69,13 +69,14 @@ order, easiest first:
    `std` has the HTTP client, TLS, JSON, SHA-256, HMAC, base64 and
    subprocess. It was also the best proof that the port shape survives a
    language with manual memory management and no exceptions.
-2. ~~**kotlin**~~**,** ~~**scala**~~**, clojure** — one platform, three
-   languages, and **two of the three are done**. The JVM gives HTTP, TLS,
-   HMAC and base64; only JSON is hand-rolled, and
-   `java/src/com/voxgig/sekreto/Json.java` is the model at 299 lines.
-   Writing that parser three times in three idioms is the point of the
-   exercise rather than a waste of it — scala's came out at 299 lines
-   too, which is the model's length to the line and not a copy of it.
+2. ~~**kotlin, scala, clojure**~~ — **all three done.** One platform,
+   three languages. The JVM gives HTTP, TLS, HMAC and base64; only JSON is
+   hand-rolled, and `java/src/com/voxgig/sekreto/Json.java` was the model
+   at 299 lines. Writing that parser three times in three idioms was the
+   point of the exercise rather than a waste of it, and the three came out
+   at 299, 299 and 258 lines — close enough to the model to show the same
+   work, far enough apart to show it was done again rather than copied.
+   The HTTP/1.1 pin the java port needed is in all three.
    Note the HTTP/2 trap the Java port hit: `java.net.http` defaults to
    `HTTP_2` and its h2c upgrade sends a `Content-Length` with an empty
    body, which strict servers reject. Scala and Clojure inherit that

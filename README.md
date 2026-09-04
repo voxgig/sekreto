@@ -8,7 +8,7 @@ and it does not have to change when the answer changes. Moving from
 `.env` in development to a vault in production is a config change, not a
 code change.
 
-The same library is available in thirteen languages, all behaving
+The same library is available in fourteen languages, all behaving
 identically, because they all run the same shared test spec through
 [voxgig/omni](https://github.com/voxgig/omni).
 
@@ -108,6 +108,7 @@ clients are loaded differs.
 | [csharp](csharp/) | switch — pending | | exists |
 | [kotlin](kotlin/) | switch — pending | | exists |
 | [scala](scala/) | switch — pending | | exists |
+| [clojure](clojure/) | switch — pending | | exists |
 | [zig](zig/) | ✅ | `zig/plugins/` | plugin's zig port as a named module — a checkout, found or fetched by `make deps` |
 
 **typescript** — one import per plugin, or the full set from
@@ -235,6 +236,7 @@ joins the chain like any shipped plugin. See [DOCS.md](DOCS.md#plugins).
 | [zig](zig/) | ✅ | ✅ |
 | [kotlin](kotlin/) | ✅ | ✅ |
 | [scala](scala/) | ✅ | ✅ |
+| [clojure](clojure/) | ✅ | ✅ |
 
 Every port is tested three ways: the shared conformance spec, an
 integration run against mock servers, and — on demand and weekly — the

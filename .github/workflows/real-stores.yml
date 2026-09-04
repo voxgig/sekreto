@@ -46,6 +46,7 @@ permissions:
 env:
   KOTLIN_VERSION: '2.1.20'
   SCALA_VERSION: '3.4.2'
+  CLOJURE_VERSION: '1.12.0.1530'
 
 jobs:
   real-stores:
@@ -109,6 +110,18 @@ jobs:
           mkdir -p /opt/scala3
           tar xzf /tmp/scala3.tar.gz -C /opt/scala3 --strip-components=1
           echo /opt/scala3/bin >> "$GITHUB_PATH"
+      # The OFFICIAL Clojure CLI, pinned. Ubuntu's `clojure` package is a
+      # DIFFERENT PROGRAM: it runs the Clojure jar directly and understands
+      # neither -M nor deps.edn aliases, both of which this port's Makefile
+      # and voxgig/omni's own clojure runner need. Installing to $HOME keeps
+      # it out of sudo's way; the script's default prefix is /usr/local.
+      - name: Setup Clojure
+        run: |
+          curl -sSLf --retry 3 -o /tmp/clojure-install.sh \
+            "https://download.clojure.org/install/linux-install-${CLOJURE_VERSION}.sh"
+          chmod +x /tmp/clojure-install.sh
+          /tmp/clojure-install.sh --prefix "$HOME/clojure-cli"
+          echo "$HOME/clojure-cli/bin" >> "$GITHUB_PATH"
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: '8.0'

@@ -197,6 +197,7 @@ provider, so a typo fails the same way whether or not a vault is reachable.
 | java | `tryget` | `getfrom` / `tryfrom` | `redact` | |
 | kotlin | `tryget`, and `` `try` `` | `getfrom` / `tryfrom` | `redact` | |
 | scala | `tryget` → `Option` | `getfrom` / `tryfrom` | `redact` | |
+| clojure | `tryget` | `getfrom` / `tryfrom` | `redactall` | |
 | csharp | `TryGet` | `GetFrom` / `TryFrom` | `Redact` | |
 
 Go's `New` returns an error, because building a chain can fail — an
@@ -205,14 +206,17 @@ its configuration — and Go has nothing to throw. Its `Options.Providers`
 is a list of specs; a spec may carry a `Provider` already built, which is
 how a custom provider that is not a plugin joins the chain.
 
-`try` is a keyword in Java, Kotlin and Scala, and Python needs to avoid
-shadowing the statement, hence `tryget` and `try_`. Kotlin can escape a
+`try` is a keyword in Java, Kotlin and Scala and a special form in
+Clojure, and Python needs to avoid shadowing the statement, hence `tryget`
+and `try_`. Kotlin can escape a
 keyword with backticks, so it carries `` `try` `` as well. Go and Rust have no
 exceptions, so they answer with `(value, found, error)` and
 `Result<Option<..>>` respectively rather than throwing. Scala has
 exceptions and throws like the other JVM ports, but its optional lookup
 answers with `Option[String]`, which is what the language reaches for
-where Java returns `Optional`.
+where Java returns `Optional`. Clojure carries `redactall` for the same
+reason Perl does: `redact` is already the pure two-argument function, and
+the method on a chain would take two arguments as well.
 
 ---
 

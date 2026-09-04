@@ -31,6 +31,7 @@ env:
   # One place, because three jobs install it.
   KOTLIN_VERSION: '2.1.20'
   SCALA_VERSION: '3.4.2'
+  CLOJURE_VERSION: '1.12.0.1530'
 
 jobs:
   omni-isolation:
@@ -110,6 +111,7 @@ jobs:
           - zig
           - kotlin
           - scala
+          - clojure
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
@@ -166,7 +168,9 @@ jobs:
         if: matrix.lang == 'rust'
 
       - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
-        if: matrix.lang == 'java' || matrix.lang == 'kotlin' || matrix.lang == 'scala'
+        if: >-
+          matrix.lang == 'java' || matrix.lang == 'kotlin'
+          || matrix.lang == 'scala' || matrix.lang == 'clojure'
         with:
           distribution: temurin
           java-version: '21'
@@ -204,6 +208,19 @@ jobs:
           mkdir -p /opt/scala3
           tar xzf /tmp/scala3.tar.gz -C /opt/scala3 --strip-components=1
           echo /opt/scala3/bin >> "$GITHUB_PATH"
+      # The OFFICIAL Clojure CLI, pinned. Ubuntu's `clojure` package is a
+      # DIFFERENT PROGRAM: it runs the Clojure jar directly and understands
+      # neither -M nor deps.edn aliases, both of which this port's Makefile
+      # and voxgig/omni's own clojure runner need. Installing to $HOME keeps
+      # it out of sudo's way; the script's default prefix is /usr/local.
+      - name: Setup Clojure
+        if: matrix.lang == 'clojure'
+        run: |
+          curl -sSLf --retry 3 -o /tmp/clojure-install.sh \
+            "https://download.clojure.org/install/linux-install-${CLOJURE_VERSION}.sh"
+          chmod +x /tmp/clojure-install.sh
+          /tmp/clojure-install.sh --prefix "$HOME/clojure-cli"
+          echo "$HOME/clojure-cli/bin" >> "$GITHUB_PATH"
 
 
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
@@ -309,6 +326,18 @@ jobs:
           mkdir -p /opt/scala3
           tar xzf /tmp/scala3.tar.gz -C /opt/scala3 --strip-components=1
           echo /opt/scala3/bin >> "$GITHUB_PATH"
+      # The OFFICIAL Clojure CLI, pinned. Ubuntu's `clojure` package is a
+      # DIFFERENT PROGRAM: it runs the Clojure jar directly and understands
+      # neither -M nor deps.edn aliases, both of which this port's Makefile
+      # and voxgig/omni's own clojure runner need. Installing to $HOME keeps
+      # it out of sudo's way; the script's default prefix is /usr/local.
+      - name: Setup Clojure
+        run: |
+          curl -sSLf --retry 3 -o /tmp/clojure-install.sh \
+            "https://download.clojure.org/install/linux-install-${CLOJURE_VERSION}.sh"
+          chmod +x /tmp/clojure-install.sh
+          /tmp/clojure-install.sh --prefix "$HOME/clojure-cli"
+          echo "$HOME/clojure-cli/bin" >> "$GITHUB_PATH"
       - name: Setup Zig
         run: |
           python3 -m pip install --disable-pip-version-check --quiet \
