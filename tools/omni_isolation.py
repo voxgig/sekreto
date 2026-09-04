@@ -242,6 +242,9 @@ PORTS = {
     # kotlin: kotlinc is handed a file list, exactly as javac is for the
     # java port, so the same applies.
     'kotlin':     dict(lib=[], why='no manifest a consumer resolves'),
+    # scala: scalac is handed a file list too - the Makefile drives it
+    # directly and there is no build.sbt, so the same applies again.
+    'scala':      dict(lib=[], why='no manifest a consumer resolves'),
     'perl':       dict(lib=[], why='no manifest a consumer resolves'),
     'php':        dict(lib=[], why='no manifest a consumer resolves'),
     'ruby':       dict(lib=[], why='no manifest a consumer resolves'),
@@ -270,6 +273,8 @@ SOURCES = {
     'zig':        dict(globs=['zig/src/**/*.zig', 'zig/cli/**/*.zig'],
                        skip=[], pattern=SOURCE),
     'kotlin':     dict(globs=['kotlin/src/**/*.kt', 'kotlin/cli/**/*.kt'],
+                       skip=[], pattern=SOURCE),
+    'scala':      dict(globs=['scala/src/**/*.scala', 'scala/cli/**/*.scala'],
                        skip=[], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone
