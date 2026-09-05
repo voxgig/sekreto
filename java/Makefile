@@ -85,9 +85,9 @@ check-core: core
 	  echo "sekreto: the core reaches a plugin" >&2; \
 	  grep 'com\.voxgig\.sekreto\.plugins' build/core.deps >&2; exit 1; \
 	fi
-	@if grep -qE 'java\.net\.http|javax\.crypto|java\.security\.(MessageDigest|Mac)|java\.lang\.ProcessBuilder' build/core.deps; then \
+	@if grep -qE 'java\.net\.http|java\.net\.URL|javax\.crypto|java\.security\.(MessageDigest|Mac)|java\.lang\.ProcessBuilder|java\.lang\.Runtime\b' build/core.deps; then \
 	  echo "sekreto: the core opens a socket, signs a request or spawns a process" >&2; \
-	  grep -E 'java\.net\.http|javax\.crypto|java\.security\.|java\.lang\.ProcessBuilder' build/core.deps >&2; \
+	  grep -E 'java\.net\.http|java\.net\.URL|javax\.crypto|java\.security\.|java\.lang\.ProcessBuilder|java\.lang\.Runtime\b' build/core.deps >&2; \
 	  exit 1; \
 	fi
 	@echo "core: $$(ls build/core/com/voxgig/sekreto/*.class | wc -l) classes, and none reaches a plugin"

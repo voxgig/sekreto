@@ -28,18 +28,35 @@ unzip -qq -o "$jar" -d "$work"
 # reference only REFLECTION would reach, because Class.forName takes a
 # dotted string literal, and this file's comment claimed it did. A guard
 # that overstates what it checks is worse than one that says less.
+#
+# Ljava/lang/Runtime; CARRIES ITS DESCRIPTOR FORM DELIBERATELY. The bare
+# java/lang/Runtime is a substring of java/lang/RuntimeException, which
+# clean core classes carry, so the naive spelling fails a green build. The
+# slash list is matched with grep -F against the constant pool, where a
+# resolved type appears as a descriptor, and the L...; form is exact.
+#
+# Runtime and java/net/URL are here because an audit of the scala port --
+# which carries a near-verbatim copy of this file -- smuggled
+# Runtime.getRuntime.exec and URI.create(x).toURL.openStream into the core
+# and the check passed. java/net/URL is a prefix on purpose: it takes
+# URLConnection and HttpURLConnection with it, and URLEncoder too, since
+# percent-encoding belongs with the transport rather than the core.
 banned='com/voxgig/sekreto/plugins
 java/net/http
 java/net/Socket
 javax/crypto
 java/security/MessageDigest
 java/lang/ProcessBuilder
+Ljava/lang/Runtime;
+java/net/URL
 com.voxgig.sekreto.plugins
 java.net.http
 java.net.Socket
 javax.crypto
 java.security.MessageDigest
-java.lang.ProcessBuilder'
+java.lang.ProcessBuilder
+java.lang.Runtime
+java.net.URL'
 
 bad=0
 for pattern in $banned; do

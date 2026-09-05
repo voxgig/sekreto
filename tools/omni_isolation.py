@@ -439,17 +439,20 @@ SOURCES = {
                               'swift/plugins/**/*.swift'],
                        skip=[], outside=['swift/test/'], pattern=SOURCE),
     # elixir/tool is build machinery, not shipped source.
-    'elixir':     dict(globs=['elixir/src/**/*.ex', 'elixir/cli/**/*.ex'],
+    'elixir':     dict(globs=['elixir/src/**/*.ex', 'elixir/cli/**/*.ex',
+                              'elixir/plugins/**/*.ex'],
                        skip=[], outside=['elixir/test/', 'elixir/tool/'],
                        pattern=SOURCE),
     # Headers are shipped source too: a cpp port carries much of itself in
     # .hpp, and scanning only .cpp would leave most of it unread.
     'cpp':        dict(globs=['cpp/src/**/*.cpp', 'cpp/src/**/*.hpp',
-                              'cpp/cli/**/*.cpp', 'cpp/cli/**/*.hpp'],
+                              'cpp/cli/**/*.cpp', 'cpp/cli/**/*.hpp',
+                              'cpp/plugins/**/*.cpp', 'cpp/plugins/**/*.hpp'],
                        skip=[], outside=['cpp/test/'], pattern=SOURCE),
     # Headers again, for the same reason as cpp: .h is shipped source.
     'c':          dict(globs=['c/src/**/*.c', 'c/src/**/*.h',
-                              'c/cli/**/*.c', 'c/cli/**/*.h'],
+                              'c/cli/**/*.c', 'c/cli/**/*.h',
+                              'c/plugins/**/*.c', 'c/plugins/**/*.h'],
                        skip=[], outside=['c/test/'], pattern=SOURCE),
     # lua/native is shipped source too: the OpenSSL binding is a C module
     # the library requires at runtime, so it is as much a part of what a

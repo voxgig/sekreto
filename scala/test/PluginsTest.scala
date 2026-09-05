@@ -432,6 +432,27 @@ object PluginsTest:
         ),
       )
 
+    // ...and a chain entry that is neither a provider nor a spec is refused
+    // by name too. `providers` is typed `List[Provider | ProviderSpec]`, but
+    // a union is a compile-time guarantee and the JVM erases it: the
+    // constructor's bytecode signature is `List<Object>`, so a java, kotlin
+    // or clojure caller - or a scala one behind an unchecked cast - can pass
+    // whatever it likes, and did, as a `scala.MatchError` naming neither the
+    // library nor the fix. Reached the way such a caller reaches it: through
+    // the erased signature.
+    testcase("a chain entry that is neither is refused, even from outside scala"):
+      val smuggled = List("i am not a provider").asInstanceOf[List[Provider | ProviderSpec]]
+
+      eq(
+        "sekreto: not a provider or a provider spec: i am not a provider",
+        refusal(Sekreto(providers = smuggled)),
+      )
+
+      eq(
+        "sekreto: not a provider or a provider spec: ",
+        refusal(Sekreto(providers = List(null).asInstanceOf[List[Provider | ProviderSpec]])),
+      )
+
     // The spec crosses the boundary as plugin's own value model - a sealed
     // hierarchy of null, boolean, number, string, list and map - and comes
     // back typed. A field added to `optionsof` and forgotten in `specof`
@@ -490,8 +511,25 @@ object PluginsTest:
       // Every field is set above, so nothing may be missing from the options
       // either - a field dropped from BOTH sides would round trip and still
       // be gone.
-      eq(34, optionsof(full).entries.size, "every ProviderSpec field crossed")
-      eq(7, optionsof(full).at("auth").entries.size, "every AuthSpec field crossed")
+      //
+      // Read off the CASE CLASS rather than written out as a count, because
+      // a count cannot see the case the round trip cannot see either: a
+      // field ADDED to ProviderSpec and wired into neither `optionsof` nor
+      // `specof`. It is None on both sides of the round trip and it does not
+      // change how many keys cross, so a literal 34 here stays true while
+      // the field silently never reaches a provider.
+      val useauth = full.auth.getOrElse(throw Failed("the spec under test has no auth"))
+
+      eq(
+        full.productElementNames.toList.sorted,
+        optionsof(full).keys.sorted,
+        "every ProviderSpec field crossed",
+      )
+      eq(
+        useauth.productElementNames.toList.sorted,
+        optionsof(full).at("auth").keys.sorted,
+        "every AuthSpec field crossed",
+      )
 
     // ------------------------------------------------- the boundary
 

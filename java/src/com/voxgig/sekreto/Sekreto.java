@@ -187,6 +187,15 @@ public final class Sekreto {
         entries.add(new Entry(storename(provider), "", provider));
       } else if (entry instanceof Map) {
         entries.add(declare(Support.map(entry)));
+      } else {
+        // REFUSED, NOT SKIPPED. Without this branch the loop dropped an
+        // entry that was neither, silently: the chain came up one store
+        // short and nothing said why, which is worse than the scala port's
+        // raw MatchError because there is no error at all to read. Wording
+        // is kotlin's, byte for byte.
+        throw new SekretoError(
+            "sekreto: not a provider or a provider spec: "
+                + (null == entry ? "" : entry));
       }
     }
 

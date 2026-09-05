@@ -107,7 +107,7 @@ clients are loaded differs.
 | [java](java/) | ✅ | `java/plugins/` | a checkout, found or fetched by `make deps` |
 | [csharp](csharp/) | ✅ | `csharp/plugins/` (its own assembly) | a checkout, found or fetched by `make deps` |
 | [kotlin](kotlin/) | ✅ | `kotlin/plugins/` | a checkout, found or fetched by `make deps` |
-| [scala](scala/) | switch — pending | | exists |
+| [scala](scala/) | ✅ | `scala/plugins/` | a checkout, found or fetched by `make deps` |
 | [clojure](clojure/) | ✅ | `clojure/plugins/` | a checkout, found by `make deps`; classpaths written by the Makefile (plugin's clojure port ships no `deps.edn`) |
 | [swift](swift/) | ✅ | `swift/plugins/` (its own module) | a checkout, found or fetched by `make deps` |
 | [dart](dart/) | ✅ | `dart/plugins/` | a checkout, found or fetched by `make deps` (plugin's dart port is not on pub, so nothing declares it) |

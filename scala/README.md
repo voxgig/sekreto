@@ -119,8 +119,11 @@ name and tag — `hashicorp` for a store named after its kind,
 instances in `providers` as well, for a provider of your own; `names` gives
 their store names positionally. The parameter is typed
 `List[Provider | ProviderSpec]`, a **union**, so the two shapes a chain
-entry may have are the two the compiler admits and nothing else can be
-passed. A custom KIND is one call:
+entry may have are the two the compiler admits — from Scala. The JVM
+erases the union, so the constructor's bytecode signature is
+`List<Object>` and a caller in another JVM language, or one behind an
+unchecked cast, can pass anything; that gets `sekreto: not a provider or
+a provider spec`. A custom KIND is one call:
 
 ```scala
 val mystore = providerplugin("mystore", spec => Mystore(spec.addr))

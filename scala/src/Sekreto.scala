@@ -237,9 +237,9 @@ private def unwrap(err: RuntimeException): RuntimeException = err match
   * `providers` is the chain in resolution order. An entry is a declarative
   * `ProviderSpec` - which becomes a voxgig/plugin instance on `host` - or a
   * live `Provider` of your own, which does not. A UNION TYPE rather than
-  * `Any`: the two shapes a chain entry may have are the two the compiler
-  * admits, so "not a provider or a provider spec" is not a run-time refusal
-  * this port has to carry.
+  * `Any`, so a scala caller is held to those two shapes by the compiler -
+  * but the union is erased, and the refusal below is what holds everyone
+  * else to them.
   *
   * `plugins` is the provider kinds beyond the four built-in ones that
   * `providers` may name. Static and explicit: the calling project imports
@@ -277,12 +277,24 @@ class Sekreto(
   /** One resolved value, with the store it came from. */
   private case class Cached(store: String, name: Name, value: String)
 
+  // Widened to `Any` on purpose. `Provider | ProviderSpec` is a COMPILE-time
+  // guarantee and the JVM erases it: the constructor's bytecode signature is
+  // `List<Object>`, so a caller in java, kotlin or clojure - or a scala one
+  // reaching through reflection or an unchecked cast - can hand this
+  // anything. A match with no last case answers that with a
+  // `scala.MatchError` naming neither the library nor the fix, so the
+  // refusal is spelled out, in the kotlin port's words.
   private var entries: List[Entry] = providers.zipWithIndex.map: (entry, index) =>
-    entry match
+    (entry: Any) match
       case spec: ProviderSpec => declare(spec)
       case provider: Provider =>
         val named = names.lift(index).flatten.filter(_.nonEmpty)
         Entry(named.getOrElse(storename(provider)), "", provider)
+      case other =>
+        throw SekretoError(
+          "sekreto: not a provider or a provider spec: " +
+            (if null == other then "" else other),
+        )
 
   // A buffer, not a map: the store a value came from stays attached, and
   // redaction order does not vary between runs.
