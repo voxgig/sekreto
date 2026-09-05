@@ -97,6 +97,42 @@ sigv4: set: [
     }
   }
 
+  # ESCAPING IN THE QUERY, AND ITS HEX CASE. The case above sorts two
+  # parameters that need no escaping, so nothing there pins how a
+  # parameter IS escaped. Here the canonical query is
+  #
+  #   p=a%2Fb&q=c%3Ad
+  #
+  # and both escapes carry a hex LETTER, which is the point: RFC 3986 and
+  # the AWS canonical request require UPPERCASE hex, so a port that emits
+  # %2f signs a different string and fails here. Nothing else in this
+  # corpus can see that. The convention is split across every port — the
+  # JSON writer emits lowercase \u escapes while this emits uppercase —
+  # and one port has already shipped a defect from getting it the wrong
+  # way round.
+  #
+  # The vector was produced twice and only kept because the two agreed: by
+  # an implementation written from the AWS specification rather than from
+  # any port, which reproduces the two vectors above before it was trusted
+  # for this one, and by canonical typescript.
+  {
+    id: 'sigv4#query-escaped'
+    in: {
+      method: 'GET'
+      url: 'https://example.amazonaws.com/path/to?p=a/b&q=c:d'
+      body: ''
+      service: 'service'
+      region: 'us-east-1'
+      datetime: '20150830T123600Z'
+      keyid: 'AKIDEXAMPLE'
+      secret: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY'
+    }
+    out: {
+      authorization: 'AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=73b05a1d132252028f066870dd1b5356a9c92bfbe42f7e6af747b80942ea7d1a'
+      'x-amz-date': '20150830T123600Z'
+    }
+  }
+
   # Header values are canonicalised: runs of internal whitespace — spaces
   # AND tabs — collapse to a single space before signing.
   {

@@ -44,6 +44,9 @@ OP_PORT=${OP_PORT:-8205}
 DOPPLER_PORT=${DOPPLER_PORT:-8206}
 INFISICAL_PORT=${INFISICAL_PORT:-8207}
 BORU_SERVE_PORT=${BORU_SERVE_PORT:-8208}
+# A vault that holds a DIFFERENT secret, so a lookup of this suite's one
+# secret answers 404. See the "404 is a miss" check.
+VAULT404_PORT=${VAULT404_PORT:-8209}
 
 # The one secret that matters. Long enough that redaction applies to it.
 TOKEN=${API_TOKEN:-s3cr3t-integration-token}
@@ -141,6 +144,13 @@ startmock "$VAULT2_PORT" hashicorp2 "$WORK/vault2.log" \
   --namespace=teamA --jwt="$SA_JWT" --role=app \
   --roleid="$APPROLE_ID" --secretid="$APPROLE_SECRET" \
   "api.token=$TOKEN"
+
+# A vault that is up, healthy and authenticating, and simply does not have
+# the secret being asked for - it holds another one. That is what makes its
+# answer a 404 rather than a connection error or a 403, which is precisely
+# the case "a miss is not a failure" is about.
+startmock "$VAULT404_PORT" hashicorp404 "$WORK/vault404.log" \
+  node "$HERE/mockhashicorp.js" "$VAULT404_PORT" "$VAULT_TOKEN" "other.secret=not-the-token"
 
 startmock "$AWS_PORT" aws "$WORK/aws.log" \
   node "$HERE/mockaws.js" "$AWS_PORT" "$AWS_KEYID" "$AWS_SECRETKEY" "api.token=$TOKEN"
@@ -277,6 +287,26 @@ for lang in $LANGS; do
   # 3. The secret in a HashiCorp vault, over its real KV v2 wire protocol.
   STORE= check "$lang" hashicorp ok \
     VAULT_ADDR="http://127.0.0.1:$VAULT_PORT" \
+    VAULT_TOKEN="$VAULT_TOKEN" \
+    VAULT_MOUNT=secret
+
+  # 3b. A 404 FROM THE VAULT IS A MISS, NOT A FAILURE. The same vault, the
+  #     same token, pointed at a mount it does not have: the store answers
+  #     404, which means "no secret here" and must let the chain finish
+  #     rather than stop it. A chain of one then runs out and the CLI says
+  #     the secret is unknown.
+  #
+  #     A port that treats the 404 as a failure fails HERE and nowhere
+  #     else: an audit deleted hashicorp's 404 branch and conformance, the
+  #     behaviour suite, the seam suite AND this suite all stayed green.
+  #     The corpus cannot cover it - every hashicorp case there refuses
+  #     before a socket, by design, so no spec entry ever sees an HTTP
+  #     status. This is the miss-versus-failure rule, which the design
+  #     calls the worst thing this library can get wrong, and until now
+  #     nothing in the repository tested it end to end.
+  WHY='unknown secret' LABEL="$lang/hashicorp 404 is a miss" \
+    STORE= check "$lang" hashicorp denied \
+    VAULT_ADDR="http://127.0.0.1:$VAULT404_PORT" \
     VAULT_TOKEN="$VAULT_TOKEN" \
     VAULT_MOUNT=secret
 
