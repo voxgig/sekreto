@@ -20,7 +20,7 @@
    GCP and Azure metadata endpoints are not loopback, and a proxy variable
    in the environment has sent a Vault token in the clear before. *)
 
-open Sekreto
+open Secret
 
 (* How long reaching a vault may take before it is treated as unreachable.
    Ports carry the same bound. *)
@@ -352,7 +352,7 @@ let request (meth : string) (url : string) (headers : (string * string) list)
             let name = String.lowercase_ascii (trim (String.sub line 0 at)) in
             let value = String.lowercase_ascii (String.sub line (at + 1) (String.length line - at - 1)) in
             "transfer-encoding" = name
-            && None <> Sigv4.findsub value "chunked")
+            && None <> findsub value "chunked")
         (match lines with _ :: rest -> rest | [] -> [])
     in
 

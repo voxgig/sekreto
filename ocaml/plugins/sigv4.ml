@@ -13,7 +13,7 @@
 
    A port of typescript/src/Sigv4.ts, which is canonical. *)
 
-open Sekreto
+open Secret
 
 (* One request to sign - the same declarative shape the shared spec uses.
    `datetime` is `YYYYMMDDTHHMMSSZ`, and it is the caller's. *)
@@ -126,24 +126,6 @@ let canonicalquery (query : string) : string =
    parser that normalises either of them signs something the server will not
    recompute. *)
 type parts = { scheme : string; authority : string; path : string; query : string }
-
-let findsub (hay : string) (needle : string) : int option =
-  let hlen = String.length hay and nlen = String.length needle in
-  let rec walk index =
-    if index + nlen > hlen then None
-    else if String.sub hay index nlen = needle then Some index
-    else walk (index + 1)
-  in
-  walk 0
-
-let splitfirst (text : string) (chars : string) : int option =
-  let len = String.length text in
-  let rec walk index =
-    if index >= len then None
-    else if String.contains chars text.[index] then Some index
-    else walk (index + 1)
-  in
-  walk 0
 
 let urlparts (url : string) : parts =
   match findsub url "://" with
