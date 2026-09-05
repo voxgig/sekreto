@@ -20,7 +20,7 @@ The pure functions that can refuse answer `Except String String`
 instead, because Lean's are pure and a caller that has no `IO` to run in
 still has to be able to ask.
 
-A port of typescript/src/Sekreto.ts, which is canonical.
+The pure half of typescript/src/Sekreto.ts, which is canonical.
 -/
 
 import Sekreto.Text

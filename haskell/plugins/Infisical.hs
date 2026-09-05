@@ -12,7 +12,7 @@ import Control.Monad (when)
 import Data.IORef (newIORef, writeIORef)
 import Data.Maybe (fromMaybe)
 import Defs (Definition)
-import Httpjson (Answer (..), currenttoken, fetchjson, never, renewtime)
+import Httpjson (Answer (..), currenttoken, fetchjson, never, renewtime, uriescape)
 import Json (Json (..))
 import qualified Json
 import Names (envkey)
@@ -25,7 +25,6 @@ import Providers
     providerplugin,
     trimslash,
   )
-import Sigv4 (uriescape)
 
 
 -- | Infisical.

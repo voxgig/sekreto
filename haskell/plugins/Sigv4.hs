@@ -19,13 +19,13 @@ module Sigv4
     emptysigning,
     sigv4,
     uridecode,
-    uriescape,
   )
 where
 
 import Bytes (hex, utf8decode, utf8encode)
 import qualified Data.ByteString as B
 import Crypto (hmacsha256, sha256hex)
+import Http (uriescape)
 import Data.Char (chr, digitToInt, isHexDigit, ord, toLower)
 import Data.List (intercalate, isPrefixOf, sortBy)
 import Data.Ord (comparing)
@@ -60,27 +60,6 @@ emptysigning =
       signbody = "",
       signsession = ""
     }
-
--- | RFC 3986 escaping, which is stricter than the usual URL encoder: AWS
--- wants everything but the unreserved set escaped, with uppercase hex.
--- @!'()*@ are escaped here and are not by JavaScript's
--- @encodeURIComponent@, which is the gap that catches ports out.
-uriescape :: String -> String
-uriescape = concatMap byte . B.unpack . utf8encode
-  where
-    byte value
-      | unreserved head = [head]
-      | otherwise = ['%', digit (fromIntegral value `div` 16), digit (fromIntegral value `mod` 16)]
-      where
-        head = chr (fromIntegral value)
-
-    unreserved head =
-      ('A' <= head && 'Z' >= head)
-        || ('a' <= head && 'z' >= head)
-        || ('0' <= head && '9' >= head)
-        || elem head "-_.~"
-
-    digit nibble = "0123456789ABCDEF" !! nibble
 
 -- | Percent-decode, and nothing else: @+@ stays @+@, as on the wire, and
 -- a malformed escape is kept literal.

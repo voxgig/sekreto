@@ -96,6 +96,12 @@ PLUGINMODULES := SekretoPlugins.Httpjson SekretoPlugins.Proc \
                  SekretoPlugins.Doppler SekretoPlugins.Infisical \
                  SekretoPlugins
 
+# The one symbol outside Lean's own naming that the core is allowed to
+# want: libm's `floor`, which `Float` arithmetic compiles to. voxgig/plugin
+# wants `round` for the same reason. Anything else in that position is an
+# `@[extern]` somebody added to the core.
+FOREIGN := floor
+
 HOSTOBJS := $(patsubst %,$(IR)/%.o,$(HOSTMODULES))
 OBJS := $(patsubst %,$(IR)/%.o,$(MODULES))
 PLUGINOBJS := $(patsubst %,$(IR)/%.o,$(PLUGINMODULES))
@@ -217,6 +223,15 @@ $(B)/sekreto-core: $(LIB)/.stamp test/CoreOnly.lean
 #      the clock binding or IO.Process
 #   3. the plugin objects reference every one of those names
 #
+# A LIST OF NAMES IS NOT ENOUGH ON ITS OWN, because a core could open a
+# socket under a name nobody thought to list. So the list is backed by two
+# checks that need no list at all: the core's undefined symbols outside
+# Lean's own `l_`/`lean_`/`initialize_` naming must be exactly $(FOREIGN),
+# which is what `Float` arithmetic costs and is the whole of what the core
+# reaches outside the language; and no `l_IO_Process_` symbol of any kind
+# may appear. Reaching a platform from Lean needs an `@[extern]`, and
+# every `@[extern]` is one of those undefined names.
+#
 # ...and one more, which is (2) turned around: `SekretoPlugins.Hashicorp`
 # reaches exactly one other plugin module - the shared HTTP client - and
 # `SekretoPlugins.Secretspec` reaches only the child-process helper, so a
@@ -233,10 +248,11 @@ check-core: $(PLIB)/.stamp $(B)/sekreto-core
 	    echo sekreto_curl_fetch; \
 	    echo sekreto_epoch_seconds; \
 	    echo l_IO_Process_output; } | sort -u > $(B)/forbidden.txt; \
-	  nm --undefined-only --format=posix $(OBJS) | awk '{print $$1}' | sort -u > $(B)/core.syms; \
-	  nm --format=posix $(PLUGINOBJS) | awk '{print $$1}' | sort -u > $(B)/plugin.syms; \
-	  nm --defined-only --format=posix $(B)/sekreto-core | awk '{print $$1}' | sort -u > $(B)/corebin.syms; \
-	  nm --defined-only --format=posix $(B)/sekreto-cli | awk '{print $$1}' | sort -u > $(B)/clibin.syms; \
+	  nm --undefined-only --format=posix $(OBJS) | awk 'NF>1 {print $$1}' | sort -u > $(B)/core.syms; \
+	  nm --undefined-only --format=posix $(PLUGINOBJS) | awk 'NF>1 {print $$1}' | sort -u > $(B)/plugin.undef; \
+	  nm --format=posix $(PLUGINOBJS) | awk 'NF>1 {print $$1}' | sort -u > $(B)/plugin.syms; \
+	  nm --defined-only --format=posix $(B)/sekreto-core | awk 'NF>1 {print $$1}' | sort -u > $(B)/corebin.syms; \
+	  nm --defined-only --format=posix $(B)/sekreto-cli | awk 'NF>1 {print $$1}' | sort -u > $(B)/clibin.syms; \
 	  test -s $(B)/core.syms || { echo "check-core: read no symbols from the core objects" >&2; exit 1; }; \
 	  grep -qx initialize_Sekreto_Chain $(B)/core.syms $(B)/corebin.syms >/dev/null \
 	    || { echo "check-core: the core objects do not name the chain - nm read the wrong thing" >&2; exit 1; }; \
@@ -266,6 +282,21 @@ check-core: $(PLIB)/.stamp $(B)/sekreto-core
 	    echo "sekreto: build/sekreto-core links a plugin:" >&2; \
 	    echo "$$linked" >&2; exit 1; \
 	  fi; \
+	  echo "== the core reaches outside Lean's own naming for $(FOREIGN) and nothing else"; \
+	  { grep -vE '^(l_|lean_|initialize_)' $(B)/core.syms || true; } | sort -u > $(B)/core.foreign; \
+	  { grep -vE '^(l_|lean_|initialize_)' $(B)/plugin.undef || true; } | sort -u > $(B)/plugin.foreign; \
+	  test -s $(B)/plugin.foreign || { \
+	    echo "check-core: no foreign symbol on the plugin side either - nm read nothing" >&2; exit 1; }; \
+	  sed 's/^/  plugin: /' $(B)/plugin.foreign; \
+	  sed 's/^/  core:   /' $(B)/core.foreign; \
+	  test "$$(cat $(B)/core.foreign)" = "$(FOREIGN)" || { \
+	    echo "sekreto: the core declares an @[extern] of its own - every platform call is a plugin's" >&2; \
+	    exit 1; }; \
+	  echo "== and reaches no IO.Process at all"; \
+	  test 0 -lt "$$(grep -c '^l_IO_Process_' $(B)/plugin.undef)" || { \
+	    echo "check-core: no plugin object names IO.Process, so the check proves nothing" >&2; exit 1; }; \
+	  test 0 -eq "$$(grep -c '^l_IO_Process_' $(B)/core.syms)" || { \
+	    echo "sekreto: the core reaches IO.Process - spawning is a plugin's job" >&2; exit 1; }; \
 	  echo "== one plugin reaches only the shared support it dials"; \
 	  for pair in "Hashicorp:initialize_SekretoPlugins_Httpjson" "Secretspec:initialize_SekretoPlugins_Proc"; do \
 	    mod=$${pair%%:*}; want=$${pair#*:}; \

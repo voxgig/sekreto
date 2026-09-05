@@ -61,22 +61,36 @@ $ make check-core
   sekreto_epoch_seconds
 == the core objects reference none of them
 == and no plugin module is linked into build/sekreto-core
+== the core reaches outside Lean's own naming for floor and nothing else
+  plugin: sekreto_curl_fetch
+  plugin: sekreto_epoch_seconds
+  core:   floor
+== and reaches no IO.Process at all
 == one plugin reaches only the shared support it dials
   SekretoPlugins.Hashicorp -> initialize_SekretoPlugins_Httpjson
   SekretoPlugins.Secretspec -> initialize_SekretoPlugins_Proc
 core: a chain of built-ins needs no plugin
 ```
 
-The middle claim is worth nothing without the first, so the first is
+The second claim is worth nothing without the first, so the first is
 checked too: every forbidden name has to be found on the plugin side, or
-the target fails for proving nothing. `build/sekreto-core` is the last
-piece — a real program, linked from the core objects and voxgig/plugin
-with no `ffi/` object file and no `-lcurl -lssl -lcrypto` on the command
-line. `sekreto_curl_fetch` and `sekreto_epoch_seconds` are the only
-symbols the C files define, so a core module that reached for either would
-fail that link instead of producing a binary. It then runs a chain of the
-four built-in kinds, which is what such a chain can do with no plugin
-loaded.
+the target fails for proving nothing.
+
+A list of names could still miss a socket opened under a name nobody
+thought to list, so two of those claims need no list. Reaching a platform
+from Lean takes an `@[extern]`, and every `@[extern]` shows up as an
+undefined symbol outside Lean's own `l_`/`lean_`/`initialize_` naming —
+the core is allowed exactly one, the C math library's `floor`, which is
+what `Float` arithmetic compiles to. `l_IO_Process_` is the second: no symbol from that
+family, whichever one it is.
+
+`build/sekreto-core` is the last piece — a real program, linked from the
+core objects and voxgig/plugin with no `ffi/` object file and no
+`-lcurl -lssl -lcrypto` on the command line. `sekreto_curl_fetch` and
+`sekreto_epoch_seconds` are the only symbols the C files define, so a core
+module that reached for either would fail that link instead of producing a
+binary. It then runs a chain of the four built-in kinds, which is what
+such a chain can do with no plugin loaded.
 
 `sigv4` travels with the AWS plugin and `Crypto.lean` with it: the core of
 no port imports a hash function. `Httpjson` and `Proc` are the shared

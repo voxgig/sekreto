@@ -13,7 +13,7 @@ import Data.IORef (newIORef, writeIORef)
 import Data.List (isPrefixOf)
 import Data.Maybe (fromMaybe)
 import Defs (Definition)
-import Httpjson (Answer (..), currenttoken, fetchjson, nakedurl, never, renewtime)
+import Httpjson (Answer (..), currenttoken, fetchjson, nakedurl, never, renewtime, uriescape)
 import qualified Json
 import Names (flatname)
 import Provider (Provider (..), forced)
@@ -25,7 +25,6 @@ import Providers
     providerplugin,
     trimslash,
   )
-import Sigv4 (uriescape)
 
 
 -- | The Key Vault audience an Azure token is minted for.

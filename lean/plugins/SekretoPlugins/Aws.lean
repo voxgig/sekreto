@@ -7,6 +7,8 @@ are the only thing in this library that signs a request, so the digest
 (`SekretoPlugins.Crypto`), the signer (`SekretoPlugins.Sigv4`) and the
 wall clock the signature is stamped with (`SekretoPlugins.Clock`) are all
 inside this plugin. The core of no port imports a hash function.
+
+A port of typescript/plugins/aws.ts, which is canonical.
 -/
 
 import Sekreto.Text

@@ -50,5 +50,15 @@ def main : IO UInt32 := do
      " - hashicorp is a sekreto plugin, not built in: pass it in the plugins option")
     refused) && ok
 
+  -- ...and a chain of LIVE providers, which names no kind at all: the
+  -- host stays empty, and `close` and `instances` still mean what they
+  -- mean for a chain built from specs.
+  let live ← Sekreto.make
+    [{ lookup := fun name => pure (some ("live:" ++ name)), describe := "own:here" }]
+  ok := (← want "live get" "live:api.token" (← live.get "api.token")) && ok
+  ok := (← want "live stores" "own" (String.intercalate " " (← live.stores))) && ok
+  ok := (← want "live instances" ""
+    (String.intercalate " " ((← live.instances).map (fun e => e.1)))) && ok
+
   if ok then IO.println "core: a chain of built-ins needs no plugin"
   return (if ok then 0 else 1)

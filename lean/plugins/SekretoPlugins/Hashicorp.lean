@@ -8,6 +8,8 @@ name `hashicorp` only if the calling project passed this definition in.
 
     sekreto { plugins := [hashicorp], providers := [
       { kind := "hashicorp", addr := "https://vault.example.com:8200" }] }
+
+A port of typescript/plugins/hashicorp.ts, which is canonical.
 -/
 
 import Sekreto.Text

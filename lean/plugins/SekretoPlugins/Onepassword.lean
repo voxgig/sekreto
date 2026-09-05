@@ -3,6 +3,8 @@
 
 A PLUGIN: it opens a socket, so it is not in the core and a chain may
 name `onepassword` only if the calling project passed this definition in.
+
+A port of typescript/plugins/onepassword.ts, which is canonical.
 -/
 
 import Sekreto.Text

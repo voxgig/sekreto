@@ -8,6 +8,8 @@ definition in.
 THE ONLY PLUGIN THAT LINKS NO HTTP CLIENT. It reads its own CLI and
 nothing else, so it takes `Proc` and no TLS anywhere in its closure. If
 that ever stops being true it is a real change, not a tidy-up.
+
+A port of typescript/plugins/secretspec.ts, which is canonical.
 -/
 
 import Sekreto.Text

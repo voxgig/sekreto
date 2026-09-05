@@ -17,13 +17,14 @@ module Http
   ( Response (..),
     nakedurl,
     request,
+    uriescape,
   )
 where
 
 import Bytes (utf8decode, utf8encode)
 import Control.Exception (finally, throwIO)
 import qualified Data.ByteString as B
-import Data.Char (isSpace, toLower)
+import Data.Char (chr, isSpace, toLower)
 import Data.List (isInfixOf, isPrefixOf, isSuffixOf)
 import Numeric (readHex)
 import Provider (SekretoError (..))
@@ -279,3 +280,29 @@ dechunk = go B.empty
           if B.length payload < size
             then Nothing
             else go (B.append sofar (B.take size payload)) (B.drop (size + 2) payload)
+
+-- | RFC 3986 escaping, for the plugins that build a URL by hand.
+--
+-- Stricter than the usual URL encoder: everything but the unreserved set
+-- is escaped, with uppercase hex, which is what AWS request signing
+-- needs. @!'()*@ are escaped here and are not by JavaScript's
+-- @encodeURIComponent@, which is the gap that catches ports out.
+--
+-- It lives here rather than beside the signer so that a chain naming
+-- @doppler@ escapes a secret id without linking SHA-256 and HMAC.
+uriescape :: String -> String
+uriescape = concatMap byte . B.unpack . utf8encode
+  where
+    byte value
+      | unreserved head = [head]
+      | otherwise = ['%', digit (fromIntegral value `div` 16), digit (fromIntegral value `mod` 16)]
+      where
+        head = chr (fromIntegral value)
+
+    unreserved head =
+      ('A' <= head && 'Z' >= head)
+        || ('a' <= head && 'z' >= head)
+        || ('0' <= head && '9' >= head)
+        || elem head "-_.~"
+
+    digit nibble = "0123456789ABCDEF" !! nibble

@@ -63,16 +63,18 @@ the core, as built: 33 modules, 55957 symbols
   A  no plugin module of 17 (all 17 are in the CLI)
   B  none of 21 socket, exec and TLS entry points (the CLI has 8)
   C  no libssl, no libcrypto (the CLI loads both)
-  D  build/sekreto-one links Hashicorp and none of the other 8 kind modules
+  D  build/sekreto-one links exactly Hashicorp, Http, Httpjson, Json, Tls of the 17 plugin modules
 ```
 
 Every claim there carries a control that fails if the check read nothing:
 the same extraction over `build/sekreto-cli` has to find all seventeen
 plugin modules and all seven network and exec entry points, because a
 check that cannot see a plugin when one is linked is a check that always
-passes. `A` compares Z-encoded module names as sets — `Azuresecrets` is
-`Azzuresecrets` in a GHC symbol table, which is the sort of near-miss a
-substring match gets wrong.
+passes. Module names are compared as sets of exact, Z-encoded names —
+`Azuresecrets` is `Azzuresecrets` in a GHC symbol table, which is the sort
+of near-miss a substring match gets wrong. `D` is an equality rather than
+an intersection, so a consumer of one vault client that started linking
+the AWS signer would fail it.
 
 OpenSSL is here because GHC's boot libraries have **no networking at all
 — not even a socket**, and because cryptographic transport is the one

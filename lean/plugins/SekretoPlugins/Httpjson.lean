@@ -20,6 +20,8 @@ Base64 decoding, percent-escaping and token renewal are here for the same
 reason they are in the rust port's `httpjson` crate: several plugins need
 them, no plugin should reach into another, and the core needs none of
 them.
+
+A port of typescript/plugins/httpjson.ts, which is canonical.
 -/
 
 import Sekreto.Text

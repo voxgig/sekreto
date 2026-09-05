@@ -12,7 +12,7 @@ import Control.Monad (when)
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe)
 import Defs (Definition)
-import Httpjson (Answer (..), fetchjson)
+import Httpjson (Answer (..), fetchjson, uriescape)
 import qualified Json
 import Names (checkname)
 import Provider (Provider (..), forced)
@@ -23,7 +23,6 @@ import Providers
     providerplugin,
     trimslash,
   )
-import Sigv4 (uriescape)
 
 
 -- | 1Password, through a Connect server.

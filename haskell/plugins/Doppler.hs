@@ -10,7 +10,7 @@ where
 
 import Data.IORef (newIORef, readIORef, writeIORef)
 import Defs (Definition)
-import Httpjson (Answer (..), fetchjson)
+import Httpjson (Answer (..), fetchjson, uriescape)
 import qualified Json
 import Names (envkey)
 import Provider (Provider (..), forced)
@@ -22,7 +22,6 @@ import Providers
     providerplugin,
     trimslash,
   )
-import Sigv4 (uriescape)
 
 
 -- | Doppler.

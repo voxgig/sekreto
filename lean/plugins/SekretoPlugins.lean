@@ -23,6 +23,8 @@ submodule under that same one, so a plugin named `Sekreto.Plugins.X`
 could not be built into a tree the core's own compilation cannot see -
 and that separation is the boundary this port enforces with. The names a
 consumer writes are unchanged.
+
+A port of typescript/plugins/index.ts, which is canonical.
 -/
 
 import SekretoPlugins.Httpjson

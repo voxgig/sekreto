@@ -28,10 +28,12 @@ Three claims, each with a control that fails if this script read nothing:
   C  build/sekreto-core loads no libssl and no libcrypto.  build/sekreto-cli
      loads both.
 
-  D  build/sekreto-one imports ONE plugin and links one: Hashicorp is in
-     it and the other nine kind modules are not.  A consumer that
-     configures one vault and still links seven vault clients has not
-     been made lean, and nothing in the conformance run can see that.
+  D  build/sekreto-one imports ONE plugin and links one.  The plugin
+     modules in it are EXACTLY Hashicorp and the machinery it needs, so
+     the other nine kinds are absent and so are the AWS signer and its
+     hash functions.  A consumer that configures one vault and still
+     links seven vault clients has not been made lean, and nothing in
+     the conformance run can see that.
 
 Run it with `make check-core`, which builds all three artifacts first.
 Pass `core`, `one` or `platform` to check one claim; the controls run
@@ -49,8 +51,13 @@ CORE = os.path.join(PORT, 'build', 'sekreto-core')
 CLI = os.path.join(PORT, 'build', 'sekreto-cli')
 ONE = os.path.join(PORT, 'build', 'sekreto-one')
 
-# The one plugin build/sekreto-one imports, and so the one it may link.
+# The one plugin build/sekreto-one imports, and every plugin module a
+# build of it may then carry: the kind, the HTTP-JSON round trip under it,
+# and the transport under that. Crypto, Sigv4 and Subproc are NOT on the
+# list, which is the half of the claim that would go unnoticed if this
+# were an intersection rather than an equality.
 ONEKIND = 'hashicorp'
+ONEMODULES = ['Hashicorp', 'Http', 'Httpjson', 'Json', 'Tls']
 
 # The four kinds the core is allowed to hold, and the modules that hold
 # them. A module missing from here is a module this check never looked at,
@@ -204,15 +211,12 @@ def main(claim):
     # catalog names; the machinery under them - Httpjson, Http, Tls, Json
     # - is shared and comes along, which is the point of sharing it.
     onehome = modules(symbols(ONE))
-    others = sorted(
-        set(KINDMODULE[kind] for kind in KINDMODULE if ONEKIND != kind)
-        - set([KINDMODULE[ONEKIND]])
-    )
-    strays = sorted(module for module in others if zencode(module) in onehome)
+    carried = sorted(encoded[found] for found in encoded if found in onehome)
     if 'one' in claim:
-        if zencode(KINDMODULE[ONEKIND]) not in onehome:
+        if KINDMODULE[ONEKIND] not in carried:
             fail('control', 'build/sekreto-one imports ' + KINDMODULE[ONEKIND]
                  + ' and this check found no symbol from it')
+        strays = sorted(set(carried) - set(ONEMODULES))
         if strays:
             fail('D', 'build/sekreto-one imports one plugin and links '
                  + ', '.join(strays))
@@ -252,8 +256,8 @@ def main(claim):
     if 'platform' in claim and clean('C'):
         print('  C  no libssl, no libcrypto (the CLI loads both)')
     if 'one' in claim and clean('D'):
-        print('  D  build/sekreto-one links ' + KINDMODULE[ONEKIND] + ' and none of the'
-              + ' other ' + str(len(others)) + ' kind modules')
+        print('  D  build/sekreto-one links exactly ' + ', '.join(carried)
+              + ' of the ' + str(len(encoded)) + ' plugin modules')
 
     for _, line in failures:
         print('FAIL - ' + line, file=sys.stderr)

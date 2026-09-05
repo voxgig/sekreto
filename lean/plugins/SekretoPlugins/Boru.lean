@@ -4,6 +4,8 @@ boru, as a voxgig/plugin definition.
 A PLUGIN: it spawns the boru binary, or dials boru's own wire protocol,
 so it is not in the core and a chain may name `boru` only if the calling
 project passed this definition in.
+
+A port of typescript/plugins/boru.ts, which is canonical.
 -/
 
 import Sekreto.Text

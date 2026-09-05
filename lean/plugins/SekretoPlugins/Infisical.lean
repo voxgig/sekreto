@@ -3,6 +3,8 @@ Infisical, as a voxgig/plugin definition.
 
 A PLUGIN: it opens a socket, so it is not in the core and a chain may
 name `infisical` only if the calling project passed this definition in.
+
+A port of typescript/plugins/infisical.ts, which is canonical.
 -/
 
 import Sekreto.Text

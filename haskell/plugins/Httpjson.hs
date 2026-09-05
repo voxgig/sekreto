@@ -18,6 +18,7 @@ module Httpjson
     never,
     nowms,
     renewtime,
+    uriescape,
     vaultrefof,
   )
 where
@@ -26,7 +27,7 @@ import Control.Monad (when)
 import Data.IORef (IORef, readIORef, writeIORef)
 import Data.Maybe (fromMaybe, isNothing)
 import Data.Time.Clock.POSIX (getPOSIXTime)
-import Http (Response (..), nakedurl)
+import Http (Response (..), nakedurl, uriescape)
 import qualified Http
 import Json (Json (..))
 import qualified Json

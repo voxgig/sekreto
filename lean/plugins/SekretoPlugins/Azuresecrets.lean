@@ -4,6 +4,8 @@ Azure Key Vault, as a voxgig/plugin definition.
 A PLUGIN: it opens a socket, so it is not in the core and a chain may
 name `azuresecrets` only if the calling project passed this definition
 in.
+
+A port of typescript/plugins/azuresecrets.ts, which is canonical.
 -/
 
 import Sekreto.Text
