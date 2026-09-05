@@ -7,7 +7,7 @@
    house rule - HTTP framing is written in-tree - and it is why the port
    binds libssl rather than libcurl.
 
-   https rides src/tls.ml, which is the whole of the port's third-party
+   https rides plugins/tls.ml, which is the whole of the port's third-party
    surface.
 
    It is deliberately not a general-purpose client.

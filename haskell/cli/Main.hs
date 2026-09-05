@@ -18,11 +18,12 @@
 
 module Main (main) where
 
+import AllPlugins (allplugins)
 import Control.Exception (SomeException, displayException, try)
 import qualified Http
 import qualified Json
-import Providers (AuthSpec (..), ProviderSpec (..), emptyauth, emptyspec, sekreto)
-import Sekreto (Sekreto, get, getfrom, redactall)
+import Providers (AuthSpec (..), ProviderSpec (..), emptyauth, emptyspec)
+import Sekreto (Options (..), Sekreto, emptyoptions, get, getfrom, redactall, sekreto)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
 import System.IO (hPutStrLn, stderr)
@@ -272,9 +273,14 @@ run :: String -> String -> String -> IO ExitCode
 run url source store = do
   specs <- chainfor source
 
+  -- THE CONSUMER'S LIST, and the one thing no conformance run can see: it
+  -- hands every plugin to every chain it builds, so a CLI that passed one
+  -- instead of ten would leave all fourteen groups green and fail nine
+  -- integration checks. test/PluginTest.hs pins the line below.
+  --
   -- Construction can fail too, and that is still "the secret could not be
   -- obtained".
-  built <- try (sekreto specs True)
+  built <- try (sekreto emptyoptions {optplugins = allplugins, optproviders = specs})
 
   case built of
     Left err -> deny (err :: SomeException)

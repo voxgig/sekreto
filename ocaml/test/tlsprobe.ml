@@ -6,9 +6,7 @@
 
 let () =
   let addr = if 1 < Array.length Sys.argv then Sys.argv.(1) else "" in
-  let provider =
-    Providers.makeprovider { Providers.nospec with kind = "hashicorp"; addr; token = "t" }
-  in
+  let provider = Hashicorp.hashicorp_provider addr "t" "" 2 "" None in
   match provider.Sekreto.lookup "api.token" with
   | Some value -> print_endline ("OK " ^ value)
   | None -> print_endline "MISS"

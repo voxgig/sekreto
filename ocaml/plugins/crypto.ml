@@ -5,7 +5,7 @@
    180-4 and RFC 2104.
 
    The one dependency this port takes is OpenSSL, and it is taken for
-   TRANSPORT only (src/tls_stubs.c). Reaching into libcrypto for a digest
+   TRANSPORT only (plugins/tls_stubs.c). Reaching into libcrypto for a digest
    would widen that exception from "cryptographic transport is not
    hand-rolled" to "cryptography is not hand-rolled", which is not the rule.
    Rust is the worked precedent: `ring` is already inside rustls's closure

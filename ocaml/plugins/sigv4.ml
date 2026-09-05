@@ -3,7 +3,7 @@
    The AWS providers need exactly one thing from the AWS SDK - request
    signing - and taking the SDK for it would break the no-dependency rule
    that keeps the ports honest. SigV4 is a stable, published algorithm built
-   from HMAC-SHA256, which src/crypto.ml carries.
+   from HMAC-SHA256, which plugins/crypto.ml carries.
 
    `sigv4` is pure: the caller passes the timestamp, so the same input
    yields the same signature everywhere. That is what lets the shared spec

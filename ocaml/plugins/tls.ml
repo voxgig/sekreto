@@ -1,13 +1,13 @@
 (* The OCaml side of the TLS binding.
 
    Thin on purpose: everything that has to be got right is in
-   src/tls_stubs.c, next to the OpenSSL calls it is about, and this module
+   plugins/tls_stubs.c, next to the OpenSSL calls it is about, and this module
    only decides whether a host is a name or an address, reads
    SEKRETO_CA_BUNDLE, and turns a C-side failure into the library's own
    error type.
 
    The socket is OCaml's throughout - connected, bounded and closed by
-   src/http.ml - so the C side never owns a file descriptor. *)
+   plugins/http.ml - so the C side never owns a file descriptor. *)
 
 type conn
 
@@ -30,7 +30,7 @@ let isip (host : string) : bool =
   match Unix.inet_addr_of_string host with _ -> true | exception _ -> false
 
 (* Handshake over an already-connected socket, verifying the chain and the
-   host name. Any failure raises `Failure`, which src/http.ml turns into
+   host name. Any failure raises `Failure`, which plugins/http.ml turns into
    `sekreto: cannot reach ...`. *)
 let connect (fd : Unix.file_descr) (host : string) : conn =
   let extra = match Sys.getenv_opt cabundle with Some path -> path | None -> "" in

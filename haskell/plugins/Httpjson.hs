@@ -1,5 +1,5 @@
--- | The HTTP-JSON round trip every network plugin makes, and the token
--- clock two of them keep.
+-- | The HTTP-JSON round trip every network plugin makes, the token clock
+-- three of them keep, and the small helpers they all share.
 --
 -- It is under @plugins/@ because it reaches "Http", which reaches "Tls",
 -- which is the FFI to OpenSSL: a chain of built-in kinds must never link
@@ -14,9 +14,11 @@ module Httpjson
     currenttoken,
     fetchjson,
     fromenv,
+    nakedurl,
     never,
     nowms,
     renewtime,
+    vaultrefof,
   )
 where
 
@@ -28,6 +30,8 @@ import Http (Response (..), nakedurl)
 import qualified Http
 import Json (Json (..))
 import qualified Json
+import Names (Name, VaultRef (..), vaultref)
+import Provider (forced)
 import Providers (fail')
 import System.Environment (lookupEnv)
 
@@ -98,3 +102,13 @@ currenttoken livetoken renewat login = do
       fresh <- login
       writeIORef livetoken (Just fresh)
       pure fresh
+
+-- | The name's vault location, forced here so that an invalid name is
+-- refused before any request is built. Shared, because a store that maps
+-- a name onto a path and a field wants the refusal at the same moment.
+vaultrefof :: Name -> IO VaultRef
+vaultrefof name = do
+  let ref = vaultref name
+  _ <- forced (refpath ref)
+  _ <- forced (reffield ref)
+  pure ref
