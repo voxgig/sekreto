@@ -96,29 +96,29 @@ clients are loaded differs.
 
 | | plugin architecture | plugins live in | voxgig/plugin port |
 |---|---|---|---|
-| [typescript](typescript/) *(canonical)* | ✅ | `typescript/plugins/` | `@voxgig/plugin` |
-| [go](go/) | ✅ | `go/plugins/<kind>/` | `github.com/voxgig/plugin/go` |
-| [python](python/) | ✅ | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git) |
-| [javascript](javascript/) | ✅ | `javascript/plugins/` | npm `@voxgig/plugin-js` |
-| [ruby](ruby/) | ✅ | `ruby/lib/voxgig_sekreto/plugins/` | a checkout, found or fetched by `make deps` |
-| [php](php/) | ✅ | `php/plugins/` | a checkout, found or fetched by `make deps` |
-| [perl](perl/) | ✅ | `perl/plugins/` | a checkout, found or fetched by `make deps` |
-| [rust](rust/) | ✅ | `rust/plugins/` (a crate each) | a checkout, linked by `make deps` |
-| [java](java/) | ✅ | `java/plugins/` | a checkout, found or fetched by `make deps` |
-| [csharp](csharp/) | ✅ | `csharp/plugins/` (its own assembly) | a checkout, found or fetched by `make deps` |
-| [kotlin](kotlin/) | ✅ | `kotlin/plugins/` | a checkout, found or fetched by `make deps` |
-| [scala](scala/) | ✅ | `scala/plugins/` | a checkout, found or fetched by `make deps` |
-| [clojure](clojure/) | ✅ | `clojure/plugins/` | a checkout, found by `make deps`; classpaths written by the Makefile (plugin's clojure port ships no `deps.edn`) |
-| [swift](swift/) | ✅ | `swift/plugins/` (its own module) | a checkout, found or fetched by `make deps` |
-| [dart](dart/) | ✅ | `dart/plugins/` | a checkout, found or fetched by `make deps` (plugin's dart port is not on pub, so nothing declares it) |
+| [typescript](typescript/) *(canonical)* | yes | `typescript/plugins/` | `@voxgig/plugin` |
+| [go](go/) | yes | `go/plugins/<kind>/` | `github.com/voxgig/plugin/go` |
+| [python](python/) | yes | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git) |
+| [javascript](javascript/) | yes | `javascript/plugins/` | npm `@voxgig/plugin-js` |
+| [ruby](ruby/) | yes | `ruby/lib/voxgig_sekreto/plugins/` | a checkout, found or fetched by `make deps` |
+| [php](php/) | yes | `php/plugins/` | a checkout, found or fetched by `make deps` |
+| [perl](perl/) | yes | `perl/plugins/` | a checkout, found or fetched by `make deps` |
+| [rust](rust/) | yes | `rust/plugins/` (a crate each) | a checkout, linked by `make deps` |
+| [java](java/) | yes | `java/plugins/` | a checkout, found or fetched by `make deps` |
+| [csharp](csharp/) | yes | `csharp/plugins/` (its own assembly) | a checkout, found or fetched by `make deps` |
+| [kotlin](kotlin/) | yes | `kotlin/plugins/` | a checkout, found or fetched by `make deps` |
+| [scala](scala/) | yes | `scala/plugins/` | a checkout, found or fetched by `make deps` |
+| [clojure](clojure/) | yes | `clojure/plugins/` | a checkout, found by `make deps`; classpaths written by the Makefile (plugin's clojure port ships no `deps.edn`) |
+| [swift](swift/) | yes | `swift/plugins/` (its own module) | a checkout, found or fetched by `make deps` |
+| [dart](dart/) | yes | `dart/plugins/` | a checkout, found or fetched by `make deps` (plugin's dart port is not on pub, so nothing declares it) |
 | [elixir](elixir/) | switch — pending | | exists |
 | [cpp](cpp/) | switch — pending | | exists |
 | [c](c/) | switch — pending | | exists |
-| [lua](lua/) | ✅ | `lua/src/sekreto/plugins/` | a checkout, found or fetched by `make deps` |
+| [lua](lua/) | yes | `lua/src/sekreto/plugins/` | a checkout, found or fetched by `make deps` |
 | [ocaml](ocaml/) | switch — pending | | exists |
 | [haskell](haskell/) | switch — pending | | exists |
 | [lean](lean/) | switch — pending | | exists |
-| [zig](zig/) | ✅ | `zig/plugins/` | plugin's zig port as a named module — a checkout, found or fetched by `make deps` |
+| [zig](zig/) | yes | `zig/plugins/` | plugin's zig port as a named module — a checkout, found or fetched by `make deps` |
 
 **typescript** — one import per plugin, or the full set from
 `@voxgig/sekreto/plugins`:
@@ -232,29 +232,29 @@ joins the chain like any shipped plugin. See [DOCS.md](DOCS.md#plugins).
 
 | | conformance | CLI |
 |---|---|---|
-| [typescript](typescript/) *(canonical)* | ✅ | ✅ |
-| [javascript](javascript/) | ✅ | ✅ |
-| [python](python/) | ✅ | ✅ |
-| [ruby](ruby/) | ✅ | ✅ |
-| [php](php/) | ✅ | ✅ |
-| [perl](perl/) | ✅ | ✅ |
-| [go](go/) | ✅ | ✅ |
-| [rust](rust/) | ✅ | ✅ |
-| [java](java/) | ✅ | ✅ |
-| [csharp](csharp/) | ✅ | ✅ |
-| [zig](zig/) | ✅ | ✅ |
-| [kotlin](kotlin/) | ✅ | ✅ |
-| [scala](scala/) | ✅ | ✅ |
-| [clojure](clojure/) | ✅ | ✅ |
-| [swift](swift/) | ✅ | ✅ |
-| [dart](dart/) | ✅ | ✅ |
-| [elixir](elixir/) | ✅ | ✅ |
-| [cpp](cpp/) | ✅ | ✅ |
-| [c](c/) | ✅ | ✅ |
-| [lua](lua/) | ✅ | ✅ |
-| [ocaml](ocaml/) | ✅ | ✅ |
-| [haskell](haskell/) | ✅ | ✅ |
-| [lean](lean/) | ✅ | ✅ |
+| [typescript](typescript/) *(canonical)* | yes | yes |
+| [javascript](javascript/) | yes | yes |
+| [python](python/) | yes | yes |
+| [ruby](ruby/) | yes | yes |
+| [php](php/) | yes | yes |
+| [perl](perl/) | yes | yes |
+| [go](go/) | yes | yes |
+| [rust](rust/) | yes | yes |
+| [java](java/) | yes | yes |
+| [csharp](csharp/) | yes | yes |
+| [zig](zig/) | yes | yes |
+| [kotlin](kotlin/) | yes | yes |
+| [scala](scala/) | yes | yes |
+| [clojure](clojure/) | yes | yes |
+| [swift](swift/) | yes | yes |
+| [dart](dart/) | yes | yes |
+| [elixir](elixir/) | yes | yes |
+| [cpp](cpp/) | yes | yes |
+| [c](c/) | yes | yes |
+| [lua](lua/) | yes | yes |
+| [ocaml](ocaml/) | yes | yes |
+| [haskell](haskell/) | yes | yes |
+| [lean](lean/) | yes | yes |
 
 Every port is tested three ways: the shared conformance spec, an
 integration run against mock servers, and — on demand and weekly — the
