@@ -622,15 +622,21 @@ void sek_build_end(void) { BUILDING = NULL; }
 
 /* The provider a definition exported, by the index it exported. Answers
  * NULL for an index no `define` of this construction handed out, which is
- * how a Definition that is not a provider plugin at all is caught. */
+ * how a Definition that is not a provider plugin at all is caught.
+ *
+ * THE RANGE IS CHECKED AS A DOUBLE, BEFORE THE CAST. An export is a plugin
+ * number, so a hand-written definition may put any double under the export
+ * key, and converting one that does not fit a size_t is undefined - on
+ * x86-64 gcc it wraps, and 1e30 came back as index 0, which is a live
+ * provider of this construction rather than the NULL this function
+ * promises. Written as `!(index < len)` rather than `index >= len` so that
+ * a NaN, which compares false with everything, is refused as well. */
 sek_provider *sek_build_at(double index) {
-  size_t at = (size_t)index;
-
-  if (NULL == BUILDING || !(0 <= index) || at >= BUILDING->len) {
+  if (NULL == BUILDING || !(0 <= index) || !(index < (double)BUILDING->len)) {
     return NULL;
   }
 
-  return BUILDING->built[at];
+  return BUILDING->built[(size_t)index];
 }
 
 static double keep(sek_provider *provider) {
@@ -638,7 +644,11 @@ static double keep(sek_provider *provider) {
     size_t cap = 0 == BUILDING->cap ? 8 : BUILDING->cap * 2;
     sek_provider **bigger =
         (sek_provider **)sek_alloc(BUILDING->pool, cap * sizeof(sek_provider *));
-    memcpy(bigger, BUILDING->built, BUILDING->len * sizeof(sek_provider *));
+    /* Guarded: the first growth copies from a NULL `built`, and memcpy's
+     * source is declared never-null even for a length of zero. */
+    if (0 < BUILDING->len) {
+      memcpy(bigger, BUILDING->built, BUILDING->len * sizeof(sek_provider *));
+    }
     BUILDING->built = bigger;
     BUILDING->cap = cap;
   }

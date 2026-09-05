@@ -142,9 +142,14 @@ cannot see. The conformance suite hands every plugin to every chain it
 builds, so it can never notice a kind that was not passed in, nor a
 consumer that passed the wrong ones — a CLI passing one plugin instead of
 ten leaves all fourteen groups green and fails nine integration checks.
-Sixteen tests pin the seam: the full set, that every kind builds, the
+Seventeen tests pin the seam: the full set, that every kind builds, the
 CLI's own call, the refusals, the numbered tags, the `sekreto_error`
-bridge, and the boundary itself.
+bridge, the boundary itself — and the one pair of opposite answers to a
+single call, `Integer.to_string(n, 16)`, which `src/json.ex` lowercases
+and `plugins/http.ex` must not. Flipping either passes all fourteen
+conformance groups and all nineteen integration checks, so a comment in
+each file was all that held them apart; now the whole control range and
+every byte are pinned.
 
 `make check-core` is the boundary, proved twice. `src/` is compiled ALONE,
 with only voxgig/plugin on the code path: a core module that so much as

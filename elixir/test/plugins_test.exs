@@ -637,6 +637,74 @@ moduleasplugin = fn ->
   )
 end
 
+# THE SAME CALL, THE OPPOSITE ANSWER, IN TWO DIRECTORIES.
+#
+# `Integer.to_string(n, 16)` is UPPERCASE in Elixir. src/json.ex has to
+# lowercase it, because every port emits `\u000b` and the writer is
+# contract; plugins/http.ex must not, because RFC 3986 and SigV4 specify
+# uppercase percent-escapes. `uriescape` has now moved twice - out of
+# src/sigv4.ex to plugins/, then again to plugins/http.ex - and each file
+# names the other in a comment, which is all that has ever held the two
+# apart.
+#
+# A comment is not a test. Flipping either one passes all fourteen
+# conformance groups AND all nineteen integration checks: the spec's
+# sigv4 cases carry the query `b=2&a=1`, where nothing needs escaping, and
+# no secret the CLI prints has ever held a control character. So the pair
+# is pinned here, both directions, exhaustively - the whole control range
+# for the writer and every byte for the escaper.
+#
+# The expected digits come from literal tables, never from
+# `Integer.to_string/2`: an assertion that reaches for the same call it is
+# checking would flip with it.
+hexcase = fn ->
+  lower = "0123456789abcdef"
+  upper = "0123456789ABCDEF"
+
+  digits = fn value, table ->
+    binary_part(table, div(value, 16), 1) <> binary_part(table, rem(value, 16), 1)
+  end
+
+  # The writer: five short escapes, LOWERCASE \u00xx below 0x20, and every
+  # other ASCII byte untouched - the whole range, so that "nothing else is
+  # escaped" is pinned too.
+  short = %{?" => "\\\"", ?\\ => "\\\\", ?\n => "\\n", ?\r => "\\r", ?\t => "\\t"}
+
+  for ch <- 0..0x7F do
+    want =
+      cond do
+        Map.has_key?(short, ch) -> Map.get(short, ch)
+        0x20 > ch -> "\\u00" <> digits.(ch, lower)
+        true -> <<ch>>
+      end
+
+    PluginsTest.same("\"" <> want <> "\"", Sekreto.Json.quotestr(<<ch>>), "json escape of byte #{ch}")
+  end
+
+  PluginsTest.same(
+    ~s|"\\u000b\\u001b\\u001f"|,
+    Sekreto.Json.quotestr(<<11, 27, 31>>),
+    "json escapes a run of control bytes"
+  )
+
+  # The escaper: UPPERCASE %XX for every byte that is not unreserved.
+  for byte <- 0..255 do
+    unreserved =
+      (?A <= byte and ?Z >= byte) or (?a <= byte and ?z >= byte) or
+        (?0 <= byte and ?9 >= byte) or byte in [?-, ?_, ?., ?~]
+
+    want = if unreserved, do: <<byte>>, else: "%" <> digits.(byte, upper)
+    PluginsTest.same(want, Sekreto.Plugins.Http.uriescape(<<byte>>), "uriescape of byte #{byte}")
+  end
+
+  PluginsTest.same("a%20b%2Fc~d", Sekreto.Plugins.Http.uriescape("a b/c~d"), "uriescape")
+
+  # ...and the pairing itself, on one byte, so a failure says which way
+  # round it went wrong.
+  PluginsTest.same(~s|"\\u001b"|, Sekreto.Json.quotestr(<<0x1B>>), "0x1B for the writer")
+  PluginsTest.same("%1B", Sekreto.Plugins.Http.uriescape(<<0x1B>>), "0x1B for the escaper")
+end
+
 # ------------------------------------------------------------- the spine
 
 state = {List.first(System.argv()), 0, 0}
@@ -657,6 +725,7 @@ state = PluginsTest.testcase("coreisreallycore", coreisreallycore, state)
 state = PluginsTest.testcase("onepluginreachesitself", onepluginreachesitself, state)
 state = PluginsTest.testcase("fullsetondemand", fullsetondemand, state)
 state = PluginsTest.testcase("moduleasplugin", moduleasplugin, state)
+state = PluginsTest.testcase("hexcase", hexcase, state)
 
 {_only, passcount, failcount} = state
 

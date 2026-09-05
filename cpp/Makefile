@@ -158,8 +158,15 @@ build/sekreto-plugintest: test/PluginTest.cpp build/libsekretoplugins.a build/li
 #    Matched as fixed strings on code lines, because `Socket.` as a regex
 #    matches `SocketException`.
 #
-# This target is the human-readable half; PluginTest.cpp pins the same
-# three so a regression fails the suite and not only this command.
+# This target is the human-readable half. PluginTest.cpp pins 2 and 3, and
+# the -I boundary that keeps plugins/ off the core's include path, so a
+# regression in any of those fails the suite on its own. THE LINK IS ONLY
+# HERE - nothing in the seam binary invokes a compiler - and it is the only
+# one of the three that catches a core reaching a plugin by HAND-DECLARING
+# its factory: `Definition hashicorp();` written out in a core source names
+# no plugin header, no plugins/ path and no platform symbol, so 2 and 3 both
+# pass it and this link is what fails. `make test` depends on this target
+# for exactly that reason.
 check-core: build/libsekreto.a build/libvoxgigplugin.a build/libsekretoplugins.a
 	@echo "== the core's sources name no plugin and no platform"
 	@if grep -n -F -e '#include "Httpjson.hpp"' -e '#include "Tls.hpp"' \

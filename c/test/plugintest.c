@@ -1042,8 +1042,10 @@ static const char *thecorearchiveneedsnoplugin(void) {
       "system",       "waitpid",      "pipe",        "dlopen",      "dlsym",
       "SSL_new",      "SSL_connect",  "d2i_X509",    "HMAC",        "SHA256",
       "sek_http",     "sek_fetch",    "sek_fetchjson", "sek_sha256", "sek_hmac_sha256",
-      "sek_sigv4",    "sek_uriescape", "sek_unbase64", "sek_runcmd", "sek_nowms",
-      "sek_tls_open", "sek_allplugins", "sek_plugin_hashicorp", "sek_plugin_doppler", NULL};
+      "sek_sha256hex", "sek_hex",     "sek_sigv4",   "sek_uriescape", "sek_unbase64",
+      "sek_runcmd",   "sek_nowms",    "sek_renewtime", "sek_awsnow",
+      "sek_tls_open", "sek_tls_read", "sek_tls_write", "sek_tls_close", "sek_tls_available",
+      "sek_allplugins", "sek_plugin_hashicorp", "sek_plugin_doppler", NULL};
 
   const char *core = needs("build/libsekreto.a");
   size_t index;
@@ -1076,12 +1078,20 @@ static const char *thecorearchiveneedsnoplugin(void) {
  * no digest and no child process. */
 static const char *onepluginneedsonlyitself(void) {
   const char *hashicorp = needs("build/pobj/hashicorp.o");
+  /* EVERY ENTRY POINT OF THE OBJECT, not one name per object. An object is
+   * pulled into a link by whichever of its symbols is referenced, so
+   * forbidding `sek_sha256` alone let `sek_sha256hex` - the spelling a
+   * store would actually reach for - bring SHA-256 in with this case
+   * green. `make check-core` caught it, because it reads the linked
+   * binary; this reads an object's undefined list, so the list has to be
+   * complete. */
   static const char *const OTHERS[] = {
       "sek_plugin_boru",     "sek_plugin_awssecrets",   "sek_plugin_awsparams",
       "sek_plugin_doppler",  "sek_plugin_gcpsecrets",   "sek_plugin_azuresecrets",
       "sek_plugin_onepassword", "sek_plugin_infisical", "sek_plugin_secretspec",
       "sek_sigv4",           "sek_sha256",              "sek_hmac_sha256",
-      "sek_runcmd",          NULL};
+      "sek_sha256hex",       "sek_hex",                 "sek_runcmd",
+      NULL};
   size_t index;
 
   WHY = truth(wants(hashicorp, "sek_fetchjson"),

@@ -93,7 +93,10 @@ std::string envvar(const std::string& name);
 /// Strip one trailing slash - a store's base address, a secret directory.
 std::string trimslash(const std::string& text);
 
-/// Strip ASCII whitespace from both ends.
+/// Strip space, tab, CR and LF from both ends - and NOT `\f` or `\v`. The
+/// `.env` parser needs those two as well and keeps its own wider trim
+/// (`trimdotenv`, in Sekreto.cpp), because the spec pins what that produces;
+/// reaching for this one there instead is a silent behaviour change.
 std::string trimtext(const std::string& text);
 
 /// Strip one trailing newline, which is a file's or a CLI's line ending

@@ -81,7 +81,9 @@ defmodule Sekreto.Plugins.Http do
         # signer, and then came here so that a kind which signs nothing
         # does not reach a hash function to escape a query parameter.
         # src/json.ex stayed in the core. Neither file is beside the
-        # other any more, so each names the other outright.
+        # other any more, so each names the other outright, and
+        # `hexcase` in test/plugins_test.exs pins the pair: no
+        # conformance group and no integration check can see a flip.
         "%" <> String.pad_leading(Integer.to_string(ch, 16), 2, "0")
       end
     end)

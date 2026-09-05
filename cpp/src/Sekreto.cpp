@@ -219,14 +219,14 @@ Ordered parsedotenv(const std::string& text) {
       rawline = rawline.substr(0, rawline.size() - 1);
     }
 
-    std::string line = trimtext(rawline);
+    std::string line = trimdotenv(rawline);
 
     // A `#` INSIDE a value is not a comment; only a line that opens with
     // one is.
     if (!line.empty() && '#' != line[0]) {
       std::string body = line;
       if (0 == body.compare(0, 7, "export ")) {
-        body = trimtext(body.substr(7));
+        body = trimdotenv(body.substr(7));
       }
 
       size_t eq = body.find('=');

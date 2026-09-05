@@ -53,18 +53,35 @@ end
 # A plugin needs a socket, a signature or a child process. These are the
 # calls that do each of those on this runtime, and no core module may
 # carry one.
+#
+# EVERY SPELLING OTP HAS, not the ones the plugins happen to use. Listing
+# only the latter is how swift's core came to hold a real POSIX socket
+# while its own check printed "reaches no plugin": a boundary named after
+# the implementation catches the implementation and nothing else. On this
+# runtime `gen_tcp` and `inet` are the classic pair, `socket` is the OTP
+# 22 API underneath them, `gen_udp` and `gen_sctp` are sockets too, and
+# `prim_inet` is the driver below all of them - and each is a complete
+# route to the network on its own. `erl_ddll` and `erlang:load_nif` are
+# the other kind of route: native code that can then do anything at all.
 forbidden = fn {mod, fun, _arity} ->
   cond do
     :crypto == mod -> "crypto"
     :ssl == mod -> "tls"
     :gen_tcp == mod -> "a socket"
+    :gen_udp == mod -> "a socket"
+    :gen_sctp == mod -> "a socket"
+    :socket == mod -> "a socket"
     :inet == mod -> "a socket"
+    :prim_inet == mod -> "a socket"
     :public_key == mod -> "trust roots"
     :httpc == mod -> "an http client"
     :os == mod and :cmd == fun -> "a child process"
     Port == mod -> "a child process"
     System == mod and fun in [:cmd, :find_executable, :shell] -> "a child process"
     :erlang == mod and fun in [:open_port, :port_command] -> "a child process"
+    :erlang == mod and fun in [:md5, :md5_init, :md5_update, :md5_final] -> "a hash function"
+    :erlang == mod and :load_nif == fun -> "native code"
+    :erl_ddll == mod -> "native code"
     true -> nil
   end
 end

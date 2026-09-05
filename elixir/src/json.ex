@@ -159,7 +159,9 @@ defmodule Sekreto.Json do
         # percent-escapes are uppercase by specification. Two sites, one
         # call, opposite answers -- and since the split they are in two
         # directories, so each file names the other rather than relying
-        # on proximity.
+        # on proximity. `hexcase` in test/plugins_test.exs pins both
+        # directions, because neither suite can see a flip: conformance
+        # and integration both stay green either way.
         other when other < 0x20 ->
           "\\u" <>
             String.pad_leading(String.downcase(Integer.to_string(other, 16), :ascii), 4, "0")
