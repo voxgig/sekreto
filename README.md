@@ -103,10 +103,10 @@ clients are loaded differs.
 | [ruby](ruby/) | ✅ | `ruby/lib/voxgig_sekreto/plugins/` | a checkout, found or fetched by `make deps` |
 | [php](php/) | ✅ | `php/plugins/` | a checkout, found or fetched by `make deps` |
 | [perl](perl/) | ✅ | `perl/plugins/` | a checkout, found or fetched by `make deps` |
-| [rust](rust/) | switch — pending | | exists |
-| [java](java/) | switch — pending | | exists |
-| [csharp](csharp/) | switch — pending | | exists |
-| [kotlin](kotlin/) | switch — pending | | exists |
+| [rust](rust/) | ✅ | `rust/plugins/` (a crate each) | a checkout, linked by `make deps` |
+| [java](java/) | ✅ | `java/plugins/` | a checkout, found or fetched by `make deps` |
+| [csharp](csharp/) | ✅ | `csharp/plugins/` (its own assembly) | a checkout, found or fetched by `make deps` |
+| [kotlin](kotlin/) | ✅ | `kotlin/plugins/` | a checkout, found or fetched by `make deps` |
 | [scala](scala/) | switch — pending | | exists |
 | [clojure](clojure/) | switch — pending | | exists |
 | [swift](swift/) | switch — pending | | exists |

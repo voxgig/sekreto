@@ -290,11 +290,32 @@ def _aslist(value):
 PORTS = {
     'go':         dict(lib=[('go/go.mod', read_go_mod)],
                        harness=['go/testutil/go.mod']),
-    'rust':       dict(lib=[('rust/Cargo.toml', read_cargo)],
+    # ELEVEN MANIFESTS, NOT ONE. Adopting the plugin architecture gave rust
+    # a crate per plugin, and a consumer takes those crates DIRECTLY -- so
+    # each is a manifest a consumer resolves, and reading only the core's
+    # would leave ten of them unchecked.
+    'rust':       dict(lib=[('rust/Cargo.toml', read_cargo),
+                            ('rust/plugins/all/Cargo.toml', read_cargo),
+                            ('rust/plugins/aws/Cargo.toml', read_cargo),
+                            ('rust/plugins/azuresecrets/Cargo.toml', read_cargo),
+                            ('rust/plugins/boru/Cargo.toml', read_cargo),
+                            ('rust/plugins/doppler/Cargo.toml', read_cargo),
+                            ('rust/plugins/gcpsecrets/Cargo.toml', read_cargo),
+                            ('rust/plugins/hashicorp/Cargo.toml', read_cargo),
+                            ('rust/plugins/httpjson/Cargo.toml', read_cargo),
+                            ('rust/plugins/infisical/Cargo.toml', read_cargo),
+                            ('rust/plugins/onepassword/Cargo.toml', read_cargo),
+                            ('rust/plugins/secretspec/Cargo.toml', read_cargo)],
                        harness=['rust/corpus/Cargo.toml']),
+    # The PLUGINS assembly ships and so is checked. csharp/trim is not
+    # shipped -- it is the consumer check-trim publishes to prove a
+    # consumer naming one plugin carries one plugin -- so it is named as a
+    # harness rather than left silently unlisted.
     'csharp':     dict(lib=[('csharp/src/Sekreto.csproj', read_csproj),
+                            ('csharp/plugins/SekretoPlugins.csproj', read_csproj),
                             ('csharp/cli/SekretoCli.csproj', read_csproj)],
-                       harness=['csharp/test/SekretoTest.csproj']),
+                       harness=['csharp/test/SekretoTest.csproj',
+                                'csharp/trim/TrimConsumer.csproj']),
     'clojure':    dict(lib=[('clojure/deps.edn', read_deps_edn)]),
     'dart':       dict(lib=[('dart/pubspec.yaml', read_pubspec)]),
     'typescript': dict(lib=[('typescript/package.json', read_package_json)]),
@@ -360,10 +381,13 @@ PORTS = {
 SOURCES = {
     'go':         dict(globs=['go/**/*.go'], skip=['go/testutil/'],
                        pattern=SOURCE),
-    'rust':       dict(globs=['rust/src/**/*.rs'], skip=[], pattern=SOURCE),
-    'csharp':     dict(globs=['csharp/src/**/*.cs', 'csharp/cli/**/*.cs'],
+    'rust':       dict(globs=['rust/src/**/*.rs', 'rust/plugins/**/*.rs'],
                        skip=[], pattern=SOURCE),
-    'java':       dict(globs=['java/src/**/*.java'], skip=[], pattern=SOURCE),
+    'csharp':     dict(globs=['csharp/src/**/*.cs', 'csharp/cli/**/*.cs',
+                              'csharp/plugins/**/*.cs'],
+                       skip=[], pattern=SOURCE),
+    'java':       dict(globs=['java/src/**/*.java', 'java/plugins/**/*.java'],
+                       skip=[], pattern=SOURCE),
     'perl':       dict(globs=['perl/lib/**/*.pm', 'perl/plugins/**/*.pm'],
                        skip=[], pattern=SOURCE),
     'php':        dict(globs=['php/src/**/*.php', 'php/plugins/**/*.php'],
@@ -377,7 +401,8 @@ SOURCES = {
     # rust/corpus are by living outside the globs.
     'zig':        dict(globs=['zig/src/**/*.zig', 'zig/cli/**/*.zig'],
                        skip=[], pattern=SOURCE),
-    'kotlin':     dict(globs=['kotlin/src/**/*.kt', 'kotlin/cli/**/*.kt'],
+    'kotlin':     dict(globs=['kotlin/src/**/*.kt', 'kotlin/cli/**/*.kt',
+                              'kotlin/plugins/**/*.kt'],
                        skip=[], pattern=SOURCE),
     'scala':      dict(globs=['scala/src/**/*.scala', 'scala/cli/**/*.scala'],
                        skip=[], pattern=SOURCE),
