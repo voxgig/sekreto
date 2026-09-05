@@ -33,12 +33,14 @@ so those twenty-three stay one.
    which itself takes nothing: a port that has adopted the plugin
    architecture (rule 4) depends on plugin's port of its language, the
    way that language takes a dependency — npm for typescript, the module
-   proxy for go, git for python until it is on PyPI (and, for a python
-   checkout that has not pip-installed it, `make deps` fetches a shallow
-   clone the tests and CLI find), and for zig, which has no registry, a
-   checkout named on the command line as the module `plugin` — found
-   where omni is found, or fetched by `make deps`, and needed by the
-   library itself, not only the tests. That is the whole list. voxgig/omni is not on it: it drives the tests and no shipped
+   proxy for go, git for python until it is on PyPI. The other nineteen
+   take a CHECKOUT, found where omni is found or fetched by `make deps`,
+   because their language has no registry entry to resolve: zig names it
+   on the command line as the module `plugin`, c, cpp, ocaml, haskell and
+   lean compile it into their own `build/`, and the rest put it on a
+   path. Needed by the library itself, not only the tests — which is why
+   CI checks it out beside omni and sets `PLUGIN_HOME`, rather than
+   leaving each port to clone it. That is the whole list. voxgig/omni is not on it: it drives the tests and no shipped
    manifest may name it (`tools/omni_isolation.py` proves that).
 
    The exception is **cryptographic transport**, and it is a principle
@@ -100,13 +102,25 @@ so those twenty-three stay one.
      raised in `define` as `plugin_define_failed`. `providerplugin` puts
      the code on; `Sekreto` takes it off. Do not catch and rewrap
      anywhere else.
-   - **A port adopts the architecture only once voxgig/plugin has its
-     language.** Until then it keeps the `kind` switch with the same
-     fourteen kinds — javascript, ruby, php, perl, rust, java, csharp
-     and kotlin can move now; zig has moved (plugin's P6 gave it a
-     port, and that port now builds on the toolchain this one uses).
-     The propagation order, and what each port owes, is
+   - **All twenty-three ports have adopted it.** There is no `kind`
+     switch left anywhere, and a new port takes the architecture from
+     its first commit rather than adding a switch to convert later.
+     What each port owes, and how each language draws the boundary, is
      [`docs/design/plugin-providers.md`](./docs/design/plugin-providers.md).
+   - **A NAME LIST IS NOT A BOUNDARY CHECK.** Every port proves its core
+     reaches no plugin, and the proofs that failed all failed the same
+     way: they enumerated what was forbidden. On Linux swift's core
+     opened a socket and spawned a process through Glibc, naming nothing
+     on the list; C's did the same through a bare declaration; elixir's
+     reached four socket modules OTP spells differently; haskell's ran a
+     child through `execl`, a family the list stopped one short of; and
+     lean's spawned one through `lean_io_process_spawn`, which is Lean's
+     OWN runtime binding and so slipped past a check that skipped
+     `lean_*`. Each was found by an audit, not by the suite. Prove it
+     from the built artifact, match EXACT symbol names rather than
+     substrings, prefer an allowlist to a denylist, and give the check a
+     CONTROL that fails it when it read nothing — an empty intersection
+     is not a pass.
    - **In zig the core cannot reach the plugins even by mistake.** A
      module's imports are confined to its root's directory; `sekreto` is
      rooted at `zig/src/sekreto.zig`, `zig/plugins/` is outside it, and

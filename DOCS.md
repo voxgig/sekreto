@@ -253,18 +253,18 @@ no socket, no TLS, no crypto, and no child process. Every other kind is a
 definition in the port's `plugins/` folder, which the calling project
 hands to `Sekreto` at construction.
 
-| plugin | kinds | needs | typescript | go | python | zig |
-|---|---|---|---|---|---|---|
-| `hashicorp` | `hashicorp` | HTTPS, the filesystem | `@voxgig/sekreto/plugins/hashicorp` → `hashicorp` | `plugins/hashicorp` → `hashicorp.Plugin` | `voxgig_sekreto.plugins.hashicorp` → `hashicorp` | `plugins/hashicorp.zig` → `hashicorp` |
-| `boru` | `boru` | child process, or HTTPS | `…/plugins/boru` → `boru` | `plugins/boru` → `boru.Plugin` | `…plugins.boru` → `boru` | `plugins/boru.zig` → `boru` |
-| `aws` | `awssecrets`, `awsparams` | HTTPS, HMAC-SHA256 | `…/plugins/aws` → `awssecrets`, `awsparams` | `plugins/aws` → `aws.Secrets`, `aws.Params` | `…plugins.aws` → `awssecrets`, `awsparams` | `plugins/aws.zig` → `awssecrets`, `awsparams` |
-| `gcpsecrets` | `gcpsecrets` | HTTPS | `…/plugins/gcpsecrets` → `gcpsecrets` | `plugins/gcpsecrets` → `gcpsecrets.Plugin` | `…plugins.gcpsecrets` → `gcpsecrets` | `plugins/gcpsecrets.zig` → `gcpsecrets` |
-| `azuresecrets` | `azuresecrets` | HTTPS | `…/plugins/azuresecrets` → `azuresecrets` | `plugins/azuresecrets` → `azuresecrets.Plugin` | `…plugins.azuresecrets` → `azuresecrets` | `plugins/azuresecrets.zig` → `azuresecrets` |
-| `onepassword` | `onepassword` | HTTPS | `…/plugins/onepassword` → `onepassword` | `plugins/onepassword` → `onepassword.Plugin` | `…plugins.onepassword` → `onepassword` | `plugins/onepassword.zig` → `onepassword` |
-| `doppler` | `doppler` | HTTPS | `…/plugins/doppler` → `doppler` | `plugins/doppler` → `doppler.Plugin` | `…plugins.doppler` → `doppler` | `plugins/doppler.zig` → `doppler` |
-| `infisical` | `infisical` | HTTPS | `…/plugins/infisical` → `infisical` | `plugins/infisical` → `infisical.Plugin` | `…plugins.infisical` → `infisical` | `plugins/infisical.zig` → `infisical` |
-| `secretspec` | `secretspec` | child process | `…/plugins/secretspec` → `secretspec` | `plugins/secretspec` → `secretspec.Plugin` | `…plugins.secretspec` → `secretspec` | `plugins/secretspec.zig` → `secretspec` |
-| *the full set* | all ten | everything | `@voxgig/sekreto/plugins` → `allplugins` | `plugins` → `plugins.All()` | `voxgig_sekreto.plugins` → `ALL` | `plugins/all.zig` → `ALL` |
+| plugin | kinds | needs | typescript *(canonical)* |
+|---|---|---|---|
+| `hashicorp` | `hashicorp` | HTTPS, the filesystem | `@voxgig/sekreto/plugins/hashicorp` → `hashicorp` |
+| `boru` | `boru` | child process, or HTTPS | `…/plugins/boru` → `boru` |
+| `aws` | `awssecrets`, `awsparams` | HTTPS, HMAC-SHA256 | `…/plugins/aws` → `awssecrets`, `awsparams` |
+| `gcpsecrets` | `gcpsecrets` | HTTPS | `…/plugins/gcpsecrets` → `gcpsecrets` |
+| `azuresecrets` | `azuresecrets` | HTTPS | `…/plugins/azuresecrets` → `azuresecrets` |
+| `onepassword` | `onepassword` | HTTPS | `…/plugins/onepassword` → `onepassword` |
+| `doppler` | `doppler` | HTTPS | `…/plugins/doppler` → `doppler` |
+| `infisical` | `infisical` | HTTPS | `…/plugins/infisical` → `infisical` |
+| `secretspec` | `secretspec` | child process | `…/plugins/secretspec` → `secretspec` |
+| *the full set* | all ten | everything | `@voxgig/sekreto/plugins` → `allplugins` |
 
 The full set is for the CLI, the conformance suite, and an app whose
 chain is decided at run time. Reaching one plugin through it reaches
@@ -351,7 +351,25 @@ byte for byte, because the spec pins those messages. Any other error a
 | go | `go/plugins/<kind>/` | `github.com/voxgig/plugin/go` (module proxy) | `import ".../go/plugins/hashicorp"` → `hashicorp.Plugin` | `import ".../go/plugins"` → `plugins.All()` |
 | python | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git, until it is on PyPI) | `from voxgig_sekreto.plugins.hashicorp import hashicorp` | `from voxgig_sekreto.plugins import ALL` (built on demand) |
 | zig | `zig/plugins/` | plugin's zig port, a checkout named on the command line as the module `plugin` | `-Msekretoplugins=plugins/hashicorp.zig` → `plugins.hashicorp` | `-Msekretoplugins=plugins/all.zig` → `plugins.ALL` |
-| the other eight ports | — | — | a `kind` switch over every kind, until voxgig/plugin has their language | |
+| javascript | `javascript/plugins/` | `@voxgig/plugin-js` (npm) | `require('@voxgig/sekreto/plugins/hashicorp')` | `require('@voxgig/sekreto/plugins')` → `allplugins` |
+| ruby | `ruby/lib/voxgig_sekreto/plugins/` | a checkout | `require 'voxgig_sekreto/plugins/hashicorp'` | `require 'voxgig_sekreto/plugins'` → `ALL` |
+| php | `php/plugins/` | a checkout | `Hashicorp::plugin()` | `Plugins::all()` |
+| perl | `perl/plugins/` | a checkout | `VoxgigSekreto::Plugins::Hashicorp::plugin()` | `VoxgigSekreto::Plugins::all()` |
+| rust | `rust/plugins/` | a checkout, a crate per plugin | `voxgig_sekreto_hashicorp::plugin()` | `voxgig_sekreto_plugins::all()` |
+| java | `java/plugins/` | a checkout | `Hashicorp.PLUGIN` | `SekretoPlugins.all()` |
+| csharp | `csharp/plugins/` | a checkout, its own assembly | `Hashicorp.Plugin` | `SekretoPlugins.All()` |
+| kotlin | `kotlin/plugins/` | a checkout | `Hashicorp.plugin` | `allPlugins()` |
+| scala | `scala/plugins/` | a checkout | `Hashicorp.hashicorp` | `Plugins.ALL` |
+| clojure | `clojure/plugins/` | a checkout; the Makefile writes the classpaths | `voxgig.sekreto.plugins.hashicorp/hashicorp` | `voxgig.sekreto.plugins/ALL` |
+| swift | `swift/plugins/` | a checkout, its own module | `import SekretoPlugins` → `hashicorp` | `allplugins` |
+| dart | `dart/plugins/` | a checkout | `import '../plugins/hashicorp.dart'` | `import '../plugins/plugins.dart'` → `allplugins` |
+| elixir | `elixir/plugins/` | a checkout | `Sekreto.Plugins.Hashicorp.hashicorp()` | `Sekreto.Plugins.all()` |
+| cpp | `cpp/plugins/` | a checkout, compiled into `build/`, its own archive | `sekreto::hashicorp()` | `sekreto::allplugins()` |
+| c | `c/plugins/` | a checkout, compiled into `build/`, one object per kind | `sek_hashicorp_plugin()` | `sek_allplugins(&out)` |
+| lua | `lua/src/sekreto/plugins/` | a checkout | `require('sekreto.plugins.hashicorp').hashicorp` | `require('sekreto.plugins').ALL` |
+| ocaml | `ocaml/plugins/` | a checkout, compiled into `build/` | `Hashicorp.hashicorp` | `Allplugins.all ()` |
+| haskell | `haskell/plugins/` | a checkout, compiled into `build/` | `import Hashicorp` → `hashicorp` | `import AllPlugins` → `allplugins` |
+| lean | `lean/plugins/` as `SekretoPlugins.*` | a checkout, compiled into `build/` | `import SekretoPlugins.Hashicorp` | `import SekretoPlugins` → `allplugins` |
 
 In Go the split is a *linking* boundary: a plugin package not imported
 is not in the binary, and the core package imports no `net/http`, no
