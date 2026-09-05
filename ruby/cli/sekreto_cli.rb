@@ -21,7 +21,17 @@ require 'json'
 require 'net/http'
 require 'uri'
 
+# voxgig_plugin: installed, or a sibling checkout (see test/pluginhome.rb).
+require_relative '../test/pluginhome'
+
+pluginpath
+
 require_relative '../lib/voxgig_sekreto'
+
+# THE FULL SET, passed to Sekreto. The CLI is asked for any provider kind
+# on the command line, so it is the one consumer that legitimately wants
+# all ten plugins; an app passes the one or two it configures.
+require_relative '../lib/voxgig_sekreto/plugins'
 
 LANG = 'ruby'
 
@@ -169,7 +179,8 @@ def main
   storeflag = args.index('--store')
   store = storeflag.nil? ? '' : args[storeflag + 1]
 
-  secrets = VoxgigSekreto::Sekreto.new('providers' => chainfor(source))
+  secrets = VoxgigSekreto::Sekreto.new('plugins' => VoxgigSekreto::Plugins::ALL,
+                                       'providers' => chainfor(source))
 
   begin
     token = store.empty? ? secrets.get('api.token') : secrets.getfrom(store, 'api.token')

@@ -9,13 +9,35 @@
  * line of its own code.
  *
  * A port of typescript/src/Sekreto.ts, which is canonical.
+ *
+ * THE CORE REQUIRES NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR
+ * SIGNS A REQUEST. The four built-in kinds - env, memory, dotenv, file -
+ * read at most a local file; every other kind is a voxgig/plugin
+ * definition in its own file under plugins/ and its own namespace
+ * (`Voxgig\Sekreto\Plugins`), and a chain may name one only if the calling
+ * project handed it in through the `plugins` option:
+ *
+ *     require_once __DIR__ . '/src/Sekreto.php';
+ *     require_once __DIR__ . '/plugins/hashicorp.php';
+ *
+ *     use Voxgig\Sekreto\Sekreto;
+ *     use function Voxgig\Sekreto\Plugins\hashicorp;
+ *
+ *     $secrets = new Sekreto([
+ *         'plugins' => [hashicorp()],
+ *         'providers' => [
+ *             ['kind' => 'env'],
+ *             ['kind' => 'hashicorp', 'addr' => $addr, 'token' => $token],
+ *         ],
+ *     ]);
+ *
+ * or, for every kind at once, `allplugins()` from plugins/plugins.php. See
+ * docs/design/plugin-providers.md.
  */
 
 declare(strict_types=1);
 
 namespace Voxgig\Sekreto;
-
-require_once __DIR__ . '/Providers.php';
 
 /**
  * Anything sekreto refuses to do: a bad name, a missing secret, a provider
@@ -24,6 +46,24 @@ require_once __DIR__ . '/Providers.php';
 class SekretoError extends \RuntimeException
 {
 }
+
+// voxgig/plugin first: the catalog, the host and the ref helpers below are
+// its. `Plugin.php` finds the checkout, and is the only file in this port
+// that looks for one.
+require_once __DIR__ . '/Plugin.php';
+requireplugin();
+
+require_once __DIR__ . '/Addr.php';
+require_once __DIR__ . '/Providers.php';
+
+use Voxgig\Plugin\Catalog;
+use Voxgig\Plugin\Host;
+use Voxgig\Plugin\PluginError;
+
+use function Voxgig\Plugin\check_tag;
+use function Voxgig\Plugin\format_ref;
+use function Voxgig\Plugin\make_catalog;
+use function Voxgig\Plugin\make_host;
 
 final class Name
 {
@@ -238,21 +278,108 @@ function redact($text, $values): string
 }
 
 /**
- * The store name a provider answers to when its spec does not say.
+ * The store name a live provider answers to.
  *
  * `describe()` opens with the provider's kind - `hashicorp:...`,
  * `dotenv:...`, plain `env` - so the kind is the natural default, and a
- * custom provider gets a sensible name without implementing anything extra.
- *
- * @param array<string, mixed>|null $spec
+ * custom provider gets a sensible name without implementing anything
+ * extra. A spec'd provider's store is its `name` or its `kind`, decided
+ * before the provider exists.
  */
-function storename(Provider $provider, ?array $spec = null): string
+function storename(Provider $provider): string
 {
-    if (null !== $spec && !empty($spec['name'])) {
-        return (string) $spec['name'];
+    return explode(':', $provider->describe())[0];
+}
+
+/**
+ * A plugin entry, checked to be a definition before the catalog sees it.
+ *
+ * Every plugin file holds a FUNCTION named after the definition it builds
+ * - `hashicorp()` - because a definition holds closures and PHP has no
+ * constant that can. Passing the function instead of calling it is
+ * therefore the mistake this port makes easy, and a callable in the
+ * catalog would fail deep inside voxgig/plugin with a message about a
+ * definition name. Refused here instead, naming the call that was meant.
+ *
+ * @param mixed $plugin
+ * @return array<string, mixed>
+ */
+function definitionof($plugin): array
+{
+    if (is_callable($plugin) && !is_array($plugin)) {
+        $name = 'the plugin function';
+
+        try {
+            $fn = \Closure::fromCallable($plugin);
+            $name = 'the function ' . (new \ReflectionFunction($fn))->getName();
+        } catch (\Throwable $ignored) {
+        }
+
+        throw new SekretoError(
+            'sekreto: not a plugin definition: ' . $name
+            . ' - call it for the definition it holds'
+        );
     }
 
-    return explode(':', $provider->describe())[0];
+    if (!is_array($plugin) || !isset($plugin['name']) || !is_string($plugin['name'])) {
+        throw new SekretoError('sekreto: not a plugin definition: ' . describevalue($plugin));
+    }
+
+    return $plugin;
+}
+
+/** @param mixed $value */
+function describevalue($value): string
+{
+    if (is_object($value)) {
+        return 'an instance of ' . get_class($value);
+    }
+    if (is_array($value)) {
+        return 'an array with no name';
+    }
+    if (null === $value) {
+        return 'null';
+    }
+
+    return is_scalar($value) ? var_export($value, true) : gettype($value);
+}
+
+/**
+ * The message for a kind the catalog does not hold.
+ *
+ * A kind sekreto has never heard of is a typo; a kind that exists as a
+ * plugin but was not passed in is the split working as designed and
+ * telling you what to pass. Collapsing the two was the first thing that
+ * made the split confusing to use.
+ *
+ * @param mixed $kind
+ */
+function unknownkind($kind, Catalog $catalog): string
+{
+    $text = 'sekreto: unknown provider kind: ' . (null === $kind ? '' : (string) $kind)
+        . ' (available: ' . implode(', ', $catalog->names()) . ')';
+
+    if (is_string($kind) && in_array($kind, PLUGIN_KINDS, true)) {
+        $text .= ' - ' . $kind
+            . ' is a sekreto plugin, not built in: pass it in the plugins option';
+    }
+
+    return $text;
+}
+
+/**
+ * A SekretoError that crossed the plugin boundary comes back out as
+ * itself, byte for byte. Anything else is not sekreto's to rewrite.
+ */
+function unwrap(\Throwable $err): \Throwable
+{
+    if ($err instanceof PluginError && ERROR_CODE === $err->code
+        && is_string($err->details['cause'] ?? null)
+    ) {
+        return new SekretoError($err->details['cause']);
+    }
+
+    return $err;
 }
 
 /**
@@ -279,22 +406,101 @@ class Sekreto
      */
     private array $seen = [];
 
+    /**
+     * The definitions this Sekreto can build. Read it for introspection:
+     * `names()` is every kind this chain could have named.
+     */
+    public Catalog $catalog;
+
+    /**
+     * The voxgig/plugin host every spec'd provider is an instance of. Read
+     * it for introspection - `list()` names each store's ref and status -
+     * and nothing on it advances the chain.
+     */
+    public Host $host;
+
     /** @param array<string, mixed>|null $options */
     public function __construct(?array $options = null)
     {
         $opts = $options ?? [];
 
+        // Built-ins first, then the plugins, into one catalog: a plugin
+        // that names a built-in kind replaces it, which is how a host
+        // substitutes an implementation and never an accident, because the
+        // four names are documented.
+        $defs = builtins();
+        foreach ($opts['plugins'] ?? [] as $plugin) {
+            $defs[] = definitionof($plugin);
+        }
+
+        $this->catalog = make_catalog($defs);
+        $this->host = make_host(['catalog' => $this->catalog]);
+
+        // (store, provider) pairs, in chain order. A provider handed in
+        // live is backed by no instance; a spec'd one is an instance of its
+        // kind on the host.
         foreach ($opts['providers'] ?? [] as $entry) {
             if ($entry instanceof Provider) {
                 $this->entries[] = [storename($entry), $entry];
                 continue;
             }
 
-            $provider = makeprovider($entry);
-            $this->entries[] = [storename($provider, $entry), $provider];
+            $this->entries[] = $this->declare(is_array($entry) ? $entry : []);
         }
 
         $this->docache = false !== ($opts['cache'] ?? true);
+    }
+
+    /**
+     * One chain entry, as a plugin instance.
+     *
+     * The instance is `kind` for a store named after its kind and
+     * `kind$store` otherwise - `hashicorp$prod` - so `host->list()` reads
+     * like the chain. A store name that is already taken gets a numbered
+     * tag from the host instead, because two providers MAY share a store
+     * name (a directed read walks both) and an instance ref may not.
+     *
+     * @param array<string, mixed> $spec
+     * @return array{0: string, 1: Provider}
+     */
+    private function declare(array $spec): array
+    {
+        $kind = $spec['kind'] ?? null;
+
+        if (!is_string($kind) || !$this->catalog->has($kind)) {
+            throw new SekretoError(unknownkind($kind, $this->catalog));
+        }
+
+        $store = empty($spec['name']) ? $kind : $spec['name'];
+
+        if (!check_tag($store)) {
+            throw new SekretoError(
+                'sekreto: invalid store name: ' . (is_string($store) ? $store : gettype($store))
+            );
+        }
+
+        $ref = $store === $kind ? $kind : format_ref($kind, $store);
+        $declare = ['options' => $spec];
+
+        // `tag => '?'` is voxgig/plugin's explicit auto-tagging: the lowest
+        // unused integer tag for this kind. The STORE name is untouched.
+        if (null !== $this->host->instance($ref)) {
+            $ref = $kind;
+            $declare['tag'] = '?';
+        }
+
+        try {
+            // `load` runs the definition's `define`, which builds the
+            // provider from the spec; `activate` takes the instance live.
+            // Nothing is contacted by either: a provider opens nothing
+            // until its first lookup.
+            $entry = $this->host->load($ref, $declare);
+            $this->host->activate($entry->ref);
+        } catch (\Throwable $err) {
+            throw unwrap($err);
+        }
+
+        return [$store, $this->host->exports($entry->ref . '/' . PROVIDER_EXPORT)];
     }
 
     /** The secret, or a SekretoError if no provider has it. */
@@ -466,6 +672,20 @@ class Sekreto
     /** Drop cached values, so the next `get` asks the providers again. */
     public function refresh(): void
     {
+        $this->cache = [];
+    }
+
+    /**
+     * Tear the chain down: every plugin instance is deactivated and
+     * unloaded, in reverse, releasing whatever a provider acquired at
+     * activation. Afterwards there is nothing to read from - `get` reports
+     * every secret unknown - and the cache is dropped, though `redact`
+     * still knows every value that was ever resolved.
+     */
+    public function close(): void
+    {
+        $this->host->close();
+        $this->entries = [];
         $this->cache = [];
     }
 }

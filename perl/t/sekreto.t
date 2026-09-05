@@ -12,7 +12,30 @@ use File::Spec;
 use JSON::PP ();
 use Test::More tests => 14;
 
-use Voxgig::Sekreto qw(awsparam envkey flatname parsedotenv redact sigv4 validname vaultref);
+# voxgig/plugin: installed, or a sibling checkout (see t/PluginHome.pm). It
+# has to be on @INC before Voxgig::Sekreto is compiled, because the core
+# builds its provider catalog on it.
+use PluginHome ();
+
+BEGIN { PluginHome::pluginpath() }
+
+use Voxgig::Sekreto qw(awsparam envkey flatname parsedotenv redact validname vaultref);
+
+# THIS SUITE LOADS EVERY PLUGIN, deliberately. The spec is the contract for
+# the whole library and exercises all fourteen provider kinds, so it hands
+# the full set to every Sekreto it builds. That is the split working, not a
+# leak of it: a CONSUMER passes the kinds it configures and loads nothing
+# else, while the suite that proves all fourteen behave has to have all
+# fourteen. What this suite therefore CANNOT see - that the core reaches no
+# plugin, that an unpassed kind is refused, that the full set holds every
+# kind - is t/plugins.t's job.
+#
+# `sigv4` lives with the aws plugin - it is the crypto edge, and only the
+# two aws kinds use it (docs/design/plugin-providers.md).
+use Voxgig::Sekreto::Plugins qw(allplugins);
+use Voxgig::Sekreto::Plugins::Aws qw(sigv4);
+
+my $ALL = allplugins();
 
 # Find the shared spec directory by walking up from this file.
 sub specfile {
@@ -54,7 +77,8 @@ use Voxgig::Omni::Runner qw(makeRunner);
 # Build a Sekreto from the spec's declarative chain description.
 sub chainof {
     my ($spec) = @_;
-    return Voxgig::Sekreto->new( { providers => $spec->{chain}, cache => 0 } );
+    return Voxgig::Sekreto->new(
+        { plugins => $ALL, providers => $spec->{chain}, cache => 0 } );
 }
 
 my $R = makeRunner( specfile('sekreto.json') )->('sekreto');

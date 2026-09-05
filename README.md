@@ -99,10 +99,10 @@ clients are loaded differs.
 | [typescript](typescript/) *(canonical)* | ✅ | `typescript/plugins/` | `@voxgig/plugin` |
 | [go](go/) | ✅ | `go/plugins/<kind>/` | `github.com/voxgig/plugin/go` |
 | [python](python/) | ✅ | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git) |
-| [javascript](javascript/) | switch — pending | | exists |
-| [ruby](ruby/) | switch — pending | | exists |
-| [php](php/) | switch — pending | | exists |
-| [perl](perl/) | switch — pending | | exists |
+| [javascript](javascript/) | ✅ | `javascript/plugins/` | npm `@voxgig/plugin-js` |
+| [ruby](ruby/) | ✅ | `ruby/lib/voxgig_sekreto/plugins/` | a checkout, found or fetched by `make deps` |
+| [php](php/) | ✅ | `php/plugins/` | a checkout, found or fetched by `make deps` |
+| [perl](perl/) | ✅ | `perl/plugins/` | a checkout, found or fetched by `make deps` |
 | [rust](rust/) | switch — pending | | exists |
 | [java](java/) | switch — pending | | exists |
 | [csharp](csharp/) | switch — pending | | exists |

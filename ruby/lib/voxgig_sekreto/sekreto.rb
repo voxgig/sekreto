@@ -8,6 +8,15 @@
 # line of its own code.
 #
 # A port of typescript/src/Sekreto.ts, which is canonical.
+#
+# THE CORE REQUIRES NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR
+# SIGNS A REQUEST. The four built-in kinds - env, memory, dotenv, file -
+# read at most a local file; every other kind is a voxgig/plugin
+# definition under plugins/, and a chain may name one only if the calling
+# project handed it in through `plugins`. See
+# docs/design/plugin-providers.md.
+
+require 'voxgig_plugin'
 
 module VoxgigSekreto
   # Anything sekreto refuses to do: a bad name, a missing secret, a
@@ -161,15 +170,24 @@ module VoxgigSekreto
     out
   end
 
-  # The store name a provider answers to when its spec does not say.
+  # Is this optional config value actually set? Both nil and the empty
+  # string mean "not given", matching the canonical port's truthiness.
+  #
+  # In the core because `declare` needs it: `spec['name'] || kind` would
+  # take an empty store name, which Ruby counts as truthy and the other
+  # ports do not.
+  def given(value)
+    !value.nil? && '' != value
+  end
+
+  # The store name a live provider answers to.
   #
   # `describe` opens with the provider's kind - `hashicorp:...`,
   # `dotenv:...`, plain `env` - so the kind is the natural default, and a
-  # custom provider gets a sensible name without implementing anything extra.
-  def storename(provider, spec = nil)
-    named = spec && (spec['name'] || spec[:name])
-    return named if named
-
+  # custom provider gets a sensible name without implementing anything
+  # extra. A spec'd provider's store is its `name` or its `kind`, decided
+  # before the provider exists.
+  def storename(provider)
     provider.describe.split(':')[0]
   end
 
@@ -179,15 +197,31 @@ module VoxgigSekreto
   # first hit, and the caller never learns which store answered. `getfrom` is
   # directed - it names the store, and only that store is asked.
   class Sekreto
+    # `catalog` is the definitions this Sekreto can build; `host` is the
+    # voxgig/plugin host every spec'd provider is an instance of. Read
+    # them for introspection - `host.list` names each store's ref and
+    # status - and nothing on either advances the chain.
+    attr_reader :catalog, :host
+
     def initialize(options = nil)
       opts = options || {}
 
+      # Built-ins first, then the plugins, into one catalog: a plugin that
+      # names a built-in kind replaces it, which is how a host substitutes
+      # an implementation and never an accident, because the four names
+      # are documented.
+      plugins = (opts['plugins'] || opts[:plugins] || []).map { |plugin| definition(plugin) }
+      @catalog = VoxgigPlugin.make_catalog(BUILTINS + plugins)
+      @host = VoxgigPlugin.make_host('catalog' => @catalog)
+
+      # (store, provider) pairs, in chain order. A provider handed in live
+      # is backed by no instance; a spec'd one is an instance of its kind
+      # on the host.
       @entries = (opts['providers'] || opts[:providers] || []).map do |entry|
         if entry.respond_to?(:lookup)
           [VoxgigSekreto.storename(entry), entry]
         else
-          provider = VoxgigSekreto.makeprovider(entry)
-          [VoxgigSekreto.storename(provider, entry), provider]
+          declare(entry)
         end
       end
 
@@ -264,6 +298,10 @@ module VoxgigSekreto
 
     # The name of each store that can be named by `getfrom`, in resolution
     # order and without repeats.
+    def stores
+      @entries.map { |store, _provider| store }.uniq
+    end
+
     # What a Sekreto shows of itself when something prints it.
     #
     # `p sekreto` and `sekreto.inspect` reach @cache and @seen, which
@@ -273,10 +311,6 @@ module VoxgigSekreto
     # so this leaks on the path where a process is already in trouble.
     def inspect
       "#<VoxgigSekreto::Sekreto stores=[#{stores.join(', ')}]>"
-    end
-
-    def stores
-      @entries.map { |store, _provider| store }.uniq
     end
 
     # Replace every value this Sekreto has resolved with `[redacted]`.
@@ -292,7 +326,112 @@ module VoxgigSekreto
       @cache.clear
     end
 
+    # Tear the chain down: every plugin instance is deactivated and
+    # unloaded, in reverse, releasing whatever a provider acquired at
+    # activation. Afterwards there is nothing to read from - `get` reports
+    # every secret unknown - and the cache is dropped, though `redact`
+    # still knows every value that was ever resolved.
+    def close
+      @host.close
+      @entries = []
+      @cache.clear
+    end
+
     private
+
+    # One chain entry, as a plugin instance.
+    #
+    # The instance is `kind` for a store named after its kind and
+    # `kind$store` otherwise - `hashicorp$prod` - so `host.list` reads like
+    # the chain. A store name that is already taken gets a numbered tag
+    # from the host instead, because two providers MAY share a store name
+    # (a directed read walks both) and an instance ref may not.
+    def declare(spec)
+      spec = stringkeys(spec)
+      kind = spec['kind']
+
+      raise SekretoError, unknownkind(kind) unless kind.is_a?(String) && @catalog.has?(kind)
+
+      store = VoxgigSekreto.given(spec['name']) ? spec['name'] : kind
+
+      unless VoxgigPlugin.check_tag(store)
+        raise SekretoError, 'sekreto: invalid store name: ' + store.to_s
+      end
+
+      ref = store == kind ? kind : VoxgigPlugin.format_ref(kind, store)
+      ref = @host.autotag(kind) unless @host.instance(ref).nil?
+
+      begin
+        # `load` runs the definition's `define`, which builds the provider
+        # from the spec; `activate` takes the instance live. Nothing is
+        # contacted by either: a provider opens nothing until its first
+        # lookup.
+        @host.load(ref, 'options' => spec)
+        @host.activate(ref)
+      rescue StandardError => e
+        raise unwrap(e)
+      end
+
+      [store, @host.exports(ref + '/' + PROVIDER_EXPORT)]
+    end
+
+    # A spec with symbol keys read as the string keys every definition
+    # sees. The spec arrives from JSON in the conformance suite and from
+    # a literal hash in an app, and Ruby writes those two differently;
+    # `inst.options` must not depend on which.
+    #
+    # Shallow, as the `kind` switch it replaces was: a nested `auth` has
+    # always been read with string keys.
+    def stringkeys(spec)
+      return spec unless spec.is_a?(Hash)
+
+      spec.each_with_object({}) { |(key, value), out| out[key.to_s] = value }
+    end
+
+    # A plugin entry, checked to be a definition before the catalog sees
+    # it.
+    #
+    # `require` hands back `true`, a plugin file defines a MODULE, and the
+    # definition inside it is one constant further on - so the three
+    # things nearest to hand are all not definitions, and each would fail
+    # deep inside voxgig/plugin with a message about a definition name.
+    # Refused here instead, naming what to pass.
+    def definition(plugin)
+      return plugin if plugin.is_a?(Hash)
+
+      what = plugin.is_a?(Module) ? 'the module ' + (plugin.name || plugin.to_s) : plugin.inspect
+
+      raise SekretoError,
+            'sekreto: not a plugin definition: ' + what +
+            ' - a plugin is a definition, such as VoxgigSekreto::Plugins::HASHICORP,' \
+            ' or VoxgigSekreto::Plugins::ALL for every one'
+    end
+
+    # The message for a kind the catalog does not hold.
+    #
+    # A kind sekreto has never heard of is a typo; a kind that exists as a
+    # plugin but was not passed in is the split working as designed and
+    # telling you what to pass. Collapsing the two was the first thing
+    # that made the split confusing to use.
+    def unknownkind(kind)
+      message = 'sekreto: unknown provider kind: ' + kind.to_s +
+                ' (available: ' + @catalog.names.join(', ') + ')'
+
+      return message unless KINDS['plugin'].include?(kind)
+
+      message + ' - ' + kind.to_s +
+        ' is a sekreto plugin, not built in: pass it in the plugins option'
+    end
+
+    # A SekretoError that crossed the plugin boundary comes back out as
+    # itself, byte for byte. Anything else is not sekreto's to rewrite.
+    def unwrap(err)
+      return err unless err.respond_to?(:code) && ERROR_CODE == err.code
+
+      cause = err.respond_to?(:details) ? err.details['cause'] : nil
+
+      cause.is_a?(String) ? SekretoError.new(cause) : err
+    end
 
     def resolve(store, name, entries)
       VoxgigSekreto.checkname(name)

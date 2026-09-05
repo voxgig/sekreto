@@ -13,12 +13,16 @@
  * carry known-answer cases that all ten ports must reproduce bit-for-bit,
  * and lets the integration mock recompute the signature server-side.
  *
- * A port of typescript/src/Sigv4.ts, which is canonical.
+ * IT LIVES WITH THE AWS PLUGIN, not in the core. Signing is the sharpest
+ * instance of the line the split draws: the core of no port imports a hash
+ * function, and only a program that names an AWS kind requires this file.
+ *
+ * A port of typescript/plugins/sigv4.ts, which is canonical.
  */
 
 declare(strict_types=1);
 
-namespace Voxgig\Sekreto;
+namespace Voxgig\Sekreto\Plugins;
 
 /**
  * RFC 3986 escaping, which is stricter than PHP's urlencode: AWS wants

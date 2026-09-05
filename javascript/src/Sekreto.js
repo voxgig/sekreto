@@ -7,11 +7,26 @@
 //
 // A port of typescript/src/Sekreto.ts, which is canonical.
 
-// Providers.js needs the name helpers below, so it is required lazily -
-// at the one point a provider is actually built - rather than at load
-// time, which would see a half-built module.
-function makeprovider(spec) {
-  return require('./Providers').makeprovider(spec)
+// THE CORE REQUIRES NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR
+// SIGNS A REQUEST. The four built-in kinds - env, memory, dotenv, file -
+// read at most a local file; every other kind is a voxgig/plugin
+// definition under plugins/, and a chain may name one only if the
+// calling project handed it in through `plugins`. That is what keeps an
+// SDK whose chain is `[dotenv, env]` from carrying AWS request signing
+// and seven HTTP vault clients. See docs/design/plugin-providers.md.
+const { checktag, formatref, makecatalog, makehost } = require('@voxgig/plugin-js')
+
+// The built-ins are reached through a FUNCTION, not a top-level require.
+//
+// `provider/support.js` requires the name helpers below from this
+// module, and a CommonJS module that replaces `module.exports` at the
+// end of its body hands a half-built object to anything that required it
+// on the way in. Deferring this one edge is what keeps the pair acyclic;
+// every use of it is inside a method, so it always sees a finished
+// module. It is a require a bundler can still see, and must: `provider/`
+// IS the core, and only `plugins/` is meant to be absent from a build.
+function builtin() {
+  return require('./provider/builtin')
 }
 
 /** Anything sekreto refuses to do: a bad name, a missing secret, a
@@ -23,6 +38,27 @@ class SekretoError extends Error {
   }
 }
 
+/** The export key under which a provider definition publishes the
+ * provider it built. `Sekreto` reads `<ref>/provider` off the host.
+ *
+ * This and `ERROR_CODE` are the two halves of the plugin boundary, so
+ * they live beside `SekretoError` rather than in `provider/support.js`
+ * where canonical puts them: support.js is on the far side of the
+ * deferred require above, and both ends of the boundary need them.
+ * `provider/support.js` re-exports both, so the surface is canonical's. */
+const PROVIDER_EXPORT = 'provider'
+
+/** The voxgig/plugin error code a SekretoError travels under when it is
+ * raised inside a definition's `define`.
+ *
+ * plugin wraps a code-less error raised by a callback as
+ * `plugin_define_failed`, and keeps an error that already carries a
+ * code. A provider that refuses its own configuration - `kv: 3`, a
+ * missing project - raises a SekretoError, and that message is pinned
+ * by the spec byte for byte, so it must come back out of the host
+ * exactly as it went in. `providerplugin` gives it this code on the way
+ * in; `Sekreto` turns it back into a SekretoError on the way out. */
+const ERROR_CODE = 'sekreto_error'
 const NAMEPART = /^[a-z0-9_]+$/
 
 /** Is this a well-formed secret name? */
@@ -199,16 +235,86 @@ function redact(text, values) {
   return out
 }
 
-/** The store name a provider answers to when its spec does not say.
+// A chain entry is { store, ref, provider }: the store name it answers
+// to, and the ref of the plugin instance that built it - '' for a live
+// provider handed in directly, which no instance backs.
+
+/** The store name a live provider answers to.
  *
- * `describe()` opens with the provider's kind - `vault:...`, `dotenv:...`,
- * plain `env` - so the kind is the natural default, and a custom provider
- * gets a sensible name without having to implement anything extra. */
-function storename(provider, spec) {
-  if (spec && spec.name) {
-    return spec.name
-  }
+ * `describe()` opens with the provider's kind - `hashicorp:...`,
+ * `dotenv:...`, plain `env` - so the kind is the natural default, and a
+ * custom provider gets a sensible name without having to implement
+ * anything extra. A spec'd provider's store is its `name` or its `kind`,
+ * decided before the provider exists. */
+function storename(provider) {
   return provider.describe().split(':')[0]
+}
+
+/** The message for a kind the catalog does not hold.
+ *
+ * A kind sekreto has never heard of is a typo; a kind that exists as a
+ * plugin but was not passed in is the split working as designed and
+ * telling you what to pass. Collapsing the two was the first thing that
+ * made the split confusing to use. */
+function unknownkind(kind, catalog) {
+  const known = -1 !== builtin().KINDS.plugin.indexOf(String(kind))
+  return (
+    'sekreto: unknown provider kind: ' +
+    String(kind) +
+    ' (available: ' +
+    catalog.names().join(', ') +
+    ')' +
+    (known
+      ? ' - ' +
+        String(kind) +
+        ' is a sekreto plugin, not built in: pass it in the plugins option'
+      : '')
+  )
+}
+
+/** A plugin entry, checked to be a definition before the catalog sees it.
+ *
+ * `require('@voxgig/sekreto-js/plugins/hashicorp')` hands back the
+ * MODULE - `{ hashicorp, hashicorpprovider }` - and CommonJS makes that
+ * the easy mistake, because the module and the definition it holds are
+ * both plain objects. In the catalog it would fail deep inside
+ * voxgig/plugin with a message about a definition name, so it is refused
+ * here instead, naming the destructure that was meant. */
+function definition(plugin) {
+  if (plugin && 'string' === typeof plugin.name && 'function' === typeof plugin.define) {
+    return plugin
+  }
+
+  const held =
+    plugin && 'object' === typeof plugin
+      ? Object.keys(plugin).filter((key) => {
+          const value = plugin[key]
+          return (
+            value && 'string' === typeof value.name && 'function' === typeof value.define
+          )
+        })
+      : []
+
+  if (0 < held.length) {
+    throw new SekretoError(
+      'sekreto: not a plugin definition: a module holding ' +
+        held.join(', ') +
+        ' - destructure the definition it holds and pass that: plugins: [' +
+        held.join(', ') +
+        ']',
+    )
+  }
+
+  throw new SekretoError('sekreto: not a plugin definition: ' + String(plugin))
+}
+
+/** A SekretoError that crossed the plugin boundary comes back out as
+ * itself, byte for byte. Anything else is not sekreto's to rewrite. */
+function unwrap(err) {
+  if (err && ERROR_CODE === err.code && err.details && 'string' === typeof err.details.cause) {
+    return new SekretoError(err.details.cause)
+  }
+  return err
 }
 
 /** The secrets facade: a chain of providers plus a cache.
@@ -220,13 +326,20 @@ class Sekreto {
   constructor(options) {
     const opts = options || {}
 
-    this.entries = (opts.providers || []).map((entry) => {
-      if ('function' === typeof entry.lookup) {
-        return { store: storename(entry), provider: entry }
-      }
+    // Built-ins first, then the plugins, into one catalog: a plugin that
+    // names a built-in kind replaces it, which is how a host substitutes
+    // an implementation and never an accident, because the four names
+    // are documented.
+    this.catalog = makecatalog(
+      builtin().BUILTINS.concat((opts.plugins || []).map(definition)),
+    )
+    this.host = makehost({ catalog: this.catalog })
 
-      const provider = makeprovider(entry)
-      return { store: storename(provider, entry), provider }
+    this.entries = (opts.providers || []).map((entry) => {
+      if (entry && 'function' === typeof entry.lookup) {
+        return { store: storename(entry), ref: '', provider: entry }
+      }
+      return this.declare(entry)
     })
 
     this.docache = false === opts.cache ? false : true
@@ -239,6 +352,45 @@ class Sekreto {
     // read cache so that redaction still works when cache is off - otherwise
     // `cache: false` would silently disable redact() and leak secrets to logs.
     this.seen = []
+  }
+
+  /** One chain entry, as a plugin instance.
+   *
+   * The instance is `kind` for a store named after its kind and
+   * `kind$store` otherwise - `hashicorp$prod` - so `host.list()` reads
+   * like the chain. A store name that is already taken gets a numbered
+   * tag from the host instead, because two providers MAY share a store
+   * name (a directed read walks both) and an instance ref may not. */
+  declare(spec) {
+    const kind = null == spec ? undefined : spec.kind
+
+    if (undefined === kind || !this.catalog.has(kind)) {
+      throw new SekretoError(unknownkind(kind, this.catalog))
+    }
+
+    const store = spec.name || kind
+
+    if (!checktag(store)) {
+      throw new SekretoError('sekreto: invalid store name: ' + store)
+    }
+
+    let ref = store === kind ? kind : formatref(kind, store)
+    if (undefined !== this.host.instance(ref)) {
+      ref = this.host.autotag(kind)
+    }
+
+    try {
+      // `load` runs the definition's `define`, which builds the provider
+      // from the spec; `activate` takes the instance live. Nothing is
+      // contacted by either: a provider opens nothing until its first
+      // lookup.
+      this.host.load(ref, { options: spec })
+      this.host.activate(ref)
+    } catch (err) {
+      throw unwrap(err)
+    }
+
+    return { store, ref, provider: this.host.exports(ref + '/' + PROVIDER_EXPORT) }
   }
 
   /** The secret, or a SekretoError if no provider has it. */
@@ -384,6 +536,17 @@ class Sekreto {
   refresh() {
     this.cache = []
   }
+
+  /** Tear the chain down: every plugin instance is deactivated and
+   * unloaded, in reverse, releasing whatever a provider acquired at
+   * activation. Afterwards there is nothing to read from - `get` reports
+   * every secret unknown - and the cache is dropped, though `redact`
+   * still knows every value that was ever resolved. */
+  close() {
+    this.host.close()
+    this.entries = []
+    this.cache = []
+  }
 }
 
 /** Make a Sekreto from options. */
@@ -392,6 +555,8 @@ function sekreto(options) {
 }
 
 module.exports = {
+  ERROR_CODE,
+  PROVIDER_EXPORT,
   Sekreto,
   SekretoError,
   awsparam,

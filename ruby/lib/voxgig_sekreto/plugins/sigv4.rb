@@ -1,22 +1,28 @@
 # frozen_string_literal: true
 
-# AWS Signature Version 4, hand-rolled.
+# AWS Signature Version 4, hand-rolled - and OUTSIDE THE CORE, because it
+# is the library's one cryptographic edge. Only the two aws kinds sign
+# anything, which is why the core requires no hash function at all.
 #
 # The AWS providers need exactly one thing from the AWS SDK - request
 # signing - and taking the SDK for it would break the no-dependency rule
-# that keeps ten ports honest. SigV4 is a stable, published algorithm
-# built from HMAC-SHA256, which the standard library's openssl already
-# carries.
+# that keeps twenty-three ports honest. SigV4 is a stable, published
+# algorithm built from HMAC-SHA256, which the standard library's openssl
+# already carries.
 #
 # `sigv4` is pure: the caller passes the timestamp, so the same input
 # yields the same signature everywhere. That is what lets the shared spec
-# carry known-answer cases that all ten ports must reproduce bit-for-bit,
+# carry known-answer cases that every port must reproduce bit-for-bit,
 # and lets the integration mock recompute the signature server-side.
 #
-# A port of typescript/src/Sigv4.ts, which is canonical.
+# A port of typescript/plugins/sigv4.ts, which is canonical.
 
 require 'openssl'
 require 'uri'
+
+# `uriescape` and `uridecode` live in httpjson, because four plugins that
+# sign nothing need them too.
+require_relative 'httpjson'
 
 module VoxgigSekreto
   module_function
@@ -27,18 +33,6 @@ module VoxgigSekreto
 
   def hmacsha256(key, text)
     OpenSSL::HMAC.digest('SHA256', key, text)
-  end
-
-  # RFC 3986 escaping, which is stricter than most library encoders: AWS
-  # wants `!`, `'`, `(`, `)` and `*` escaped too.
-  def uriescape(text)
-    text.to_s.gsub(/[^A-Za-z0-9\-_.~]/) do |ch|
-      ch.bytes.map { |byte| format('%%%02X', byte) }.join
-    end
-  end
-
-  def uridecode(text)
-    text.gsub(/%([0-9A-Fa-f]{2})/) { [Regexp.last_match(1)].pack('H2') }
   end
 
   # The canonical query string: each pair RFC 3986-escaped, sorted by

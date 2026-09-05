@@ -26,10 +26,28 @@ use HTTP::Tiny ();
 use JSON::PP   ();
 
 BEGIN {
-    unshift @INC, File::Spec->catdir( dirname( File::Spec->rel2abs(__FILE__) ), '..', 'lib' );
+    my $here = dirname( File::Spec->rel2abs(__FILE__) );
+
+    # `lib` is the core; `plugins` is the second @INC root the ten plugin
+    # kinds live under, and a program that wants none of them adds neither
+    # it nor this. `t` is where the voxgig/plugin search lives, because the
+    # library itself searches no path.
+    unshift @INC,
+      File::Spec->catdir( $here, '..', 'lib' ),
+      File::Spec->catdir( $here, '..', 'plugins' ),
+      File::Spec->catdir( $here, '..', 't' );
 }
 
+use PluginHome ();
+
+BEGIN { PluginHome::pluginpath() }
+
 use Voxgig::Sekreto ();
+
+# THE FULL SET, passed to Sekreto. The CLI is asked for any provider kind on
+# the command line, so it is the one consumer that legitimately wants all
+# ten plugins; an app passes the one or two it configures.
+use Voxgig::Sekreto::Plugins qw(allplugins);
 
 my $LANG = 'perl';
 
@@ -180,7 +198,8 @@ sub main {
           if '--store' eq $args[$index] && $index + 1 <= $#args;
     }
 
-    my $secrets = Voxgig::Sekreto->new( { providers => chainfor($source) } );
+    my $secrets = Voxgig::Sekreto->new(
+        { plugins => allplugins(), providers => chainfor($source) } );
 
     my $token = eval {
         '' eq $store ? $secrets->get('api.token') : $secrets->getfrom( $store, 'api.token' );

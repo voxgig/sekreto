@@ -2,24 +2,45 @@
 //
 // The AWS providers need exactly one thing from the AWS SDK - request
 // signing - and taking the SDK for it would break the no-dependency rule
-// that keeps ten ports honest. SigV4 is a stable, published algorithm
-// built from HMAC-SHA256, which node's own crypto already has.
+// that keeps twenty-three ports honest. SigV4 is a stable, published
+// algorithm built from HMAC-SHA256, which node's own crypto already has.
 //
 // `sigv4` is pure: the caller passes the timestamp, so the same input
 // yields the same signature everywhere. That is what lets the shared spec
-// carry known-answer cases that all ten ports must reproduce bit-for-bit,
+// carry known-answer cases that all the ports must reproduce bit-for-bit,
 // and lets the integration mock recompute the signature server-side.
 //
-// A port of typescript/src/Sigv4.ts, which is canonical.
+// A port of typescript/plugins/sigv4.ts, which is canonical.
 
-const { createHash, createHmac } = require('node:crypto')
+// node:crypto is loaded ON FIRST USE, not at require time.
+//
+// This module lives under plugins/ and is reached only through the aws
+// plugin, so the core never sees it at all; deferring the builtin on top
+// of that keeps requiring the plugin free of side effects too, and lets
+// the sigv4 conformance group run on a runtime that has crypto without
+// anything else in the module graph having asked for it.
+//
+// require(), not `await import()`: these helpers are synchronous and are
+// called from synchronous signing code.
+function crypto() {
+  try {
+    return require('node:crypto')
+  } catch (err) {
+    throw new Error(
+      'sekreto: AWS request signing needs node:crypto, which this runtime ' +
+        'does not provide: ' +
+        err.message,
+      { cause: err },
+    )
+  }
+}
 
 function sha256hex(text) {
-  return createHash('sha256').update(text, 'utf8').digest('hex')
+  return crypto().createHash('sha256').update(text, 'utf8').digest('hex')
 }
 
 function hmac(key, text) {
-  return createHmac('sha256', key).update(text, 'utf8').digest()
+  return crypto().createHmac('sha256', key).update(text, 'utf8').digest()
 }
 
 /** RFC 3986 escaping, which is stricter than encodeURIComponent: AWS
@@ -105,7 +126,10 @@ function sigv4(input) {
   const kregion = hmac(kdate, input.region)
   const kservice = hmac(kregion, input.service)
   const ksigning = hmac(kservice, 'aws4_request')
-  const signature = createHmac('sha256', ksigning).update(stringtosign, 'utf8').digest('hex')
+  const signature = crypto()
+    .createHmac('sha256', ksigning)
+    .update(stringtosign, 'utf8')
+    .digest('hex')
 
   const out = {
     authorization:

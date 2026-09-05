@@ -14,10 +14,23 @@ const {
   flatname,
   parsedotenv,
   redact,
-  sigv4,
   validname,
   vaultref,
 } = require('../src')
+
+// THE CONFORMANCE SUITE LOADS EVERY PLUGIN, deliberately.
+//
+// `spec/sekreto.json` is the contract for the whole library and exercises
+// all fourteen provider kinds, so this suite hands the full set to every
+// Sekreto it builds. That is not a leak of the core/plugin split - it is
+// the split working: a CONSUMER passes the kinds it configures and
+// carries nothing else, while the suite that proves all fourteen behave
+// has to have all fourteen. `lazyload.test.js` and `plugins.test.js` pin
+// the other half, that the core surface reaches none of them.
+//
+// `sigv4` lives with the aws plugin - it is the crypto edge, and only
+// the two aws kinds use it (docs/design/plugin-providers.md).
+const { allplugins, sigv4 } = require('../plugins')
 
 // Find the shared spec directory by walking up from this file.
 function specfile(name) {
@@ -40,7 +53,7 @@ const { makeRunner } = require('@voxgig/omni-js')
 
 // Build a Sekreto from the spec's declarative chain description.
 function chainof(spec) {
-  return new Sekreto({ providers: spec.chain, cache: false })
+  return new Sekreto({ plugins: allplugins, providers: spec.chain, cache: false })
 }
 
 describe('sekreto', () => {

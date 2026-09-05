@@ -1,6 +1,12 @@
-package Voxgig::Sekreto::Sigv4;
+package Voxgig::Sekreto::Plugins::Sigv4;
 
 # AWS Signature Version 4, hand-rolled.
+#
+# UNDER plugins/, WITH THE AWS PLUGIN, and not in the core: this is the
+# sharpest instance of the line the split draws, because signing is the one
+# thing here that needs a hash function, and the core of no port imports
+# one. Only `awssecrets` and `awsparams` use it
+# (docs/design/plugin-providers.md).
 #
 # The AWS providers need exactly one thing from the AWS SDK - request
 # signing - and taking the SDK for it would break the no-dependency rule
@@ -12,7 +18,7 @@ package Voxgig::Sekreto::Sigv4;
 # carry known-answer cases that all ten ports must reproduce bit-for-bit,
 # and lets the integration mock recompute the signature server-side.
 #
-# A port of typescript/src/Sigv4.ts, which is canonical.
+# A port of typescript/plugins/sigv4.ts, which is canonical.
 
 use strict;
 use warnings;
@@ -48,6 +54,10 @@ sub hmachex {
 # URL-encoding: uppercase hex, and everything outside the unreserved
 # characters (ALPHA / DIGIT / '-' / '.' / '_' / '~') is escaped - AWS
 # wants `!`, `'`, `(`, `)` and `*` escaped too.
+#
+# Httpjson's `urlenc` has the same body and is deliberately not this
+# function: this one is part of a signature the spec pins, and depending on
+# it made every store client load a hash function to escape a URL.
 sub uriescape {
     my ($text) = @_;
     utf8::encode($text) if utf8::is_utf8($text);

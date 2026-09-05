@@ -364,10 +364,13 @@ SOURCES = {
     'csharp':     dict(globs=['csharp/src/**/*.cs', 'csharp/cli/**/*.cs'],
                        skip=[], pattern=SOURCE),
     'java':       dict(globs=['java/src/**/*.java'], skip=[], pattern=SOURCE),
-    'perl':       dict(globs=['perl/lib/**/*.pm'], skip=[], pattern=SOURCE),
-    'php':        dict(globs=['php/src/**/*.php'], skip=[], pattern=SOURCE),
+    'perl':       dict(globs=['perl/lib/**/*.pm', 'perl/plugins/**/*.pm'],
+                       skip=[], pattern=SOURCE),
+    'php':        dict(globs=['php/src/**/*.php', 'php/plugins/**/*.php'],
+                       skip=[], pattern=SOURCE),
     'python':     dict(globs=['python/**/*.py'],
                        skip=['python/test', 'python/tests'], pattern=SOURCE),
+    # ruby's plugins live under lib/, so lib/**/*.rb already covers them.
     'ruby':       dict(globs=['ruby/lib/**/*.rb'], skip=[], pattern=SOURCE),
     # The harness trees - zig/test, kotlin/test - are where omni legitimately
     # appears, and they are excluded here exactly as go/testutil and
@@ -437,7 +440,14 @@ SOURCES = {
     # so the checkout resolver that used to live in typescript/src is gone
     # and nothing under src/ has any business naming omni.
     'typescript': dict(globs=['typescript/src/**/*.ts'], skip=[], pattern=SOURCE),
-    'javascript': dict(globs=['javascript/src/**/*.js'], skip=[], pattern=SOURCE),
+    # ADOPTED PORTS SHIP A plugins/ TREE, AND IT IS SHIPPED SOURCE. The
+    # ten network kinds moved out of the core into it, so a glob naming
+    # only src/ scans the half that opens no socket and reports the port
+    # covered. Measured when javascript adopted: 9 files scanned, 12 in
+    # plugins/ unread. Every port that adopts must widen its globs here.
+    'javascript': dict(globs=['javascript/src/**/*.js',
+                              'javascript/plugins/**/*.js'],
+                       skip=[], pattern=SOURCE),
 }
 
 
