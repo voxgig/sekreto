@@ -28,8 +28,7 @@ to the next store.
 
 ## Layout
 
-Four kinds are built in; the other ten are plugins
-([`docs/design/plugin-providers.md`](../docs/design/plugin-providers.md)).
+Four kinds are built in; the other ten are plugins.
 What makes a kind built in is that it reads **at most a local file** —
 `env`, `memory`, `dotenv`, `file`. Everything that opens a socket, signs a
 request or spawns a process lives under `plugins/`, and `src/` links none
@@ -142,7 +141,7 @@ OMNI_HOME=/path/to/omni make test
 
 `SekretoTest.scala` carries the bridge between the two value models: omni
 has an `enum Json` with an `Absent` case, and this port takes plain Scala
-values and typed specs, so absent, null and value stay distinct across the
+values and typed specs, so absent, null, and value stay distinct across the
 boundary.
 
 That suite proves this port computes the same answers as the others. What

@@ -58,7 +58,7 @@ chain reads as configuration and the compiler checks every name.
 `Sekreto(providers:names:cache:)` takes live `Provider` instances instead,
 for a provider of your own.
 
-`plugins:` is the load-bearing argument. `env`, `memory`, `dotenv` and
+`plugins:` is the argument that decides what can be built. `env`, `memory`, `dotenv` and
 `file` are built in and need nothing passed; every other kind must be
 handed in, and one that was not is refused by name with the fix in the
 message:
@@ -102,8 +102,7 @@ Three modules, and the middle one is the boundary.
 The four kinds that read at most a local file are built in. Every kind
 that opens a socket, signs a request or spawns a process is a
 voxgig/plugin definition under `plugins/`, and a `Sekreto` can build only
-the kinds its initialiser was handed
-([docs/design/plugin-providers.md](../docs/design/plugin-providers.md)).
+the kinds its initialiser was handed.
 
 **The boundary is the swift module, and the compiler holds it.** `Sekreto`
 is compiled from `src/*.swift` alone, so an `import SekretoPlugins` in a
@@ -138,7 +137,7 @@ swiftc -I build -emit-module -emit-library -static \
 
 `make lean` does that for every kind, and it is a test as much as an
 example: files in one module see each other with no import to give it
-away, so a plugin that quietly reached into its neighbour fails there and
+away, so a plugin that reached into its neighbour unremarked fails there and
 nowhere else. It found two on the first run — `unbase64` and `uriescape`,
 both of which had been sitting in `Crypto.swift` and `Sigv4.swift` and
 were needed by plugins that sign nothing.
@@ -156,7 +155,7 @@ OMNI_HOME=/path/to/omni make test
 
 `SekretoTest.swift` carries the bridge between the two value models: omni
 has an `enum Json` with an `absent` case, and this port takes plain Swift
-values and typed specs, so absent, null and value stay distinct across the
+values and typed specs, so absent, null, and value stay distinct across the
 boundary. Both modules export a type called `Json`, so omni's is spelled
 `J` throughout the suite and the ambiguity is resolved once rather than at
 every use.

@@ -130,7 +130,7 @@ OMNI_HOME=/path/to/omni make test
 `main.clj` carries the bridge between the two value models: the runner
 hands over the spec's own JSON, keyed by string with numbers as doubles and
 a marker for a key that is not there, while a provider spec here is a map
-keyed by keyword. It converts field by field, so absent, null and value
+keyed by keyword. It converts field by field, so absent, null, and value
 stay distinct across the boundary.
 
 `test/voxgig/sekreto/test/plugins.clj` is the other half, and the

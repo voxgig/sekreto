@@ -47,7 +47,7 @@ voxgig_sekreto v0.1.0
 ```
 
 So a consumer whose chain is `[dotenv, env]` compiles no TLS, no HTTP
-client and no request signing. The TLS exception AGENTS.md rule 3 permits
+client and no request signing. The one exception for cryptographic transport
 has not gone away — it has moved to `plugins/httpjson`, which is where the
 sockets are, and `plugins/secretspec` (a subprocess, no network) has no
 TLS anywhere in its closure at all.

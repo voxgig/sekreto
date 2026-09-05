@@ -120,7 +120,7 @@ OMNI_HOME=/path/to/omni make test
 
 `SekretoTest.cpp` carries the bridge between the two value models: omni's
 `Json` has an `Absent` case, this port's has not, and the conversion is
-written out so that absent, null and value stay distinct across the
+written out so that absent, null, and value stay distinct across the
 boundary. `specof` maps a spec entry onto a `ProviderSpec`, and every chain
 is built inside the subject, so a constructor refusal — `unsupported kv
 version` — reaches omni as a subject error rather than aborting the run.
@@ -166,7 +166,7 @@ make build
 - **libcrypto's digests are not used for SigV4.** The exception that
   permits the link covers transport only, so `plugins/Crypto.cpp` carries
   SHA-256 and HMAC in-tree — the same line `rust/src/crypto.rs` holds
-  beside rustls. Percent-encoding and base64 sit with the transport rather
+  beside rustls. Percent-encoding and base64 live with the transport rather
   than beside the signer, so the plugins that build a query string or
   decode a payload and sign nothing do not link a digest; `make lean`
   checks that, one object file at a time.

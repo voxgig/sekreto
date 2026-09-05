@@ -13,8 +13,7 @@ make test                     # the conformance suite, the seam, the boundary
 child — the vault clients, the cloud stores, the two CLIs, and SigV4
 signing with them — is a [voxgig/plugin](https://github.com/voxgig/plugin)
 definition under `plugins/`, and a `sek_sekreto` can build only the kinds
-its options were handed. See [Plugins](#plugins) below and
-[the design](../docs/design/plugin-providers.md).
+its options were handed. See [Plugins](#plugins) below.
 
 Two dependencies, and each belongs to one layer. The core depends on
 **voxgig/plugin**, whose C port is the host the chain is built on; C has
@@ -237,7 +236,7 @@ OMNI_HOME=/path/to/omni make test
 
 `sekretotest.c` carries the bridge between the two value models: omni has
 an `omni_json` whose ABSENT case is distinct from null, and this port
-takes plain C strings and a flat `sek_spec`, so absent, null and value
+takes plain C strings and a flat `sek_spec`, so absent, null, and value
 stay distinct across the boundary. That is also where `sek_validname`'s C
 `int` becomes the JSON boolean the spec compares — the adaptation belongs
 in the test, never in the library.
@@ -358,12 +357,12 @@ obligation is made to fail before it is made to pass.
   instance's name and casts it back to the `sek_providerkind` it is the
   first member of. That is why `def` is first in that struct, and it is
   what makes a definition data rather than a generated function per kind.
-  A definition that is *not* one of ours never reaches it, and `sek_new`
+  A definition this port did not make never reaches it, and `sek_new`
   refuses it by name when it exports no provider.
 - **voxgig/plugin is compiled with its own flags.** It is C11 at `-O1`;
   at this port's `-O2` gcc's `-Wclobbered` fires on three of its
   `setjmp` frames. Turning a warning off — or `-Werror` off — to make a
-  checkout this port does not own compile under our flags would weaken
+  checkout this port does not own compile under these flags would weaken
   the gate to suit the dependency, so the dependency is built the way its
   own build builds it and this port's flags stay as they are.
 - **The TLS binding verifies four things, and each has a failing test.**

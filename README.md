@@ -50,7 +50,7 @@ exist" without hiding a typo.
 ## Built in, or a plugin
 
 Every port has the same **four built-in provider kinds** — the ones that
-read at most a local file, and need no socket, no TLS, no crypto and no
+read at most a local file, and need no socket, no TLS, no crypto, and no
 child process:
 
 | kind | reads |
@@ -83,8 +83,9 @@ env]` carries no AWS request signing and no HTTP vault client at all.
 The plugin mechanism is voxgig/plugin's, not sekreto's own: a provider
 kind is a plugin *definition*, a configured store is an *instance*
 addressed by name and tag (`hashicorp$prod`), and `secrets.host` is the
-plugin host they live on. The design, and what each port owes it, is
-[`docs/design/plugin-providers.md`](docs/design/plugin-providers.md).
+plugin host they live on. The core imports no plugin in any form, and
+loading is explicit rather than a side effect of importing: a `Sekreto`
+can build only the kinds its constructor was handed.
 
 ### Per language
 
@@ -258,8 +259,8 @@ joins the chain like any shipped plugin. See [DOCS.md](DOCS.md#plugins).
 
 Every port is tested three ways: the shared conformance spec, an
 integration run against mock servers, and — on demand and weekly — the
-same CLIs against the **real** stores in Docker
-(`doc/design/real-stores.md`).
+same CLIs against the **real** stores in Docker: HashiCorp Vault,
+LocalStack, self-hosted Infisical, a Key Vault emulator, and a real boru.
 
 Every port has **zero third-party dependencies, with one deliberate
 exception**: the Rust port takes `rustls` (with `webpki-roots` for the
@@ -331,7 +332,7 @@ stores reject dots in ids.
 
 A store that does not hold a secret is a **miss** — the chain carries on. A
 store that *could not answer* (a locked vault, a wrong passphrase, an
-unreachable host) is an **error**: falling through there would quietly reach
+unreachable host) is an **error**: falling through there would silently reach
 for a weaker store.
 
 ### HashiCorp Vault
@@ -432,9 +433,13 @@ secret and use it.
 
 ## Documentation
 
-- [DOCS.md](DOCS.md) — the full API, provider by provider
-- [AGENTS.md](AGENTS.md) — how to work in this repository
-- each port's own `README.md` for language-specific notes
+- [DOCS.md](DOCS.md). The full API, provider by provider.
+- Each port's own `README.md`, for language-specific notes.
+- [STYLE-GUIDE.md](STYLE-GUIDE.md). How these pages are written.
+
+To change behaviour, change the canonical TypeScript first, then
+`spec/sekreto.aon`, then every port. A port that disagrees with the spec
+is the thing that is wrong.
 
 ## License
 

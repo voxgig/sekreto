@@ -19,7 +19,7 @@ base64, SHA-256 and HMAC. Reaching into the already-linked `libcrypto` for
 a digest would widen "cryptographic transport is not hand-rolled" into
 "cryptography is not hand-rolled", which is not the rule.
 
-There is no dune, no ocamlfind and no opam. `ocamlopt` is driven directly
+There is no dune, no ocamlfind, and no opam. `ocamlopt` is driven directly
 from the Makefile — the same shape the sibling voxgig/plugin OCaml port
 takes — which is what keeps a consumer of this library free of a package
 manager, and what settles the choice between C stubs and the `ocaml-ssl`
@@ -95,7 +95,7 @@ OMNI_HOME=/path/to/omni make test
 
 `test/sekreto_test.ml` carries the bridge between the two value models:
 omni has a `json` type with an `Absent` case, and this port takes plain
-strings and a typed `spec` record, so absent, null and value stay distinct
+strings and a typed `spec` record, so absent, null, and value stay distinct
 across the boundary. A chain is built inside each subject, never outside
 it, so that a constructor refusal — `unsupported kv version` is the one the
 corpus pins — reaches omni as a subject failure.
@@ -105,7 +105,7 @@ the corpus is not a port**. No case in `spec/sekreto.json` opens a socket,
 so a port with no transport at all could pass all fourteen groups.
 `test/behaviour.ml` covers what the corpus never reaches — the whole
 `checkaddr` decision table, strict base64, a miss that is not a failure on
-a real file, the cache and redaction lifecycle. `test/tlsproof.sh` covers
+a real file, the cache, and redaction lifecycle. `test/tlsproof.sh` covers
 the handshake, and is described below.
 
 That leaves what proves this port can actually *fetch* a secret, which is
@@ -145,10 +145,10 @@ make tlscheck
 | the chain is verified against the system trust store | an untrusted CA is refused, `certificate verify failed: unable to get local issuer certificate` |
 | the **host name** is verified | a certificate for `wrong.example.com` is refused for `127.0.0.1` with `IP address mismatch` and for `localhost` with `hostname mismatch`, though the same CA signed it |
 | SNI is sent, and only for a name | the server records exactly one server name, `localhost`; the IP-literal connections sent none |
-| `SEKRETO_CA_BUNDLE` adds roots | our CA alone is trusted, an unrelated CA alone is not, a file holding both is, and a path that does not exist fails open in silence |
+| `SEKRETO_CA_BUNDLE` adds roots | the test CA alone is trusted, an unrelated CA alone is not, a file holding both is, and a path that does not exist fails open in silence |
 
 It needs `node` and the `openssl` command line, and says so and skips if
-either is missing rather than passing quietly.
+either is missing rather than passing silently.
 
 ## Notes
 
@@ -195,7 +195,7 @@ either is missing rather than passing quietly.
   Reading stdout to EOF and only then reading stderr deadlocks the moment
   the child writes more than one 64 KiB pipe buffer to stderr, and
   SecretSpec's box-drawn diagnostics reach that size. The child's stdin is
-  closed, so a CLI that prompts for a passphrase sees EOF instead of
+  closed, so a CLI that prompts for a passphrase reads EOF instead of
   waiting forever. A command that is not there is resolved before the fork,
   because `Unix.create_process` execs in the child and a failed exec would
   otherwise be indistinguishable from a command that ran and failed.

@@ -49,8 +49,7 @@ the core references nothing back — a reference the other way is a cycle
 msbuild refuses to build. So `VoxgigSekreto.dll` cannot name a type in
 `VoxgigSekretoPlugins.dll`, and it names none of the three platform
 assemblies a plugin needs either. `make check-core` reads that out of
-the compiled artifact. See
-[`docs/design/plugin-providers.md`](../docs/design/plugin-providers.md).
+the compiled artifact.
 
 ## Layout
 
