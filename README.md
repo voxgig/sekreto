@@ -117,7 +117,7 @@ clients are loaded differs.
 | [c](c/) | yes | `c/plugins/` (one object per kind) | a checkout, compiled into this port's `build/` |
 | [lua](lua/) | yes | `lua/src/sekreto/plugins/` | a checkout, found or fetched by `make deps` |
 | [ocaml](ocaml/) | yes | `ocaml/plugins/` | a checkout, compiled into this port's `build/` |
-| [haskell](haskell/) | switch — pending | | exists |
+| [haskell](haskell/) | yes | `haskell/plugins/` | a checkout, compiled into this port's `build/` |
 | [lean](lean/) | switch — pending | | exists |
 | [zig](zig/) | yes | `zig/plugins/` | plugin's zig port as a named module — a checkout, found or fetched by `make deps` |
 

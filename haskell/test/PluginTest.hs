@@ -27,6 +27,7 @@ import Control.Exception (Exception, SomeException, displayException, fromExcept
 import Control.Monad (when)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (isInfixOf, nub, sort)
+import Data.Maybe (isJust)
 import Defs (Definition (..))
 import Hashicorp (hashicorp)
 import qualified Host as Plugin
@@ -38,6 +39,7 @@ import Providers
     emptyspec,
     pluginkinds,
     providerplugin,
+    takeprovider,
   )
 import Sekreto
   ( Options (..),
@@ -58,7 +60,7 @@ import System.Environment (getArgs)
 import System.Exit (ExitCode (..), exitFailure, exitSuccess)
 import System.IO (hFlush, hPutStrLn, stderr, stdout)
 import System.Process (proc, readCreateProcessWithExitCode)
-import Types (PluginError (..))
+import Types (PluginError (..), raise)
 import Value (Value (..), asStr, vget, vkeys)
 
 -- ------------------------------------------------------------ assertions
@@ -391,6 +393,65 @@ adefinitionthatisnotaproviderpluginisrefused = do
 
   same "the refusal" "sekreto: plugin hollow exported no provider" message
 
+-- | How many provider slots the module-global table is still holding.
+--
+-- 'takeprovider' is the only window onto it, and it TAKES - which is
+-- exactly right here, because anything it finds is a provider nothing
+-- was coming back for. The bound is far above anything a whole run of
+-- this suite reaches: a run builds under a hundred providers.
+heldslots :: IO Int
+heldslots =
+  length . filter isJust <$> mapM (takeprovider . VNum . fromIntegral) [1 .. 4096 :: Int]
+
+-- THE PROVIDER SLOT TABLE, which is this port's one divergence from the
+-- canonical: plugin's value model carries no function, so a `define`
+-- exports the SLOT NUMBER of the provider it built and the chain reads
+-- it back. The invariant is that the table is EMPTY the moment a
+-- construction is over, however it ended - a slot no chain took is a
+-- provider held for the life of the process, and nothing else here can
+-- see one. The C++ port shipped exactly that leak with its own suite
+-- green against it.
+theslottableisemptyafteraconstruction :: IO ()
+theslottableisemptyafteraconstruction = do
+  same "nothing the entries above built is still held" 0 =<< heldslots
+
+  secrets <- sekreto emptyoptions {optproviders = [memoryspec [], memoryspec []]}
+  same "a chain that built" 0 =<< heldslots
+
+  close secrets
+  same "a chain that was torn down" 0 =<< heldslots
+
+  -- A chain that refuses PART WAY gives back what it had already built:
+  -- the host goes down with it, and every instance's `close` runs.
+  partway <-
+    raised
+      ( sekreto
+          emptyoptions
+            {optproviders = [memoryspec [], memoryspec [], emptyspec {speckind = "vualt"}]}
+      )
+  when (not ("unknown provider kind" `isInfixOf` displayException partway)) $
+    throwIO (Failed ("the wrong refusal: " ++ displayException partway))
+  same "a chain that refused part way" 0 =<< heldslots
+
+  -- ...and so does the one path a chain cannot reach by refusing: a
+  -- `define` that SUCCEEDED and an `activate` that did not. The slot is
+  -- filled and the chain never reads it, so `close` is the only thing
+  -- that gives it back.
+  let refuses tag =
+        (providerplugin tag (\_ -> pure (Provider (\_ -> pure Nothing) tag)))
+          {dActivate = Just (\_ -> raise "boom_failed" "activate refused" (VMap []))}
+
+  _ <- raised (sekreto emptyoptions {optplugins = [refuses "boom"],
+                                     optproviders = [emptyspec {speckind = "boom"}]})
+  same "a define that succeeded and an activate that did not" 0 =<< heldslots
+
+  -- CONTROL: the probe can see a held slot. The same definition without
+  -- its `close` leaks the provider its `define` built, and exactly one
+  -- must be found - so the zeroes above are a check that looked.
+  _ <- raised (sekreto emptyoptions {optplugins = [(refuses "leaky") {dClose = Nothing}],
+                                     optproviders = [emptyspec {speckind = "leaky"}]})
+  same "CONTROL: a definition with no close leaks its slot" 1 =<< heldslots
+
 -- --------------------------------------------------- the built artifact
 
 -- | One claim of test/checkcore.py, which reads `nm` rather than the
@@ -449,6 +510,7 @@ main = do
   check "close tears the chain down and keeps redaction" closetearsthechaindown
   check "the full set is built on demand" thefullsetisbuiltondemand
   check "a definition that is not a provider plugin is refused" adefinitionthatisnotaproviderpluginisrefused
+  check "the provider slot table is empty after a construction" theslottableisemptyafteraconstruction
   check "the core imports no plugin" (artifact "core")
   check "one plugin imports only itself" (artifact "one")
   check "the core reaches no socket, no TLS and no child process" (artifact "platform")

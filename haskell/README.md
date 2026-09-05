@@ -59,9 +59,9 @@ kinds — and then reads `build/sekreto-core` with `nm` and `ldd`, by exact
 symbol name:
 
 ```
-the core, as built: 33 modules, 55957 symbols
-  A  no plugin module of 17 (all 17 are in the CLI)
-  B  none of 21 socket, exec and TLS entry points (the CLI has 8)
+the core, as built: 20 modules, 55957 symbols
+  A  no plugin module of 17 (all 17 are in the CLI), and its 20 modules are exactly the core
+  B  none of 25 socket, exec and TLS entry points (the CLI has 8)
   C  no libssl, no libcrypto (the CLI loads both)
   D  build/sekreto-one links exactly Hashicorp, Http, Httpjson, Json, Tls of the 17 plugin modules
 ```
@@ -72,9 +72,12 @@ plugin modules and all seven network and exec entry points, because a
 check that cannot see a plugin when one is linked is a check that always
 passes. Module names are compared as sets of exact, Z-encoded names —
 `Azuresecrets` is `Azzuresecrets` in a GHC symbol table, which is the sort
-of near-miss a substring match gets wrong. `D` is an equality rather than
-an intersection, so a consumer of one vault client that started linking
-the AWS signer would fail it.
+of near-miss a substring match gets wrong. `A` and `D` are equalities
+rather than intersections: a consumer of one vault client that started
+linking the AWS signer fails `D`, and a core that grew a hand-rolled hash
+under a name no plugin uses fails `A`. An intersection answers only
+whether a plugin is there, and the module that should not be in a core is
+not always named after one.
 
 OpenSSL is here because GHC's boot libraries have **no networking at all
 — not even a socket**, and because cryptographic transport is the one
@@ -163,9 +166,10 @@ OMNI_HOME=/path/to/omni make test
 
 That suite hands **every** plugin to every chain it builds, so it can
 never notice a missing one. `test/PluginTest.hs` is the suite that can:
-seventeen entries covering the full set, the CLI's own list, the
-`sekreto_error` bridge, a repeated store name, a custom kind, and the
-three claims `test/checkcore.py` reads out of the built binaries.
+eighteen entries covering the full set, the CLI's own list, the
+`sekreto_error` bridge, a repeated store name, a custom kind, the
+provider slot table, and the three claims `test/checkcore.py` reads out of
+the built binaries.
 
 ```sh
 make test-plugins             # the seam alone
