@@ -914,6 +914,23 @@
             }
           },
           {
+            "id": "sigv4#query-escaped",
+            "in": {
+              "body": "",
+              "datetime": "20150830T123600Z",
+              "keyid": "AKIDEXAMPLE",
+              "method": "GET",
+              "region": "us-east-1",
+              "secret": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+              "service": "service",
+              "url": "https://example.amazonaws.com/path/to?p=a/b&q=c:d"
+            },
+            "out": {
+              "authorization": "AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date, Signature=73b05a1d132252028f066870dd1b5356a9c92bfbe42f7e6af747b80942ea7d1a",
+              "x-amz-date": "20150830T123600Z"
+            }
+          },
+          {
             "in": {
               "body": "",
               "datetime": "20150830T123600Z",
