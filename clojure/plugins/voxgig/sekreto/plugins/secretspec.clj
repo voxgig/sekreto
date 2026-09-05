@@ -4,6 +4,12 @@
 ;; and a built-in kind reads at most a local file
 ;; (docs/design/plugin-providers.md).
 ;;
+;; IT IS THE ONE PLUGIN THAT REACHES NO SOCKET, and it requires no HTTP
+;; helper either: reaching `httpjson` for the one-line `reason` default
+;; would load `java.net.http` into a process that only ever spawns a
+;; child. The default is spelled out here instead, the way every other
+;; port spells it.
+;;
 ;; A port of typescript/plugins/secretspec.ts, which is canonical.
 
 (ns voxgig.sekreto.plugins.secretspec
@@ -11,7 +17,6 @@
             [voxgig.sekreto.core :as core]
             [voxgig.sekreto.provider :as provider]
             [voxgig.sekreto.providers :as providers]
-            [voxgig.sekreto.plugins.httpjson :as http]
             [voxgig.sekreto.plugins.proc :as proc]))
 
 (defn secretspecmiss?
@@ -65,7 +70,7 @@
                  true (conj "get" key)
                  (core/notempty backend) (conj "--provider" backend)
                  (core/notempty profile) (conj "--profile" profile)
-                 true (conj "--reason" (http/firstof reason "sekreto")))
+                 true (conj "--reason" (or (core/notempty reason) "sekreto")))
           ran (proc/runcmd (proc/command args) command)]
 
       (cond

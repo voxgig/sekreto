@@ -28,11 +28,14 @@ report() {
 
 # --- the compiler's own listing --------------------------------------
 
-reached=$(tr ' ' '\n' < "$DEPFILE" | grep -c '/plugins/[a-z0-9_]*\.dart$' || true)
+# Every path under plugins/, whatever it is called and however deep: a
+# pattern that spelled out the file names it expected would miss a plugin
+# spelled with a capital or one in a subdirectory, and pass.
+reached=$(tr ' ' '\n' < "$DEPFILE" | grep -c '/plugins/.*\.dart$' || true)
 
 if [ "0" != "$reached" ]; then
   report "the core's dependency listing names $reached file(s) under plugins/:"
-  tr ' ' '\n' < "$DEPFILE" | grep '/plugins/[a-z0-9_]*\.dart$' | sed 's/^/       /'
+  tr ' ' '\n' < "$DEPFILE" | grep '/plugins/.*\.dart$' | sed 's/^/       /'
 else
   echo "ok   - the core's dependency listing names no plugin"
 fi
@@ -54,8 +57,13 @@ fi
 # platform dependency. `dart:io` itself stays allowed: the two file-reading
 # built-ins need `File`, and `Platform.environment` is what `env` is.
 
-for pattern in HttpClient SecurityContext RawSocket 'Socket(' Process. sha256 hmac 'dart:typed_data'; do
-  hit=$(grep -rl -- "$pattern" "$HERE/src" 2>/dev/null || true)
+# `Socket.` covers every constructor and static this SDK spells that way -
+# Socket.connect, SecureSocket.connect, ServerSocket.bind,
+# RawDatagramSocket.bind. It is searched as a FIXED STRING (`-F`), so the
+# dot is a dot: without that it is a regex any-character and matches the
+# SocketException the two file-reading built-ins already name.
+for pattern in HttpClient SecurityContext RawSocket 'Socket(' 'Socket.' 'Process.' sha256 hmac 'dart:typed_data'; do
+  hit=$(grep -rlF -- "$pattern" "$HERE/src" 2>/dev/null || true)
   if [ -n "$hit" ]; then
     report "the core reaches $pattern: $hit"
   fi

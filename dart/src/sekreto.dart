@@ -424,10 +424,14 @@ class Sekreto {
 
     for (final given in plugins) {
       // A definition is a MAP of `name` and `define`, which is what makes a
-      // catalog a data structure a document could produce. A dart map
-      // literal infers its own value type - `{'name': 'x'}` is a
-      // Map<String, String>, not a Map<String, dynamic> - so the map is
-      // widened here rather than refused for its type argument.
+      // catalog a data structure a document could produce - and a document
+      // is decoded into whatever map type the decoder felt like. The check
+      // is therefore on the KEYS rather than on the type argument: dart's
+      // generics are covariant, so a literal `{'name': 'x'}`
+      // (Map<String, String>) and one carrying a closure
+      // (Map<String, Object>) are already Definitions, but a
+      // Map<dynamic, dynamic> holding exactly the same entries is not.
+      // Accepting it means copying into the shape the catalog wants.
       if (given is Map && given.keys.every((key) => key is String)) {
         final definition = Map<String, dynamic>.from(given);
 

@@ -161,7 +161,7 @@ ones a case gets. That is why the suite CANNOT SEE the plugin split: it
 is only ever testing the one consumer that passes the full set, so the
 CLI's own set, the refusals a consumer meets, and the import graph are
 all invisible to it. `test/plugins_test.dart` is where those live —
-nineteen tests over the full set, the refusals, the `sekreto_error`
+twenty tests over the full set, the refusals, the `sekreto_error`
 bridge and the compiler's dependency listing.
 
 ```sh

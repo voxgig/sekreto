@@ -239,8 +239,12 @@ void main(List<String> args) {
 
     ok('cli.dart imports the full set',
         source.contains("import '../plugins/plugins.dart';"));
+    // THE CALL SITE, closing bracket included. `contains('plugins:
+    // allplugins')` is satisfied by `plugins: allplugins.sublist(0, 1)`,
+    // which is a CLI carrying one kind - the exact failure this file
+    // exists to catch, passing the test meant to catch it.
     ok('cli.dart passes the full set',
-        source.contains('plugins: allplugins'));
+        source.contains('plugins: allplugins)'));
   });
 
   // --------------------------------------------------- what a consumer sees
@@ -270,6 +274,28 @@ void main(List<String> args) {
         'host.list');
     eq(['dotenv', 'env', 'file', 'hashicorp', 'memory'],
         secrets.catalog.names(), 'catalog');
+    secrets.close();
+  });
+
+  // ONE CATALOG, HELD TWICE. `Sekreto` is a factory rather than a
+  // generative constructor precisely because an initializer list cannot
+  // share a value between two fields: `catalog` and the host's catalog
+  // would be built separately, agree at construction, and diverge the
+  // moment either gained a definition. Nothing else in this file can see
+  // the difference - two catalogs built from the same list answer every
+  // other question identically - so it is asserted directly.
+  testcase('the catalog the host loads from is the catalog Sekreto checks',
+      () {
+    final secrets = sekreto([], plugins: [hashicorp]);
+
+    ok('Sekreto.catalog and host.catalog are one object',
+        identical(secrets.catalog, secrets.host.catalog));
+
+    // ...and the observable consequence: a definition added to the host
+    // after construction is a kind this Sekreto can build.
+    secrets.host.define(providerplugin('late', (spec) => Shouty(const {})));
+    ok('a late definition is in Sekreto.catalog: ${secrets.catalog.names()}',
+        secrets.catalog.has('late'));
     secrets.close();
   });
 

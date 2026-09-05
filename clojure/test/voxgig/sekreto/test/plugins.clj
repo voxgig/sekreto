@@ -308,7 +308,18 @@
              " voxgig.sekreto.provider voxgig.sekreto.providers")
         (loaded (string/join File/pathSeparator (classpath))
                 "(require 'voxgig.sekreto.plugins.hashicorp)")
-        "what requiring one plugin loads"))
+        "what requiring one plugin loads")
+
+  ;; ...and secretspec, the one kind that reaches no socket, requires no
+  ;; HTTP helper either. It needs the child-process helper and nothing
+  ;; else, and reaching `httpjson` for a one-line default would load
+  ;; `java.net.http` into a process that only ever spawns a child.
+  (same (str "voxgig.sekreto.core voxgig.sekreto.json"
+             " voxgig.sekreto.plugins.proc voxgig.sekreto.plugins.secretspec"
+             " voxgig.sekreto.provider voxgig.sekreto.providers")
+        (loaded (string/join File/pathSeparator (classpath))
+                "(require 'voxgig.sekreto.plugins.secretspec)")
+        "what requiring the one socketless plugin loads"))
 
 ;; The full set is loaded on demand, and reaching it loads everything.
 (defn thefullsetisloadedondemand []

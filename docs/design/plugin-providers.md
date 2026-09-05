@@ -194,9 +194,21 @@ split confusing to use.
   `file`, and the hashicorp cases fail before a socket; the conformance
   suites hand every plugin to every chain they build. What the suites
   cannot see — that the core reaches no plugin, that an unloaded kind is
-  refused, that the full set holds every kind — is pinned per port by
+  refused, and that the CONSUMER's list is right — is pinned per port by
   `lazyload.test.ts` + `plugins.test.ts`, `plugin_test.go` +
   `plugins/plugins_test.go`, and `test_plugins.py`.
+
+  This paragraph used to claim the suites could not see **the full set
+  holding every kind** either. They can. Measured in dart by dropping each
+  of the ten kinds from `allplugins` in turn: every one failed conformance
+  — `hashicorp` three groups, `boru`, `awssecrets`, `onepassword` and
+  `doppler` two, the rest one — because `sources` and `stores` name all
+  ten. The seam test for the full set is still worth keeping; it fails
+  faster and names the kind. It is just not covering a blind spot.
+
+  The consumer's list genuinely is a blind spot, and it is the one that
+  bites: a CLI that passes one plugin instead of ten leaves all fourteen
+  conformance groups green and fails nine integration checks.
 
 ## Propagation order
 

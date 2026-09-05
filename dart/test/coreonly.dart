@@ -2,9 +2,12 @@
 //
 // THE CORE, COMPILED AND RUN WITH THE PLUGINS ABSENT.
 //
-// This file is compiled against `build/core_config.json`, a package map
-// holding voxgig/plugin and NOTHING ELSE, and the compiler is asked for its
-// own dependency listing while it does it. So the proof is the compiler's
+// This file is compiled against `build/package_config.json`, the same
+// package map the library itself is built with - voxgig/plugin and nothing
+// else - and the compiler is asked for its own dependency listing while it
+// does it. That map cannot be the proof, because this port's own files
+// reach each other by RELATIVE import and no package map can stop
+// `../plugins/x.dart`; the listing is. So the proof is the compiler's
 // rather than a reviewer's:
 //
 //   - a chain of the four built-in kinds must work with no plugin imported
