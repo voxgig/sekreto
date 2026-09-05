@@ -102,6 +102,15 @@ PLUGINMODULES := SekretoPlugins.Httpjson SekretoPlugins.Proc \
 # `@[extern]` somebody added to the core.
 FOREIGN := floor
 
+# The two prefix families `check-core` denies outright, and the one it
+# allows. Prefixes, so that a reach nobody thought to name is still
+# caught: `l_IO_Process_` is a compiled Lean function, `lean_io_process_`
+# is the runtime binding under it, and BOTH are spawning. `COREMODS` is
+# the core's whole import set - `Init`, voxgig/plugin, its own modules -
+# read off the two module lists above.
+PROCSYMS := ^(l_IO_NoSuchThing_)
+COREMODS := ^initialize_(Init|Plugin|Sekreto)($$|_)
+
 HOSTOBJS := $(patsubst %,$(IR)/%.o,$(HOSTMODULES))
 OBJS := $(patsubst %,$(IR)/%.o,$(MODULES))
 PLUGINOBJS := $(patsubst %,$(IR)/%.o,$(PLUGINMODULES))
@@ -224,13 +233,32 @@ $(B)/sekreto-core: $(LIB)/.stamp test/CoreOnly.lean
 #   3. the plugin objects reference every one of those names
 #
 # A LIST OF NAMES IS NOT ENOUGH ON ITS OWN, because a core could open a
-# socket under a name nobody thought to list. So the list is backed by two
-# checks that need no list at all: the core's undefined symbols outside
-# Lean's own `l_`/`lean_`/`initialize_` naming must be exactly $(FOREIGN),
-# which is what `Float` arithmetic costs and is the whole of what the core
-# reaches outside the language; and no `l_IO_Process_` symbol of any kind
-# may appear. Reaching a platform from Lean needs an `@[extern]`, and
-# every `@[extern]` is one of those undefined names.
+# socket under a name nobody thought to list. So the list is backed by
+# three checks that need no list at all - and the shape of all three is a
+# PREFIX, never an enumerated API.
+#
+#   1. the core's undefined symbols outside Lean's own `l_`/`lean_`/
+#      `initialize_` naming must be exactly $(FOREIGN), which is what
+#      `Float` arithmetic costs
+#   2. no symbol from $(PROCSYMS) may appear
+#   3. every `initialize_` the core wants must match $(COREMODS)
+#
+# (1) ALONE IS NOT THE PROOF IT LOOKS LIKE, and the reason is worth
+# writing down. The premise "reaching a platform needs an `@[extern]`,
+# and every `@[extern]` falls outside `l_`/`lean_`/`initialize_`" is
+# false: LEAN'S OWN RUNTIME BINDINGS ARE `lean_*`, so `IO.Process.spawn`
+# compiles to an undefined `lean_io_process_spawn` that (1) skips, needs
+# no `@[extern]` of ours and no import at all - `Init` is auto-imported -
+# and links against the runtime. An audit demonstrated it: a core that
+# ran `/bin/sh -c id` passed (1) and the whole target. (2) is widened to
+# `lean_io_process_` for that reason.
+#
+# (3) closes the other half. A module the core has no business importing -
+# `Std.Time`, whose wall clock is `lean_get_current_time`, or a future
+# `Std.Internal.UV.TCP`, whose socket is `lean_uv_tcp_connect` - is an
+# `initialize_` symbol, which (1) also skips. The core's import set is
+# known exactly: `Init`, voxgig/plugin and its own modules. Anything else
+# is the check firing.
 #
 # ...and one more, which is (2) turned around: `SekretoPlugins.Hashicorp`
 # reaches exactly one other plugin module - the shared HTTP client - and
@@ -292,11 +320,23 @@ check-core: $(PLIB)/.stamp $(B)/sekreto-core
 	  test "$$(cat $(B)/core.foreign)" = "$(FOREIGN)" || { \
 	    echo "sekreto: the core declares an @[extern] of its own - every platform call is a plugin's" >&2; \
 	    exit 1; }; \
-	  echo "== and reaches no IO.Process at all"; \
-	  test 0 -lt "$$(grep -c '^l_IO_Process_' $(B)/plugin.undef)" || { \
-	    echo "check-core: no plugin object names IO.Process, so the check proves nothing" >&2; exit 1; }; \
-	  test 0 -eq "$$(grep -c '^l_IO_Process_' $(B)/core.syms)" || { \
-	    echo "sekreto: the core reaches IO.Process - spawning is a plugin's job" >&2; exit 1; }; \
+	  echo "== and spawns nothing, by either name"; \
+	  test 0 -lt "$$(grep -cE '$(PROCSYMS)' $(B)/plugin.undef)" || { \
+	    echo "check-core: no plugin object spawns anything, so the check proves nothing" >&2; exit 1; }; \
+	  test 0 -eq "$$(grep -cE '$(PROCSYMS)' $(B)/core.syms)" || { \
+	    echo "sekreto: the core spawns a process - that is a plugin's job:" >&2; \
+	    grep -E '$(PROCSYMS)' $(B)/core.syms >&2; exit 1; }; \
+	  echo "== and imports Init, voxgig/plugin and its own modules, and nothing else"; \
+	  { grep -E '^initialize_' $(B)/plugin.undef | grep -vE '$(COREMODS)' || true; } \
+	    > $(B)/plugin.extramods; \
+	  test -s $(B)/plugin.extramods || { \
+	    echo "check-core: no object imports past the core's own set, so the check proves nothing" >&2; \
+	    exit 1; }; \
+	  { grep -E '^initialize_' $(B)/core.syms | grep -vE '$(COREMODS)' || true; } \
+	    > $(B)/core.extramods; \
+	  test ! -s $(B)/core.extramods || { \
+	    echo "sekreto: the core imports a module outside Init, voxgig/plugin and its own:" >&2; \
+	    cat $(B)/core.extramods >&2; exit 1; }; \
 	  echo "== one plugin reaches only the shared support it dials"; \
 	  for pair in "Hashicorp:initialize_SekretoPlugins_Httpjson" "Secretspec:initialize_SekretoPlugins_Proc"; do \
 	    mod=$${pair%%:*}; want=$${pair#*:}; \

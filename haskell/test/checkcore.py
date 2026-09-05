@@ -19,11 +19,15 @@ Three claims, each with a control that fails if this script read nothing:
      process cannot open a connection without `socket` and `connect`,
      cannot resolve a name without `getaddrinfo`, cannot speak TLS
      without the OpenSSL entry points, and cannot run a child program
-     without one of the `exec` family.  None of those appears in a bare
-     GHC binary's symbol table, and every one of them appears in
-     build/sekreto-cli.  (`fork` and `syscall` are NOT on the list: the
-     GHC runtime references both on its own, so banning them would be a
-     check that fires on the compiler rather than on this library.)
+     without one of the `exec` family.  The family is named in full -
+     the `l` variants spawn a child exactly as the `v` variants do, and
+     a list that stops at `execv` is a list a core can walk past.  None
+     of these appears in a bare GHC binary's symbol table, and the ones
+     a child process needs appear in build/sekreto-cli, which is the
+     control below.  (`fork`, `syscall`, `dlopen` and `dlsym` are NOT on
+     the list: the GHC runtime references all four on its own, so
+     banning them would be a check that fires on the compiler rather
+     than on this library.)
 
   C  build/sekreto-core loads no libssl and no libcrypto.  build/sekreto-cli
      loads both.
@@ -59,10 +63,23 @@ ONE = os.path.join(PORT, 'build', 'sekreto-one')
 ONEKIND = 'hashicorp'
 ONEMODULES = ['Hashicorp', 'Http', 'Httpjson', 'Json', 'Tls']
 
-# The four kinds the core is allowed to hold, and the modules that hold
-# them. A module missing from here is a module this check never looked at,
-# so the list is asserted against the directory rather than trusted.
+# Every Haskell module the core is ALLOWED to carry, by exact name.
+# COREMODULES is this port's own - the five that hold the four built-in
+# kinds; PLUGINLIBMODULES is voxgig/plugin's, which the core is built on;
+# GHCMODULES is the entry point GHC generates for any program.
+#
+# Claim A is an EQUALITY against the three together, and not only an
+# intersection against plugins/. An intersection answers just "is a
+# plugin in here"; a module the core grew somewhere else - a hand-rolled
+# SHA-256 in src/ under a name no plugin uses - is named after no plugin,
+# and only an equality sees it. That is the lesson claim D already
+# learned, where an intersection passed while a one-plugin build linked
+# the AWS signer.
 COREMODULES = ['Bytes', 'Names', 'Provider', 'Providers', 'Sekreto']
+PLUGINLIBMODULES = ['Capability', 'Catalog', 'Config', 'Defs', 'Depend',
+                    'Export', 'Host', 'Order', 'Point', 'Ref', 'Types',
+                    'Value', 'Version']
+GHCMODULES = ['Main', 'ZCMain']
 
 # The ten plugin kinds, and the module each lives in. `aws` carries two
 # kinds, and Httpjson, Subproc, Http, Tls, Json, Crypto and Sigv4 are the
@@ -86,7 +103,8 @@ BANNED = [
     'socket', 'connect', 'bind', 'listen', 'accept', 'accept4',
     'getaddrinfo', 'gethostbyname', 'send', 'sendto', 'recv', 'recvfrom',
     'execv', 'execve', 'execvp', 'execvpe', 'fexecve',
-    'posix_spawn', 'posix_spawnp', 'system', 'popen',
+    'execl', 'execlp', 'execle',
+    'posix_spawn', 'posix_spawnp', 'system', 'popen', 'pclose',
 ]
 
 # The OpenSSL families, by prefix, because a binding names dozens of them
@@ -152,13 +170,19 @@ def modules(names):
     """The Haskell modules compiled INTO a binary, by exact name.
 
     A home module's symbols are `<Module>_<name>_closure` and friends; a
-    module from a package carries the package id first, and no package id
-    is spelled like one of these module names."""
+    module from a package carries the PACKAGE ID first -
+    `base_GHCziBase_map_closure` - so the leading field there names the
+    package and not a module. A Haskell module name begins with a capital
+    and a package id never does, which is what tells the two apart - and
+    it has to be told, because claim A now asks what the core carries and
+    not merely whether a plugin is among it."""
     found = set()
     for name in names:
         for suffix in ('_closure', '_con_info', '_info'):
             if name.endswith(suffix):
-                found.add(name[: -len(suffix)].split('_')[0])
+                head = name[: -len(suffix)].split('_')[0]
+                if head[:1].isupper():
+                    found.add(head)
                 break
     return found
 
@@ -188,8 +212,11 @@ def main(claim):
     corehome = modules(coresyms)
     clihome = modules(clisyms)
 
-    # CONTROL: the left-hand side is a symbol table that was really read.
-    for module in COREMODULES:
+    # CONTROL: the left-hand side is a symbol table that was really read,
+    # and the allowed list is a list of modules that are really there - so
+    # a rename breaks the list rather than quietly widening what claim A
+    # permits.
+    for module in COREMODULES + PLUGINLIBMODULES:
         if zencode(module) not in corehome:
             fail('control', 'build/sekreto-core has no symbol from ' + module
                  + ' - nm read nothing usable')
@@ -202,10 +229,15 @@ def main(claim):
         fail('control', 'build/sekreto-cli links every plugin, yet this check '
              'found no symbol from ' + ', '.join(missing))
 
-    # A: the core holds no plugin module.
+    # A: the core holds no plugin module, AND nothing else either.
     intruders = sorted(encoded[found] for found in encoded if found in corehome)
+    strangers = sorted(corehome - set(encoded)
+                       - set(COREMODULES) - set(PLUGINLIBMODULES) - set(GHCMODULES))
     if 'core' in claim and intruders:
         fail('A', 'build/sekreto-core carries plugin modules: ' + ', '.join(intruders))
+    if 'core' in claim and strangers:
+        fail('A', 'build/sekreto-core carries modules that are not the core: '
+             + ', '.join(strangers))
 
     # D: one plugin imports only itself. The kind modules are the ten the
     # catalog names; the machinery under them - Httpjson, Http, Tls, Json
@@ -249,7 +281,8 @@ def main(claim):
           + str(len(coresyms)) + ' symbols')
     if 'core' in claim and clean('A'):
         print('  A  no plugin module of ' + str(len(encoded)) + ' (all '
-              + str(len(encoded)) + ' are in the CLI)')
+              + str(len(encoded)) + ' are in the CLI), and its '
+              + str(len(corehome)) + ' modules are exactly the core')
     if 'platform' in claim and clean('B'):
         print('  B  none of ' + str(len(BANNED)) + ' socket, exec and TLS entry points'
               + ' (the CLI has ' + str(len([n for n in BANNED if n in clisyms])) + ')')
