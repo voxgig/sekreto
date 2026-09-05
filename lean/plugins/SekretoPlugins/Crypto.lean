@@ -1,5 +1,10 @@
 /-
-SHA-256, HMAC-SHA256 and strict base64 decoding, hand-rolled.
+SHA-256 and HMAC-SHA256, hand-rolled.
+
+A PLUGIN MODULE, AND THE ONLY ONE THAT HASHES ANYTHING. The core of no
+port imports a hash function: SigV4 is the one thing in this library that
+needs a digest, so the digest lives beside it, inside the aws plugin, and
+a chain of built-ins links neither.
 
 Lean's standard library has no cryptographic primitives at all, and the
 rule that lets this port bind libcurl covers CRYPTOGRAPHIC TRANSPORT and
@@ -13,7 +18,7 @@ these two primitives, and `spec/sekreto.json` carries five known-answer
 signatures - one of them AWS's own published `get-vanilla` vector. One
 wrong bit anywhere below fails there.
 
-A port of rust/src/crypto.rs.
+A port of rust/plugins/aws/src/crypto.rs.
 -/
 
 import Sekreto.Text
@@ -135,52 +140,5 @@ def hmacsha256 (key data : ByteArray) : ByteArray :=
 
 /-- HMAC-SHA256 with a text message, which is every call site here. -/
 def hmac (key : ByteArray) (text : String) : ByteArray := hmacsha256 key text.toUTF8
-
-private def B64ALPHABET : String :=
-  "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-
-private def b64value (ch : Char) : Option Nat :=
-  indexOfChar B64ALPHABET ch
-
-/-- Decode standard (not URL-safe) base64, STRICTLY.
-
-Whitespace is stripped first - the callers accept payloads wrapped across
-lines - and then anything outside the alphabet, a run of more than two
-`=`, or a length that is not a multiple of four is REFUSED. A lenient
-decoder silently skips the bytes it does not recognise and hands back
-plausible-looking bytes for a corrupted payload, which then get returned
-as the secret; refusing is the only safe answer, and every caller turns a
-refusal into an error rather than a miss. -/
-def unbase64 (text : String) : Option ByteArray := Id.run do
-  let chars := text.toList.filter (fun ch => !ch.isWhitespace)
-
-  let body := chars.takeWhile (fun ch => '=' != ch)
-  let tail := chars.drop body.length
-
-  if tail.length > 2 || !tail.all (fun ch => '=' == ch) then return none
-  if 0 != chars.length % 4 then return none
-  if chars.isEmpty then return some ByteArray.empty
-
-  let mut out := ByteArray.empty
-  let mut acc : Nat := 0
-  let mut bits : Nat := 0
-
-  for ch in body do
-    match b64value ch with
-    | none => return none
-    | some value =>
-      acc := acc * 64 + value
-      bits := bits + 6
-      if 8 ≤ bits then
-        out := out.push (UInt8.ofNat ((acc >>> (bits - 8)) % 256))
-        bits := bits - 8
-        acc := acc % (2 ^ bits)
-
-  return some out
-
-/-- Decode base64 to text. Nothing when the payload is not strict base64,
-or is not UTF-8 once decoded. -/
-def unbase64text (text : String) : Option String :=
-  (unbase64 text).bind String.fromUTF8?
 
 end Sekreto

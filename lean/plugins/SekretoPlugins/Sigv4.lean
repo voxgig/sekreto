@@ -4,7 +4,7 @@ AWS Signature Version 4, hand-rolled.
 The AWS providers need exactly one thing from the AWS SDK - request
 signing - and taking the SDK for it would break the no-dependency rule
 that keeps the ports honest. SigV4 is a stable, published algorithm built
-from HMAC-SHA256, which src/Sekreto/Crypto.lean supplies.
+from HMAC-SHA256, which SekretoPlugins.Crypto supplies.
 
 `sigv4` is pure: the caller passes the timestamp, so the same input
 yields the same signature everywhere. That is what lets the shared spec
@@ -17,7 +17,8 @@ A port of typescript/plugins/sigv4.ts, which is canonical.
 
 import Sekreto.Text
 import Sekreto.Json
-import Sekreto.Crypto
+import SekretoPlugins.Crypto
+import SekretoPlugins.Httpjson
 
 namespace Sekreto
 
@@ -35,18 +36,6 @@ structure Signing where
   body : String := ""
   session : String := ""
   deriving Inhabited
-
-/-- RFC 3986 escaping, which is stricter than the usual URL encoder: AWS
-wants everything but the unreserved set escaped, byte by byte over UTF-8,
-with UPPERCASE hex. `!'()*` are escaped too - that is the gap against
-JavaScript's `encodeURIComponent`. -/
-def uriescape (text : String) : String :=
-  text.toUTF8.toList.foldl (fun out byte =>
-    let ch := Char.ofNat byte.toNat
-    if ('A' ≤ ch && ch ≤ 'Z') || ('a' ≤ ch && ch ≤ 'z') || ('0' ≤ ch && ch ≤ '9') ||
-        '-' == ch || '_' == ch || '.' == ch || '~' == ch then
-      out.push ch
-    else out ++ "%" ++ hexbyteupper byte) ""
 
 /-- Percent-decode, and nothing else: `+` stays `+`, as it is on the
 wire, and a malformed `%` escape is kept literally, the way a browser

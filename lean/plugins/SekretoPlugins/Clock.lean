@@ -1,11 +1,16 @@
 /-
 The wall clock, and the one timestamp sekreto formats.
 
-Lean 4.16 has `IO.monoMsNow`, a monotonic millisecond counter - which is
-exactly what token renewal wants, and what `renewat` uses. It has no wall
-clock at all, and SigV4 signs a `YYYYMMDDTHHMMSSZ` stamp, so the seconds
-since the epoch come through a two-line binding to libc's `time()` in
-ffi/sekreto_clock.c.
+A PLUGIN MODULE: SigV4 is the only thing in this library that reads a
+calendar, so the wall clock lives inside the aws plugin with it and the
+core links neither this nor ffi/sekreto_clock.c. Token renewal wants
+elapsed time rather than a date and uses `IO.monoMsNow`, which Lean has;
+`renewat` is in `SekretoPlugins.Httpjson` with the other helpers the
+dialing plugins share.
+
+Lean has no wall clock at all, and SigV4 signs a `YYYYMMDDTHHMMSSZ`
+stamp, so the seconds since the epoch come through a two-line binding to
+libc's `time()` in ffi/sekreto_clock.c.
 
 The CALENDAR is computed here rather than delegated to `gmtime`, so that
 the arithmetic is readable and testable in Lean: it is Howard Hinnant's
@@ -52,19 +57,5 @@ def awsstamp (epoch : Nat) : String :=
 this library that reads the wall clock; `sigv4` itself never does. -/
 def awsnow : IO String := do
   return awsstamp (← epochseconds).toNat
-
-/-- Never renew. -/
-def NEVER : Nat := 0xffffffffffffffff
-
-/-- When a logged-in token must be renewed, from its expiry in seconds:
-now + max(seconds - 60, 1). A missing or zero expiry means never renew,
-so a CONFIGURED token is kept for the life of the process.
-
-Monotonic milliseconds, not the wall clock: a machine whose clock steps
-backwards must not stop renewing. -/
-def renewat (seconds : Float) : IO Nat := do
-  if seconds.isNaN || 0.0 ≥ seconds then return NEVER
-  let ahead := if seconds - 60.0 < 1.0 then 1.0 else seconds - 60.0
-  return (← IO.monoMsNow) + (ahead * 1000.0).toUInt64.toNat
 
 end Sekreto
