@@ -4,43 +4,109 @@ The OCaml port of [sekreto](../README.md): one interface for secrets,
 wherever they live.
 
 ```sh
-make test                     # the conformance suite
+make deps                     # find or fetch voxgig/plugin
+make test                     # the conformance suite, and the plugin seam
+make coreproof                # what a chain of built-ins actually links
 ```
 
-The library and the CLI depend on the OCaml distribution and on one thing
-more: **OpenSSL, for TLS and for nothing else**. OCaml has sockets in
-`Unix` and no TLS at all, and TLS is the one thing this repository has
-decided must not be hand-rolled — so `src/tls_stubs.c` binds `libssl` and
-the `libcrypto` beneath it, exactly as ocaml-ssl and conduit do. That
-binding is the whole of the port's third-party surface, and the audit
-surface is the distribution's OpenSSL, not the direct edge. Everything
-else a standard library lacks is written in-tree: JSON, HTTP/1.1 framing,
-base64, SHA-256 and HMAC. Reaching into the already-linked `libcrypto` for
-a digest would widen "cryptographic transport is not hand-rolled" into
+The library and the CLI depend on the OCaml distribution, on
+[voxgig/plugin](https://github.com/voxgig/plugin), and on one thing more:
+**OpenSSL, for TLS and for nothing else**. OCaml has sockets in `Unix` and
+no TLS at all, and TLS is the one thing this repository has decided must
+not be hand-rolled, so `plugins/tls_stubs.c` binds `libssl` and the
+`libcrypto` beneath it, exactly as ocaml-ssl and conduit do. That binding
+is the whole of the port's third-party surface, and the audit surface is
+the distribution's OpenSSL rather than the direct edge. Everything else a
+standard library lacks is written in-tree: JSON, HTTP/1.1 framing, base64,
+SHA-256 and HMAC. Reaching into the already-linked `libcrypto` for a
+digest would widen "cryptographic transport is not hand-rolled" into
 "cryptography is not hand-rolled", which is not the rule.
 
 There is no dune, no ocamlfind, and no opam. `ocamlopt` is driven directly
 from the Makefile — the same shape the sibling voxgig/plugin OCaml port
 takes — which is what keeps a consumer of this library free of a package
 manager, and what settles the choice between C stubs and the `ocaml-ssl`
-opam package in favour of the stubs. Only the conformance suite needs
-voxgig/omni, and only on its own compile line.
+opam package in favour of the stubs. voxgig/plugin has no opam release
+either, so the Makefile finds a checkout the way every port finds its
+sibling repositories and compiles its modules into `build/plugin.cmxa`;
+`make deps` fetches a shallow clone when there is none. Only the
+conformance suite needs voxgig/omni, and only on its own compile line.
 
 The optional lookup is `tryget`, since `try` is a keyword, and the chain's
 own redaction is `redacttext`, since the free `redact` it delegates to
 lives in the same module. Everything else keeps its canonical name. A
 provider answers `string option`, where `None` is the miss that sends the
 chain on to the next store, and the chain's reads are functions over a
-`Sekreto.t` rather than methods. `Providers.sekreto` builds a chain from
-specs; it lives beside the kind table rather than beside the facade because
-OCaml compiles a module before anything that uses it, and the facade cannot
-name the kind table without the kind table naming the facade back.
+`Sekreto.t` rather than methods. `Sekreto.sekreto` builds a chain from
+specs, `Sekreto.make` from providers you built yourself.
 
-## Built in
+## The core, and the plugins
 
-All fourteen provider kinds are in `src/providers.ml` and dispatched by a
-match on `spec.kind`. The plugin split is pending, as it is for the other
-monolithic ports.
+Four provider kinds are **built in** — `env`, `memory`, `dotenv` and
+`file` — and what makes them built in is that they read at most a local
+file. Everything that opens a socket, signs a request, or spawns a process
+is a [voxgig/plugin](https://github.com/voxgig/plugin) definition in its
+own module under `plugins/`, and a chain can build exactly the kinds its
+constructor was handed:
+
+```ocaml
+let secrets =
+  Sekreto.sekreto
+    ~plugins:[ Hashicorp.plugin () ]
+    [
+      { Provider.nospec with kind = "memory"; values = local };
+      { Provider.nospec with kind = "hashicorp"; name = "prod"; addr; token };
+    ]
+```
+
+Loading is explicit and never a side effect of compiling a module: a list
+handed to a constructor cannot be erased, and the set of stores an app can
+reach is not something to discover at run time. A kind that was not passed
+in is refused with a message that names the fix. Each configured provider
+is an instance on `Sekreto.host secrets`, addressed by name and tag —
+`hashicorp` for a store named after its kind and `hashicorp$prod`
+otherwise — so `Host.list` reads like the chain.
+
+**The linker is the boundary here, and it is checkable.** The core is
+compiled against `build/core`, a staging directory holding the core's own
+interfaces and voxgig/plugin's and not one interface from `plugins/`, so a
+core module that named a plugin would not compile. `make coreproof` then
+reads the built artifacts back:
+
+```sh
+$ nm build/coreonly | sed -n 's/.* T caml\([A-Za-z0-9_]*\)__entry$/\1/p' | sort
+...
+Json
+Order
+Point
+Provider
+Ref
+Secret
+Sekreto
+...
+$ ldd build/coreonly | grep -c ssl
+0
+```
+
+`build/coreonly` is a whole program whose chain is the four built-ins.
+Every compilation unit it links has one `caml<Unit>__entry` symbol, and
+not one of them is `Http`, `Tls`, `Sigv4`, `Crypto` or a provider kind. So
+a consumer whose chain is `[dotenv; env]` links no TLS, no HTTP client and
+no request signing, and loads no OpenSSL at all. `test/plugins.ml` pins
+both readings, unit by unit and by exact name, with the same extraction
+run over the CLI as a control.
+
+`sigv4` travels with the AWS plugin and `crypto.ml` with it: the core of
+no port imports a hash function. `plugins/secretspec.ml` reads its store
+through a child process rather than a socket, so it reaches no transport
+either, which `test/plugins.ml` also pins.
+
+A plugin value carries numbers, strings, lists and maps, never a closure,
+so a definition's `define` exports the HANDLE of the provider it built and
+the facade reads it back — the shape the Zig port takes for the same
+reason. The instance's options map is the spec itself, under the spec's
+own key names, so the map a config document would carry is the map an
+instance carries.
 
 ## Use
 

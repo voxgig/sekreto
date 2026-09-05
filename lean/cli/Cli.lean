@@ -19,9 +19,17 @@ ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed in
 It runs from an EMPTY working directory with a wiped environment, so it
 needs nothing on disk beside itself: the binary is statically linked
 against the library and carries no module path of its own.
+
+IT PASSES THE WHOLE PLUGIN SET, because `--source` can name any of the
+fourteen kinds and the source is a run-time argument. That is the one
+thing about this split the conformance suite cannot see: it hands every
+plugin to every chain it builds, so a CLI passing one plugin instead of
+ten would leave all fourteen groups green and fail nine integration
+checks. `test/SekretoTest.lean` pins the call site below instead.
 -/
 
 import Sekreto
+import SekretoPlugins
 
 open Sekreto
 
@@ -149,7 +157,8 @@ def run (args : List String) : IO UInt32 := do
   -- can route its own failure through `redactText`: once a provider has
   -- answered, an error message may quote what it answered, and the suite
   -- greps stderr as well as stdout on both the pass and the fail path.
-  let chain ← tryCatch (do return some (← sekreto (← chainfor source)))
+  let chain ← tryCatch (do
+      return some (← sekreto { plugins := allplugins, providers := ← chainfor source }))
     (fun err => do
       IO.eprintln ("sekreto-cli: " ++ why err)
       return none)
