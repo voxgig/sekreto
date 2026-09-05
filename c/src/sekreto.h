@@ -43,8 +43,9 @@
  * manager, so a consumer compiles with its source directory on the
  * include path - the Makefile finds the checkout the way it finds omni.
  * `host.h` pulls in `catalog.h`, `types.h`, `value.h` and `point.h`
- * with it, which is the whole of the surface used here. */
+ * with it; `ref.h` is the name+tag grammar a store name has to satisfy. */
 #include "host.h"
+#include "ref.h"
 
 /* An error message, or NULL when the call succeeded. Pool-owned. */
 typedef const char *sek_err;
@@ -54,6 +55,18 @@ typedef const char *sek_err;
 typedef struct sek_pool sek_pool;
 
 sek_pool *sek_pool_new(void);
+
+/* Releases everything the pool handed out.
+ *
+ * IT DOES NOT TOUCH voxgig/plugin's ARENA, and that is deliberate rather
+ * than an omission. plugin's C port allocates every Value from one
+ * process-global arena freed all at once by `arena_reset`, so resetting
+ * it on behalf of one pool would free the instance options and exported
+ * values of every OTHER live Sekreto in the process. The declarations a
+ * chain makes are therefore held until the process exits: a few hundred
+ * bytes per configured provider, on an application's startup path. A
+ * process that builds chains without end, and knows it holds none, may
+ * call `arena_reset` itself. */
 void sek_pool_free(sek_pool *pool);
 
 /* Zeroed memory from the pool. Never returns NULL: an arena that cannot
@@ -220,6 +233,18 @@ struct sek_provider {
  * describe() up to the first `:`. */
 char *sek_storename(sek_pool *pool, sek_provider *provider);
 
+/* A provider with its two function pointers and its private data filled
+ * in. Every kind uses it, built in or plugin, shipped or a consumer's
+ * own, so there is one shape and not two. */
+sek_provider *sek_provider_new(sek_pool *pool,
+                               sek_err (*lookup)(sek_provider *, const char *, char **),
+                               const char *(*describe)(sek_provider *), void *data);
+
+/* A spec string, copied into the pool: a spec is the caller's and may be
+ * a stack value that is gone by the first lookup, while the provider
+ * built from it lives as long as the pool. */
+const char *sek_own(sek_pool *pool, const char *text);
+
 /* ---- provider specs ------------------------------------------------ */
 
 /* Logging in to a vault instead of being handed a token. */
@@ -289,7 +314,7 @@ sek_spec sek_spec_new(const char *kind);
 char *sek_spec_show(sek_pool *pool, const sek_spec *spec);
 char *sek_authspec_show(sek_pool *pool, const sek_authspec *auth);
 
-/* ---- provider kinds, as voxgig/plugin definitions ------------------- */
+/* ---- provider kinds, as voxgig/plugin definitions ------------------ */
 
 /* The export key a provider definition publishes its provider under.
  * sek_new reads `<ref>/provider` back off the host. */
@@ -377,7 +402,7 @@ typedef struct {
    * unknown to this Sekreto. There is no registry and nothing is
    * discovered: a list handed to a constructor cannot be erased by a
    * compiler, and a linker cannot drop what a translation unit names. */
-  Definition *const *plugins;
+  Definition **plugins;
   size_t plugincount;
 
   /* Nonzero disables the resolved-value cache. Spelled as the negative so

@@ -18,6 +18,18 @@
  * It runs from an EMPTY working directory with a wiped environment, so it
  * needs nothing on disk beside itself: a single statically-linked-against-
  * libsekreto binary, with only libssl, libcrypto and libc dynamic.
+ *
+ * IT PASSES THE FULL PLUGIN SET, because its `--source` can name any of
+ * the fourteen kinds and the chain is chosen at run time. That makes it
+ * the fat consumer the split exists to let an app avoid: linking
+ * `sek_allplugins` pulls every vault client, the TLS binding and AWS
+ * request signing into this binary. An app that configures two stores
+ * names two plugin objects instead.
+ *
+ * The conformance suite cannot see this list - it hands every plugin to
+ * every chain it builds - so test/plugintest.c pins the call site below,
+ * closing bracket included. A CLI that passed one plugin instead of ten
+ * would leave all fourteen groups green and fail nine integration checks.
  */
 
 #define _POSIX_C_SOURCE 200809L
@@ -26,7 +38,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "../src/sekreto.h"
+#include "sekreto.h"
+#include "sekretoplugins.h"
 
 static const char *LANG = "c";
 
@@ -244,6 +257,7 @@ int main(int argc, char **argv) {
   const char *source = flag(argc, argv, "--source");
   const char *store = flag(argc, argv, "--store");
   sek_spec specs[4];
+  sek_options options;
   size_t count;
   sek_sekreto *secrets = NULL;
   sek_err err;
@@ -258,9 +272,14 @@ int main(int argc, char **argv) {
   }
 
   memset(specs, 0, sizeof(specs));
+  memset(&options, 0, sizeof(options));
   count = chainfor(pool, source, specs);
 
-  err = sek_sekreto_of(pool, specs, count, 1, &secrets);
+  options.providers = specs;
+  options.count = count;
+  options.plugincount = sek_allplugins(&options.plugins);
+
+  err = sek_new(pool, &options, &secrets);
   if (NULL != err) {
     /* A construction failure is still "the secret could not be
      * obtained", which is exit 2. */

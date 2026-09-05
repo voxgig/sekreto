@@ -13,8 +13,8 @@ defmodule Sekreto.Plugins.Doppler do
   alias Sekreto.Cell
   alias Sekreto.Error
   alias Sekreto.Json
+  alias Sekreto.Plugins.Http
   alias Sekreto.Plugins.Httpjson
-  alias Sekreto.Plugins.Sigv4
   alias Sekreto.ProviderSpec
   alias Sekreto.Providers
 
@@ -48,8 +48,8 @@ defmodule Sekreto.Plugins.Doppler do
       url =
         useaddr <>
           "/v3/configs/config/secrets/download?format=json" <>
-          if("" == project, do: "", else: "&project=" <> Sigv4.uriescape(project)) <>
-          if("" == config, do: "", else: "&config=" <> Sigv4.uriescape(config))
+          if("" == project, do: "", else: "&project=" <> Http.uriescape(project)) <>
+          if("" == config, do: "", else: "&config=" <> Http.uriescape(config))
 
       res = Httpjson.fetchjson("GET", url, [{"authorization", "Bearer " <> token}])
       body = Json.asobj(res.body)

@@ -15,7 +15,6 @@ defmodule Sekreto.Plugins.Azuresecrets do
   alias Sekreto.Json
   alias Sekreto.Plugins.Http
   alias Sekreto.Plugins.Httpjson
-  alias Sekreto.Plugins.Sigv4
   alias Sekreto.ProviderSpec
   alias Sekreto.Providers
 
@@ -57,10 +56,10 @@ defmodule Sekreto.Plugins.Azuresecrets do
 
           form =
             "grant_type=client_credentials&client_id=" <>
-              Sigv4.uriescape(opts.clientid) <>
+              Http.uriescape(opts.clientid) <>
               "&client_secret=" <>
-              Sigv4.uriescape(opts.clientsecret) <>
-              "&scope=" <> Sigv4.uriescape(@resource <> "/.default")
+              Http.uriescape(opts.clientsecret) <>
+              "&scope=" <> Http.uriescape(@resource <> "/.default")
 
           res =
             Httpjson.fetchjson(
@@ -76,13 +75,14 @@ defmodule Sekreto.Plugins.Azuresecrets do
             raise Error, message: "sekreto: azure login failed: " <> Httpjson.tostr(res.status)
           end
 
-          Cell.put(cell, %{token: got, renewat: Httpjson.renewtime(Json.dig(res.body, ["expires_in"]))})
+          renewat = Httpjson.renewtime(Json.dig(res.body, ["expires_in"]))
+          Cell.put(cell, %{token: got, renewat: renewat})
 
         true ->
           imds =
             Httpjson.trimslash(Providers.first([opts.imdsaddr, "http://169.254.169.254"])) <>
               "/metadata/identity/oauth2/token?api-version=2018-02-01&resource=" <>
-              Sigv4.uriescape(@resource)
+              Http.uriescape(@resource)
 
           res = Httpjson.fetchjson("GET", imds, [{"Metadata", "true"}])
           got = Json.text(Json.dig(res.body, ["access_token"]))
@@ -93,7 +93,8 @@ defmodule Sekreto.Plugins.Azuresecrets do
           end
 
           # IMDS sends expires_in as a STRING, unlike everyone else.
-          Cell.put(cell, %{token: got, renewat: Httpjson.renewtime(Json.dig(res.body, ["expires_in"]))})
+          renewat = Httpjson.renewtime(Json.dig(res.body, ["expires_in"]))
+          Cell.put(cell, %{token: got, renewat: renewat})
       end
     end
 
@@ -118,9 +119,11 @@ defmodule Sekreto.Plugins.Azuresecrets do
         url =
           Httpjson.trimslash(vaulturl) <>
             "/secrets/" <>
-            Sekreto.flatname(name, "-") <> "?api-version=" <> Providers.first([opts.apiversion, "7.4"])
+            Sekreto.flatname(name, "-") <>
+            "?api-version=" <> Providers.first([opts.apiversion, "7.4"])
 
-        res = Httpjson.fetchjson("GET", url, [{"authorization", "Bearer " <> Cell.get(cell).token}])
+        res =
+          Httpjson.fetchjson("GET", url, [{"authorization", "Bearer " <> Cell.get(cell).token}])
 
         cond do
           404 == res.status ->
@@ -128,7 +131,8 @@ defmodule Sekreto.Plugins.Azuresecrets do
 
           200 != res.status ->
             raise Error,
-              message: "sekreto: azure error: " <> Httpjson.tostr(res.status) <> ": " <> Http.bare(url)
+              message:
+                "sekreto: azure error: " <> Httpjson.tostr(res.status) <> ": " <> Http.bare(url)
 
           true ->
             Httpjson.nonone(Json.text(Json.dig(res.body, ["value"])))

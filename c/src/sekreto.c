@@ -618,31 +618,18 @@ static sek_err build(sek_sekreto *sek, const sek_options *options) {
   return NULL;
 }
 
-sek_err sek_new(sek_pool *pool, const sek_options *options, sek_sekreto **out) {
-  sek_sekreto *sek = (sek_sekreto *)sek_alloc(pool, sizeof(sek_sekreto));
-  sek_options empty;
+/* Construction, inside the one catch frame the whole of it runs under.
+ *
+ * Its own function so that nothing a `longjmp` comes back through is a
+ * parameter this code then modifies: `options` and `sek` are read-only
+ * here, and only `failure` straddles the frame. -Wclobbered is on, and it
+ * is the warning that catches exactly this. */
+static sek_err construct(sek_pool *pool, const sek_options *options, sek_sekreto *sek) {
   CatchFrame frame;
   /* volatile because it is written inside the frame and read after a
    * longjmp has come back through it. C guarantees nothing else about a
-   * local that a setjmp handler reads, and -Wclobbered says so. */
+   * local a setjmp handler reads. */
   volatile sek_err failure = NULL;
-
-  memset(&empty, 0, sizeof(empty));
-  if (NULL == options) {
-    options = &empty;
-  }
-
-  sek->pool = pool;
-  sek->catalog = makecatalog();
-  sek->host = NULL;
-  sek->count = 0;
-  sek->docache = 0 == options->nocache;
-  sek->entries =
-      (entry *)sek_alloc(pool, (0 == options->count ? 1 : options->count) * sizeof(entry));
-  sek->cachecap = 8;
-  sek->cache = (cached *)sek_alloc(pool, sek->cachecap * sizeof(cached));
-  sek->cachelen = 0;
-  sek->seen = sek_list_new(pool);
 
   /* The pool reaches each kind's `define` through here, and the providers
    * come back the same way. Held for exactly this call. */
@@ -662,6 +649,29 @@ sek_err sek_new(sek_pool *pool, const sek_options *options, sek_sekreto **out) {
 
   sek_build_end();
 
+  return failure;
+}
+
+sek_err sek_new(sek_pool *pool, const sek_options *options, sek_sekreto **out) {
+  sek_sekreto *sek = (sek_sekreto *)sek_alloc(pool, sizeof(sek_sekreto));
+  sek_options empty;
+  sek_err failure;
+
+  memset(&empty, 0, sizeof(empty));
+
+  sek->pool = pool;
+  sek->catalog = makecatalog();
+  sek->host = NULL;
+  sek->count = 0;
+  sek->docache = NULL == options || 0 == options->nocache;
+  sek->entries = (entry *)sek_alloc(
+      pool, (NULL == options || 0 == options->count ? 1 : options->count) * sizeof(entry));
+  sek->cachecap = 8;
+  sek->cache = (cached *)sek_alloc(pool, sek->cachecap * sizeof(cached));
+  sek->cachelen = 0;
+  sek->seen = sek_list_new(pool);
+
+  failure = construct(pool, NULL == options ? &empty : options, sek);
   if (NULL != failure) {
     return failure;
   }

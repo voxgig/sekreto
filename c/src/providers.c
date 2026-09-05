@@ -207,7 +207,7 @@ sek_err sek_checkaddr(sek_pool *pool, const char *addr) {
                  sek_safeaddr(pool, addr));
 }
 
-/* ---- the four built-in kinds ---------------------------------------- */
+/* ---- the four built-in kinds --------------------------------------- */
 
 /* `env`, `memory`, `dotenv` and `file`: the floor every chain stands on.
  * A chain of these works with no plugin loaded at all, which is the
@@ -416,7 +416,7 @@ static const char *file_describe(sek_provider *self) {
 }
 
 
-/* ---- a spec, as a plugin instance's options -------------------------- */
+/* ---- a spec, as a plugin instance's options ------------------------ */
 
 /* The spec's own key names - the ones the shared spec and a config file
  * use - paired with where each lands in a sek_spec.
@@ -588,7 +588,7 @@ static sek_spec specof(sek_pool *pool, Value *options) {
   return spec;
 }
 
-/* ---- the bridge ----------------------------------------------------- */
+/* ---- the bridge ---------------------------------------------------- */
 
 /* WHAT `define` NEEDS AND A voxgig/plugin Definition CANNOT CARRY.
  *
@@ -690,17 +690,21 @@ Definition *sek_providerplugin(sek_providerkind *slot, const char *kind, sek_mak
   return &slot->def;
 }
 
-/* ---- the built-in kinds, as definitions ----------------------------- */
+/* ---- the built-in kinds, as definitions ---------------------------- */
 
 /* A spec string, copied into the pool: a spec is the caller's and may be
- * a stack value that is gone by the first lookup. */
-static const char *own(sek_pool *pool, const char *text) {
+ * a stack value that is gone by the first lookup.
+ *
+ * Not static, and neither is the one below it: every plugin's `make` is
+ * written against the same two, so a kind under `plugins/` is built
+ * exactly the way a built-in is. */
+const char *sek_own(sek_pool *pool, const char *text) {
   return NULL == text ? NULL : sek_strdup(pool, text);
 }
 
-static sek_provider *provider(sek_pool *pool,
-                              sek_err (*lookup)(sek_provider *, const char *, char **),
-                              const char *(*describe)(sek_provider *), void *data) {
+sek_provider *sek_provider_new(sek_pool *pool,
+                               sek_err (*lookup)(sek_provider *, const char *, char **),
+                               const char *(*describe)(sek_provider *), void *data) {
   sek_provider *out = (sek_provider *)sek_alloc(pool, sizeof(sek_provider));
 
   out->lookup = lookup;
@@ -715,11 +719,11 @@ static sek_err env_make(sek_pool *pool, const sek_spec *spec, sek_provider **out
   envdata *data = (envdata *)sek_alloc(pool, sizeof(envdata));
 
   data->pool = pool;
-  data->prefix = own(pool, spec->prefix);
+  data->prefix = sek_own(pool, spec->prefix);
   data->described =
       sek_empty(spec->prefix) ? sek_strdup(pool, "env") : sek_fmt(pool, "env:%s", spec->prefix);
 
-  *out = provider(pool, env_lookup, env_describe, data);
+  *out = sek_provider_new(pool, env_lookup, env_describe, data);
 
   return NULL;
 }
@@ -728,7 +732,7 @@ static sek_err memory_make(sek_pool *pool, const sek_spec *spec, sek_provider **
   memorydata *data = (memorydata *)sek_alloc(pool, sizeof(memorydata));
 
   data->pool = pool;
-  data->prefix = own(pool, spec->prefix);
+  data->prefix = sek_own(pool, spec->prefix);
   data->values = sek_map_new(pool);
   if (NULL != spec->values) {
     size_t index;
@@ -739,7 +743,7 @@ static sek_err memory_make(sek_pool *pool, const sek_spec *spec, sek_provider **
   data->described = sek_empty(spec->prefix) ? sek_strdup(pool, "memory")
                                             : sek_fmt(pool, "memory:%s", spec->prefix);
 
-  *out = provider(pool, memory_lookup, memory_describe, data);
+  *out = sek_provider_new(pool, memory_lookup, memory_describe, data);
 
   return NULL;
 }
@@ -748,12 +752,12 @@ static sek_err dotenv_make(sek_pool *pool, const sek_spec *spec, sek_provider **
   dotenvdata *data = (dotenvdata *)sek_alloc(pool, sizeof(dotenvdata));
 
   data->pool = pool;
-  data->file = own(pool, sek_empty(spec->file) ? ".env" : spec->file);
-  data->prefix = own(pool, spec->prefix);
+  data->file = sek_own(pool, sek_empty(spec->file) ? ".env" : spec->file);
+  data->prefix = sek_own(pool, spec->prefix);
   data->values = NULL;
   data->described = sek_fmt(pool, "dotenv:%s", data->file);
 
-  *out = provider(pool, dotenv_lookup, dotenv_describe, data);
+  *out = sek_provider_new(pool, dotenv_lookup, dotenv_describe, data);
 
   return NULL;
 }
@@ -762,11 +766,11 @@ static sek_err file_make(sek_pool *pool, const sek_spec *spec, sek_provider **ou
   filedata *data = (filedata *)sek_alloc(pool, sizeof(filedata));
 
   data->pool = pool;
-  data->dir = own(pool, sek_orempty(spec->dir));
-  data->prefix = own(pool, spec->prefix);
+  data->dir = sek_own(pool, sek_orempty(spec->dir));
+  data->prefix = sek_own(pool, spec->prefix);
   data->described = sek_fmt(pool, "file:%s", data->dir);
 
-  *out = provider(pool, file_lookup, file_describe, data);
+  *out = sek_provider_new(pool, file_lookup, file_describe, data);
 
   return NULL;
 }

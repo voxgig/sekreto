@@ -13,8 +13,8 @@ defmodule Sekreto.Plugins.Infisical do
   alias Sekreto.Cell
   alias Sekreto.Error
   alias Sekreto.Json
+  alias Sekreto.Plugins.Http
   alias Sekreto.Plugins.Httpjson
-  alias Sekreto.Plugins.Sigv4
   alias Sekreto.ProviderSpec
   alias Sekreto.Providers
 
@@ -68,7 +68,8 @@ defmodule Sekreto.Plugins.Infisical do
         end
 
         # camelCase, unlike everyone else's expires_in.
-        Cell.put(cell, %{token: got, renewat: Httpjson.renewtime(Json.dig(res.body, ["expiresIn"]))})
+        renewat = Httpjson.renewtime(Json.dig(res.body, ["expiresIn"]))
+        Cell.put(cell, %{token: got, renewat: renewat})
       end
     end
 
@@ -88,16 +89,18 @@ defmodule Sekreto.Plugins.Infisical do
             "/api/v3/secrets/raw/" <>
             Sekreto.envkey(name) <>
             "?workspaceId=" <>
-            Sigv4.uriescape(opts.project) <>
+            Http.uriescape(opts.project) <>
             "&environment=" <>
-            Sigv4.uriescape(opts.environment) <>
-            "&secretPath=" <> Sigv4.uriescape(Providers.first([opts.path, "/"]))
+            Http.uriescape(opts.environment) <>
+            "&secretPath=" <> Http.uriescape(Providers.first([opts.path, "/"]))
 
-        res = Httpjson.fetchjson("GET", url, [{"authorization", "Bearer " <> Cell.get(cell).token}])
+        res =
+          Httpjson.fetchjson("GET", url, [{"authorization", "Bearer " <> Cell.get(cell).token}])
 
         cond do
           404 == res.status -> nil
-          200 != res.status -> raise Error, message: "sekreto: infisical error: " <> Httpjson.tostr(res.status)
+          200 != res.status ->
+            raise Error, message: "sekreto: infisical error: " <> Httpjson.tostr(res.status)
           true -> Httpjson.nonone(Json.text(Json.dig(res.body, ["secret", "secretValue"])))
         end
       end,

@@ -29,6 +29,12 @@
 #include "Json.hpp"
 #include "Providers.hpp"
 #include "Sekreto.hpp"
+
+// THE SUITE PASSES THE FULL SET. The spec's chains name kinds from both
+// sides of the split - `memory` and `file` for the chain groups, the seven
+// HTTP kinds for the ones that must fail before a socket - so the suite is
+// a consumer that wants all ten, exactly as the CLI is.
+#include "All.hpp"
 #include "Sigv4.hpp"
 
 namespace {
@@ -180,7 +186,7 @@ sekreto::Sekreto chainof(const J& entry) {
     for (const J& one : list.listval) chain.push_back(specof(one));
   }
 
-  return sekreto::makesekreto(chain, false);
+  return sekreto::makesekreto(chain, sekreto::allplugins(), false);
 }
 
 /// The name a group's entry asks about.

@@ -63,7 +63,12 @@ defmodule Sekreto.Plugins.Aws do
   an AWS store with no credentials could not answer.
   """
   def awsauth(region, keyid, secret, session) do
-    useregion = Providers.first([region, Providers.getenv("AWS_REGION"), Providers.getenv("AWS_DEFAULT_REGION")])
+    useregion =
+      Providers.first([
+        region,
+        Providers.getenv("AWS_REGION"),
+        Providers.getenv("AWS_DEFAULT_REGION")
+      ])
     usekeyid = Providers.first([keyid, Providers.getenv("AWS_ACCESS_KEY_ID")])
     usesecret = Providers.first([secret, Providers.getenv("AWS_SECRET_ACCESS_KEY")])
     usesession = Providers.first([session, Providers.getenv("AWS_SESSION_TOKEN")])
@@ -158,7 +163,8 @@ defmodule Sekreto.Plugins.Aws do
             nil
 
           200 != res.status ->
-            raise Error, message: "sekreto: aws secretsmanager error: " <> Httpjson.tostr(res.status)
+            raise Error,
+              message: "sekreto: aws secretsmanager error: " <> Httpjson.tostr(res.status)
 
           true ->
             case Json.asstr(Json.dig(res.body, ["SecretString"])) do

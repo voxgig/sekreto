@@ -18,6 +18,12 @@
 #
 # TLS is NOT hand-rolled: `:ssl` is OTP's, and it is the audit surface.
 #
+# THE URL FUNCTIONS LIVE HERE, not with the signer that also needs them.
+# Splitting a URL and escaping a query parameter is what a client does on
+# every request; SigV4 canonicalises the same pieces, so it calls these -
+# the other way round would make every HTTPS kind reach a hash function
+# for a string function. Ruby's port draws the same line.
+#
 # The models are rust/src/http.rs and the framing recipe every port
 # without a client follows.
 
@@ -30,7 +36,6 @@ defmodule Sekreto.Plugins.Http do
   """
 
   alias Sekreto.Error
-  alias Sekreto.Plugins.Sigv4
 
   # How long any single vault round-trip may take before the store is
   # treated as unreachable. Ports carry the same bound, and it covers the
@@ -54,6 +59,145 @@ defmodule Sekreto.Plugins.Http do
   def bare(url), do: url |> :binary.split("?") |> hd()
 
   @doc """
+  RFC 3986 escaping, which is stricter than the usual URL encoder: AWS
+  wants everything but unreserved characters escaped, with uppercase hex.
+  """
+  def uriescape(text) do
+    text
+    |> :binary.bin_to_list()
+    |> Enum.map_join("", fn ch ->
+      if (?A <= ch and ?Z >= ch) or (?a <= ch and ?z >= ch) or (?0 <= ch and ?9 >= ch) or
+           ch in [?-, ?_, ?., ?~] do
+        <<ch>>
+      else
+        # UPPERCASE hex, deliberately: RFC 3986 and AWS SigV4 both
+        # specify uppercase percent-escapes, and Integer.to_string/2
+        # already gives that. src/json.ex uses the same call and must
+        # LOWERCASE it -- the two are opposite requirements, which is
+        # exactly how one gets copied onto the other by mistake.
+        #
+        # THE SPLIT MOVED THIS, TWICE, AND THE PAIRING SURVIVED BOTH:
+        # `uriescape` was in src/sigv4.ex, went to plugins/ with the
+        # signer, and then came here so that a kind which signs nothing
+        # does not reach a hash function to escape a query parameter.
+        # src/json.ex stayed in the core. Neither file is beside the
+        # other any more, so each names the other outright.
+        "%" <> String.pad_leading(Integer.to_string(ch, 16), 2, "0")
+      end
+    end)
+  end
+
+  @doc "Percent-decode, and nothing else: `+` stays `+`, as on the wire."
+  def uridecode(text), do: uridecode(text, [])
+
+  defp uridecode(<<>>, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
+
+  defp uridecode(<<?%, hi, lo, rest::binary>> = text, acc) do
+    case Integer.parse(<<hi, lo>>, 16) do
+      {code, ""} ->
+        uridecode(rest, [<<code>> | acc])
+
+      # A stray % is kept as-is, the way a browser would.
+      _other ->
+        <<head, more::binary>> = text
+        uridecode(more, [<<head>> | acc])
+    end
+  end
+
+  defp uridecode(<<head, rest::binary>>, acc), do: uridecode(rest, [<<head>> | acc])
+
+  @doc """
+  The `host` header value for a URL: the WHATWG `URL.host` - hostname
+  lowercased, userinfo stripped, and the port appended only when it is not
+  the scheme's default.
+
+  Hand-split, like `checkaddr`: a platform URL type is free to disagree,
+  and `Host: example.com:443` is not what a signature covering `host`
+  was computed over.
+  """
+  def urlhost(url) do
+    {scheme, authority, _path, _query} = urlparts(url)
+
+    authority =
+      case String.split(authority, "@") do
+        [only] -> only
+        many -> List.last(many)
+      end
+
+    {host, port} =
+      if String.starts_with?(authority, "[") do
+        case :binary.match(authority, "]") do
+          {at, _len} ->
+            {binary_part(authority, 0, at + 1),
+             binary_part(authority, at + 1, byte_size(authority) - at - 1)}
+
+          :nomatch ->
+            {authority, ""}
+        end
+      else
+        case :binary.split(authority, ":") do
+          [only] -> {only, ""}
+          [head, tail] -> {head, ":" <> tail}
+        end
+      end
+
+    port =
+      cond do
+        ":" == port -> ""
+        "https://" == scheme and ":443" == port -> ""
+        "http://" == scheme and ":80" == port -> ""
+        true -> port
+      end
+
+    String.downcase(host, :ascii) <> port
+  end
+
+  @doc """
+  A URL split into scheme, authority, raw path and raw query - by hand, so
+  that every port cuts it in the same place.
+  """
+  def urlparts(url) do
+    {scheme, rest} =
+      cond do
+        String.starts_with?(url, "https://") -> {"https://", binary_part(url, 8, byte_size(url) - 8)}
+        String.starts_with?(url, "http://") -> {"http://", binary_part(url, 7, byte_size(url) - 7)}
+        true -> {"", url}
+      end
+
+    {authority, tail} =
+      case cutat(rest, [?/, ??, ?#]) do
+        nil -> {rest, ""}
+        at -> {binary_part(rest, 0, at), binary_part(rest, at, byte_size(rest) - at)}
+      end
+
+    {tail, _fragment} =
+      case cutat(tail, [?#]) do
+        nil -> {tail, ""}
+        at -> {binary_part(tail, 0, at), binary_part(tail, at, byte_size(tail) - at)}
+      end
+
+    {path, query} =
+      case :binary.split(tail, "?") do
+        [only] -> {only, ""}
+        [head, more] -> {head, more}
+      end
+
+    {scheme, authority, path, query}
+  end
+
+  defp cutat(text, chars), do: cutat(text, chars, 0)
+
+  defp cutat(text, chars, at) do
+    case text do
+      <<_::binary-size(at), ch, _::binary>> ->
+        if ch in chars, do: at, else: cutat(text, chars, at + 1)
+
+      _other ->
+        nil
+    end
+  end
+
+  @doc """
   One request. Answers `%{status: integer, body: binary}`.
 
   Every failure to complete the trip raises: an unreachable store is a
@@ -66,7 +210,7 @@ defmodule Sekreto.Plugins.Http do
   def fetch(method, url, headers \\ [], body \\ nil) do
     deadline = now() + @timeout
 
-    {scheme, authority, rawpath, rawquery} = Sigv4.urlparts(url)
+    {scheme, authority, rawpath, rawquery} = urlparts(url)
     tls = "https://" == scheme
 
     {host, port} = hostport(authority, tls)
@@ -82,7 +226,7 @@ defmodule Sekreto.Plugins.Http do
       # A default port stays implicit: a SigV4 signature covers `host`, and
       # `Host: example.com:443` is not what was signed.
       "Host: ",
-      Sigv4.urlhost(url),
+      urlhost(url),
       "\r\n",
       "Accept: application/json\r\n",
       "Connection: close\r\n",

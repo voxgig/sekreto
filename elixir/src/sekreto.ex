@@ -5,6 +5,13 @@
 # variables in development and a vault in production without changing a
 # line of its own code.
 #
+# THE CORE NAMES NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR
+# SIGNS A REQUEST. The four built-in kinds - env, memory, dotenv, file -
+# read at most a local file; every other kind is a voxgig/plugin
+# definition under plugins/, and a chain may name one only if the calling
+# project handed it in through `plugins`. See
+# docs/design/plugin-providers.md.
+#
 # A port of typescript/src/Sekreto.ts, which is canonical.
 
 defmodule Sekreto.Error do
@@ -33,11 +40,18 @@ defmodule Sekreto do
   alias Sekreto.Provider
   alias Sekreto.Providers
   alias Sekreto.ProviderSpec
+  alias Voxgig.Plugin
+  alias Voxgig.Plugin.Host
 
   @typedoc "A secret name: dot-separated lowercase segments, e.g. `api.token`."
   @type name :: binary
 
-  defstruct [:state]
+  # `catalog` is the definitions this Sekreto can build - the four
+  # built-ins plus whatever `plugins` handed in - and `host` is the
+  # voxgig/plugin host every spec'd provider is an instance of. Both are
+  # public: read `Host.list(sek.host)` for a store's ref and status.
+  # Nothing on either advances the chain.
+  defstruct [:state, :catalog, :host]
 
   # ------------------------------------------------------ name functions
 
@@ -284,24 +298,74 @@ defmodule Sekreto do
   @doc """
   Build a chain from provider specs, live providers, or a mix of the two.
 
-  Options: `cache: false` turns the read cache off. Only an exact `false`
-  does; anything else leaves it on.
+  Options:
 
-  Construction contacts nothing. The first network call is the first
-  lookup - but a spec that cannot be built at all (an unknown kind, an
-  unsupported KV version) raises here, in chain order.
+    * `plugins:` - the provider kinds beyond the four built-ins that this
+      chain may name. A kind that is not in the list cannot be built, and
+      naming one is refused with a message that says so.
+    * `cache: false` - turns the read cache off. Only an exact `false`
+      does; anything else leaves it on.
+
+  Two spellings, and they mean the same thing. The chain reads naturally
+  first:
+
+      Sekreto.new(chain, plugins: [Hashicorp.hashicorp()], cache: false)
+
+  ...and every other port writes one options object, which is what DOCS.md
+  documents, so that is accepted too:
+
+      Sekreto.new(plugins: [...], providers: chain)
+
+  One argument is options when it is a non-empty keyword list, and the
+  chain otherwise: a chain entry is a `Sekreto.ProviderSpec` or a live
+  provider - a struct or a map - and never a `{key, value}` pair, so
+  nothing is ambiguous. `Sekreto.new([])` reads as both and means the same
+  either way.
+
+  Construction contacts nothing. `load` runs each definition's `define`,
+  which builds the provider from its spec, and `activate` takes the
+  instance live; the first network call is still the first lookup. A spec
+  that cannot be built at all - an unknown kind, an unsupported KV version
+  - raises here, in chain order.
   """
-  def new(entries \\ [], opts \\ []) do
+  def new(entries \\ [], opts \\ [])
+
+  def new(opts, []) when is_list(opts) and [] != opts do
+    if Keyword.keyword?(opts) do
+      build(Keyword.get(opts, :providers) || [], opts)
+    else
+      build(opts, [])
+    end
+  end
+
+  def new(entries, opts), do: build(entries, opts)
+
+  defp build(entries, opts) do
+    # Built-ins first, then the plugins, into one catalog: a plugin that
+    # names a built-in kind replaces it, which is how a host substitutes an
+    # implementation and never an accident, because the four names are
+    # documented.
+    catalog =
+      Plugin.make_catalog(
+        Providers.builtins() ++ Enum.map(Keyword.get(opts, :plugins) || [], &definition/1)
+      )
+
+    host = Plugin.make_host(%{"catalog" => catalog})
+
+    # A provider handed in live is backed by no instance; a spec'd one is
+    # an instance of its kind on the host.
     built =
       Enum.map(entries, fn entry ->
         if Provider.provider?(entry) do
           %{store: storename(entry), provider: entry}
         else
-          %{store: storeof(entry), provider: Providers.makeprovider(entry)}
+          declare(host, catalog, entry)
         end
       end)
 
     %Sekreto{
+      catalog: catalog,
+      host: host,
       state:
         Sekreto.Cell.new(%{
           entries: built,
@@ -312,11 +376,131 @@ defmodule Sekreto do
     }
   end
 
-  # An empty name falls back to the kind, so a chain of two unnamed vaults
-  # is addressable as `hashicorp` rather than as nothing.
-  defp storeof(%ProviderSpec{} = spec) do
-    if "" == spec.name, do: spec.kind, else: spec.name
+  # One chain entry, as a plugin instance.
+  #
+  # The instance is `kind` for a store named after its kind and
+  # `kind$store` otherwise - `hashicorp$prod` - so `Host.list/1` reads like
+  # the chain. A store name that is already taken gets a numbered tag from
+  # the host instead, because two providers MAY share a store name (a
+  # directed read walks both) and an instance ref may not.
+  defp declare(host, catalog, spec) do
+    kind = if is_struct(spec, ProviderSpec), do: spec.kind, else: nil
+
+    if nil == kind or not Voxgig.Plugin.Catalog.has?(catalog, kind) do
+      raise Error, message: unknownkind(kind, catalog)
+    end
+
+    # An empty name falls back to the kind, so a chain of two unnamed
+    # vaults is addressable as `hashicorp` rather than as nothing.
+    store = if spec.name in ["", nil], do: kind, else: spec.name
+
+    if not (is_binary(store) and Plugin.check_tag(store)) do
+      raise Error, message: "sekreto: invalid store name: " <> nametext(store)
+    end
+
+    ref = if store == kind, do: kind, else: Plugin.format_ref(kind, store)
+
+    # `"tag" => "?"` is voxgig/plugin's own auto-tagging: the lowest unused
+    # integer tag for that name, assigned by the host rather than guessed
+    # at here.
+    load =
+      if nil == Host.instance(host, ref),
+        do: %{"options" => spec},
+        else: %{"options" => spec, "tag" => "?"}
+
+    provider =
+      try do
+        entry = Host.load(host, ref, load)
+        Host.activate(host, entry["ref"])
+        Host.exports(host, entry["ref"] <> "/" <> Providers.provider_export())
+      rescue
+        err -> reraise unwrap(err), __STACKTRACE__
+      end
+
+    # A definition that exports no provider is a definition all the same,
+    # and voxgig/plugin has no opinion about it - so this port does, here,
+    # rather than at the first lookup.
+    if not Provider.provider?(provider) do
+      raise Error, message: "sekreto: not a provider plugin: " <> kind
+    end
+
+    %{store: store, provider: provider}
   end
+
+  # A plugin entry, checked to be a definition before the catalog sees it.
+  #
+  # Every plugin module is named after the kind it holds and answers the
+  # definition from a function, so `plugins: [Sekreto.Plugins.Hashicorp]`
+  # hands over the MODULE - an atom - and a module in the catalog would
+  # fail inside voxgig/plugin with a message about a definition name.
+  # Refused here instead, naming the call that was meant.
+  defp definition(plugin) when is_map(plugin) and not is_struct(plugin), do: plugin
+
+  defp definition(plugin) when is_atom(plugin) do
+    # A module alias is an atom whose name the compiler prefixes; `nil`,
+    # `true` and any other atom is just a value that is not a definition.
+    if String.starts_with?(Atom.to_string(plugin), "Elixir.") do
+      raise Error,
+        message:
+          "sekreto: not a plugin definition: the module " <>
+            inspect(plugin) <>
+            " - a plugin is a definition a plugin module answers, such as" <>
+            " Sekreto.Plugins.Hashicorp.hashicorp(), or Sekreto.Plugins.all() for every one"
+    else
+      raise Error, message: "sekreto: not a plugin definition: " <> inspect(plugin)
+    end
+  end
+
+  defp definition(plugin) do
+    raise Error, message: "sekreto: not a plugin definition: " <> inspect(plugin)
+  end
+
+  # The message for a kind the catalog does not hold.
+  #
+  # A kind sekreto has never heard of is a typo; a kind that exists as a
+  # plugin but was not passed in is the split working as designed and
+  # telling you what to pass. Collapsing the two was the first thing that
+  # made the split confusing to use.
+  defp unknownkind(kind, catalog) do
+    text = if is_binary(kind), do: kind, else: inspect(kind)
+
+    "sekreto: unknown provider kind: " <>
+      text <>
+      " (available: " <>
+      Enum.join(Voxgig.Plugin.Catalog.names(catalog), ", ") <>
+      ")" <>
+      if text in Providers.kinds().plugin do
+        " - " <> text <> " is a sekreto plugin, not built in: pass it in the plugins option"
+      else
+        ""
+      end
+  end
+
+  # A `Sekreto.Error` that crossed the plugin boundary comes back out as
+  # itself, byte for byte. Anything else is not sekreto's to rewrite.
+  defp unwrap(%Voxgig.Plugin.Error{code: code, details: details} = err) do
+    cause = if is_map(details), do: Map.get(details, "cause"), else: nil
+
+    if Providers.error_code() == code and is_binary(cause) do
+      %Error{message: cause}
+    else
+      err
+    end
+  end
+
+  defp unwrap(err), do: err
+
+  @doc """
+  A provider kind, as a voxgig/plugin definition - the one call that makes
+  a custom kind. See `Sekreto.Providers.providerplugin/2`.
+  """
+  defdelegate providerplugin(kind, make), to: Providers
+
+  @doc "The four built-in provider kinds, as definitions."
+  defdelegate builtins(), to: Providers
+
+  @doc "Every kind this library ships: `%{builtin: [...], plugin: [...]}`."
+  defdelegate kinds(), to: Providers
 
   @doc "The secret, or a `Sekreto.Error` if no provider has it."
   def get(%Sekreto{} = sek, name) do
@@ -448,13 +632,16 @@ defmodule Sekreto do
   end
 
   @doc """
-  Tear the chain down: no stores, no cache, no further reads.
+  Tear the chain down: every plugin instance is deactivated and unloaded,
+  in reverse, releasing whatever a provider acquired at activation.
+  Afterwards there are no stores, no cache and no further reads.
 
   What survives is redaction - every value this Sekreto ever resolved is
   still replaced in text afterwards, because a log line written after
   shutdown is exactly as public as one written before it.
   """
-  def close(%Sekreto{state: state}) do
+  def close(%Sekreto{state: state, host: host}) do
+    if nil != host, do: Host.close(host)
     Sekreto.Cell.put(state, %{Sekreto.Cell.get(state) | entries: [], cache: []})
     :ok
   end

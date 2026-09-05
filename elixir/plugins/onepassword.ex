@@ -13,8 +13,8 @@ defmodule Sekreto.Plugins.Onepassword do
   alias Sekreto.Cell
   alias Sekreto.Error
   alias Sekreto.Json
+  alias Sekreto.Plugins.Http
   alias Sekreto.Plugins.Httpjson
-  alias Sekreto.Plugins.Sigv4
   alias Sekreto.ProviderSpec
   alias Sekreto.Providers
 
@@ -48,7 +48,8 @@ defmodule Sekreto.Plugins.Onepassword do
 
       if 200 != res.status or :none == list do
         raise Error,
-          message: "sekreto: onepassword error: " <> Httpjson.tostr(res.status) <> ": listing vaults"
+          message:
+            "sekreto: onepassword error: " <> Httpjson.tostr(res.status) <> ": listing vaults"
       end
 
       found =
@@ -86,14 +87,21 @@ defmodule Sekreto.Plugins.Onepassword do
               resolved
           end
 
-        filter = Sigv4.uriescape(~s|title eq "| <> name <> ~s|"|)
-        found = Httpjson.fetchjson("GET", useaddr <> "/v1/vaults/" <> id <> "/items?filter=" <> filter, auth)
+        filter = Http.uriescape(~s|title eq "| <> name <> ~s|"|)
+        found =
+          Httpjson.fetchjson(
+            "GET",
+            useaddr <> "/v1/vaults/" <> id <> "/items?filter=" <> filter,
+            auth
+          )
 
         items = Json.asarr(found.body)
 
         if 200 != found.status or :none == items do
           raise Error,
-            message: "sekreto: onepassword error: " <> Httpjson.tostr(found.status) <> ": finding " <> name
+            message:
+              "sekreto: onepassword error: " <>
+                Httpjson.tostr(found.status) <> ": finding " <> name
         end
 
         if [] == items do
@@ -105,12 +113,14 @@ defmodule Sekreto.Plugins.Onepassword do
               value -> value
             end
 
-          item = Httpjson.fetchjson("GET", useaddr <> "/v1/vaults/" <> id <> "/items/" <> itemid, auth)
+          item =
+            Httpjson.fetchjson("GET", useaddr <> "/v1/vaults/" <> id <> "/items/" <> itemid, auth)
 
           if 200 != item.status do
             raise Error,
               message:
-                "sekreto: onepassword error: " <> Httpjson.tostr(item.status) <> ": reading " <> name
+                "sekreto: onepassword error: " <>
+                  Httpjson.tostr(item.status) <> ": reading " <> name
           end
 
           fields =

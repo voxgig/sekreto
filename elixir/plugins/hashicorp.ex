@@ -79,7 +79,10 @@ defmodule Sekreto.Plugins.Hashicorp do
                 auth.jwt
               else
                 jwtfile =
-                  Providers.first([auth.jwtfile, "/var/run/secrets/kubernetes.io/serviceaccount/token"])
+                  Providers.first([
+                    auth.jwtfile,
+                    "/var/run/secrets/kubernetes.io/serviceaccount/token"
+                  ])
 
                 case File.read(jwtfile) do
                   {:ok, text} ->

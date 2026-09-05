@@ -143,7 +143,11 @@ std::string awsparam(const std::string& name, const std::string& prefix) {
 
 namespace {
 
-std::string trimtext(const std::string& text) {
+/// The `.env` parser's own trim, which also takes `\f` and `\v` - a WIDER
+/// set than Providers.hpp's `trimtext`, and the spec pins what it produces,
+/// so the two stay separate rather than being merged into whichever is
+/// nearer to hand.
+std::string trimdotenv(const std::string& text) {
   size_t start = 0;
   size_t stop = text.size();
 
@@ -230,8 +234,8 @@ Ordered parsedotenv(const std::string& text) {
       // Both "no =" and "empty key" are skipped, silently, without
       // disturbing the lines around them.
       if (std::string::npos != eq && 0 < eq) {
-        std::string key = trimtext(body.substr(0, eq));
-        std::string value = trimtext(body.substr(eq + 1));
+        std::string key = trimdotenv(body.substr(0, eq));
+        std::string value = trimdotenv(body.substr(eq + 1));
 
         if (2 <= value.size() && '"' == value[0] && '"' == value[value.size() - 1]) {
           value = unescape(value.substr(1, value.size() - 2));
@@ -346,8 +350,11 @@ Sekreto::Sekreto(const SekretoOptions& options)
   for (const Definition& def : builtins()) catalog_->add(def);
   for (const Definition& def : options.plugins) {
     if (nullptr == def) {
+      // C++ has no module to pass by mistake, but a default-constructed
+      // Definition is the same shape of error and would otherwise reach the
+      // catalog as `plugin_definition_name`.
       throw SekretoError("sekreto: not a plugin definition: nothing"
-                         " - pass what providerplugin returned");
+                         " - pass the definition providerplugin returned");
     }
     catalog_->add(def);
   }

@@ -6,10 +6,11 @@
 #     Sekreto.new(chain, plugins: Sekreto.Plugins.all())
 #
 # IT IS ALSO THE THING TO AVOID IF YOU CARE ABOUT WHAT GETS LOADED.
-# Calling it loads every plugin module - AWS request signing, the HTTP
-# client and the TLS binding under it, and the two CLIs - which is the
-# cost the core/plugin split exists to remove. A lean consumer names the
-# kinds it actually configures, each from its own module:
+# Calling it loads every module that defines a kind, and puts AWS request
+# signing, the HTTP client and the TLS binding under it within one call of
+# the chain - which is the cost the core/plugin split exists to remove. A
+# lean consumer names the kinds it actually configures, each from its own
+# module:
 #
 #     Sekreto.new(chain, plugins: [Sekreto.Plugins.Hashicorp.hashicorp()])
 #
@@ -26,8 +27,10 @@ defmodule Sekreto.Plugins do
   @moduledoc """
   The full set of shipped plugin definitions.
 
-  `all/0` answers all ten, in the order every port lists them. Reaching
-  it loads every plugin module; an app that configures two kinds passes
+  `all/0` answers all ten, in the order every port lists them. Calling it
+  loads all nine modules that define a kind, and the shared edges behind
+  them - the HTTP client, the signer, the child-process helper - as soon
+  as a lookup first calls one. An app that configures two kinds passes
   those two.
   """
 

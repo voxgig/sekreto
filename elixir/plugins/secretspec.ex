@@ -2,7 +2,10 @@
 #
 # A child process and nothing else: this is the one plugin kind that opens
 # no socket, so it reaches `Sekreto.Plugins.Proc` and never the HTTP
-# helper. Loading it loads no TLS stack.
+# helper. Loading it loads no TLS stack. An exit status is an integer, so
+# the message below formats it with `Integer.to_string/1` rather than with
+# `Httpjson.tostr/1` - reaching a shared HTTP module for a one-line string
+# function is exactly how a socketless kind ends up carrying a client.
 #
 # A port of typescript/plugins/secretspec.ts, which is canonical.
 

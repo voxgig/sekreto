@@ -13,6 +13,15 @@
 # carry known-answer cases that all ports must reproduce bit-for-bit, and
 # lets the integration mock recompute the signature server-side.
 #
+# THE URL HALF IS NOT HERE. `uriescape`, `uridecode`, `urlhost` and
+# `urlparts` live in `Sekreto.Plugins.Http`, because four kinds that sign
+# nothing escape a query parameter and the HTTP client itself splits every
+# URL it sends. Keeping them here would make every HTTPS kind reach the
+# signer, and `:crypto` with it, for a string function. Ruby's port draws
+# the same line, into its `httpjson`. The uppercase-hex rule that pairs
+# with src/json.ex's lowercase one travelled with `uriescape`; the comment
+# on it is there.
+#
 # A port of typescript/plugins/sigv4.ts, which is canonical.
 
 defmodule Sekreto.Plugins.Signing do
@@ -43,6 +52,7 @@ defmodule Sekreto.Plugins.Sigv4 do
   reached from here alone. See docs/design/plugin-providers.md.
   """
 
+  alias Sekreto.Plugins.Http
   alias Sekreto.Plugins.Signing
 
   @doc "Lowercase hex, two digits a byte."
@@ -53,50 +63,6 @@ defmodule Sekreto.Plugins.Sigv4 do
 
   @doc "HMAC-SHA256, key first - PHP and Perl's stdlib take them the other way."
   def hmac(key, text), do: :crypto.mac(:hmac, :sha256, key, text)
-
-  @doc """
-  RFC 3986 escaping, which is stricter than the usual URL encoder: AWS
-  wants everything but unreserved characters escaped, with uppercase hex.
-  """
-  def uriescape(text) do
-    text
-    |> :binary.bin_to_list()
-    |> Enum.map_join("", fn ch ->
-      if (?A <= ch and ?Z >= ch) or (?a <= ch and ?z >= ch) or (?0 <= ch and ?9 >= ch) or
-           ch in [?-, ?_, ?., ?~] do
-        <<ch>>
-      else
-        # UPPERCASE hex, deliberately: AWS SigV4 specifies uppercase
-        # percent-escapes, and Integer.to_string/2 already gives that.
-        # src/json.ex uses the same call and must LOWERCASE it -- the two
-        # are opposite requirements, which is exactly how one gets copied
-        # onto the other by mistake. The split moved this file to
-        # plugins/ and left that one in the core, so the two now sit in
-        # different directories; the asymmetry is unchanged, and each
-        # file names the other.
-        "%" <> String.pad_leading(Integer.to_string(ch, 16), 2, "0")
-      end
-    end)
-  end
-
-  @doc "Percent-decode, and nothing else: `+` stays `+`, as on the wire."
-  def uridecode(text), do: uridecode(text, [])
-
-  defp uridecode(<<>>, acc), do: acc |> Enum.reverse() |> IO.iodata_to_binary()
-
-  defp uridecode(<<?%, hi, lo, rest::binary>> = text, acc) do
-    case Integer.parse(<<hi, lo>>, 16) do
-      {code, ""} ->
-        uridecode(rest, [<<code>> | acc])
-
-      # A stray % is kept as-is, the way a browser would.
-      _other ->
-        <<head, more::binary>> = text
-        uridecode(more, [<<head>> | acc])
-    end
-  end
-
-  defp uridecode(<<head, rest::binary>>, acc), do: uridecode(rest, [<<head>> | acc])
 
   @doc """
   The canonical query string: each pair RFC 3986-escaped, sorted by escaped
@@ -114,101 +80,10 @@ defmodule Sekreto.Plugins.Sigv4 do
           [head, tail] -> {head, tail}
         end
 
-      {uriescape(uridecode(key)), uriescape(uridecode(value))}
+      {Http.uriescape(Http.uridecode(key)), Http.uriescape(Http.uridecode(value))}
     end)
     |> Enum.sort()
     |> Enum.map_join("&", fn {key, value} -> key <> "=" <> value end)
-  end
-
-  @doc """
-  The `host` header value for a URL: the WHATWG `URL.host` - hostname
-  lowercased, userinfo stripped, and the port appended only when it is not
-  the scheme's default.
-
-  Hand-split, like `checkaddr`: a platform URL type is free to disagree,
-  and `Host: example.com:443` is not what a signature covering `host`
-  was computed over.
-  """
-  def urlhost(url) do
-    {scheme, authority, _path, _query} = urlparts(url)
-
-    authority =
-      case String.split(authority, "@") do
-        [only] -> only
-        many -> List.last(many)
-      end
-
-    {host, port} =
-      if String.starts_with?(authority, "[") do
-        case :binary.match(authority, "]") do
-          {at, _len} ->
-            {binary_part(authority, 0, at + 1),
-             binary_part(authority, at + 1, byte_size(authority) - at - 1)}
-
-          :nomatch ->
-            {authority, ""}
-        end
-      else
-        case :binary.split(authority, ":") do
-          [only] -> {only, ""}
-          [head, tail] -> {head, ":" <> tail}
-        end
-      end
-
-    port =
-      cond do
-        ":" == port -> ""
-        "https://" == scheme and ":443" == port -> ""
-        "http://" == scheme and ":80" == port -> ""
-        true -> port
-      end
-
-    String.downcase(host, :ascii) <> port
-  end
-
-  @doc """
-  A URL split into scheme, authority, raw path and raw query - by hand, so
-  that every port cuts it in the same place.
-  """
-  def urlparts(url) do
-    {scheme, rest} =
-      cond do
-        String.starts_with?(url, "https://") -> {"https://", binary_part(url, 8, byte_size(url) - 8)}
-        String.starts_with?(url, "http://") -> {"http://", binary_part(url, 7, byte_size(url) - 7)}
-        true -> {"", url}
-      end
-
-    {authority, tail} =
-      case cutat(rest, [?/, ??, ?#]) do
-        nil -> {rest, ""}
-        at -> {binary_part(rest, 0, at), binary_part(rest, at, byte_size(rest) - at)}
-      end
-
-    {tail, _fragment} =
-      case cutat(tail, [?#]) do
-        nil -> {tail, ""}
-        at -> {binary_part(tail, 0, at), binary_part(tail, at, byte_size(tail) - at)}
-      end
-
-    {path, query} =
-      case :binary.split(tail, "?") do
-        [only] -> {only, ""}
-        [head, more] -> {head, more}
-      end
-
-    {scheme, authority, path, query}
-  end
-
-  defp cutat(text, chars), do: cutat(text, chars, 0)
-
-  defp cutat(text, chars, at) do
-    case text do
-      <<_::binary-size(at), ch, _::binary>> ->
-        if ch in chars, do: at, else: cutat(text, chars, at + 1)
-
-      _other ->
-        nil
-    end
   end
 
   @doc """
@@ -234,7 +109,7 @@ defmodule Sekreto.Plugins.Sigv4 do
         {String.downcase(key, :ascii), String.replace(String.trim(value), ~r/\s+/, " ")}
       end)
 
-    folded = putheader(folded, "host", urlhost(input.url))
+    folded = putheader(folded, "host", Http.urlhost(input.url))
     folded = putheader(folded, "x-amz-date", input.datetime)
 
     folded =
@@ -245,7 +120,7 @@ defmodule Sekreto.Plugins.Sigv4 do
     canonicalheaders = Enum.map_join(headers, "", fn {key, value} -> key <> ":" <> value <> "\n" end)
     signedheaders = Enum.map_join(headers, ";", fn {key, _value} -> key end)
 
-    {_scheme, _authority, rawpath, rawquery} = urlparts(input.url)
+    {_scheme, _authority, rawpath, rawquery} = Http.urlparts(input.url)
     path = if "" == rawpath, do: "/", else: rawpath
 
     canonicalrequest =

@@ -46,7 +46,8 @@ defmodule Sekreto.Plugins.Gcpsecrets do
     usemetadataaddr = fn ->
       cond do
         "" != metadataaddr -> metadataaddr
-        "" != Providers.getenv("GCE_METADATA_HOST") -> "http://" <> Providers.getenv("GCE_METADATA_HOST")
+        "" != Providers.getenv("GCE_METADATA_HOST") ->
+          "http://" <> Providers.getenv("GCE_METADATA_HOST")
         true -> "http://metadata.google.internal"
       end
     end
@@ -68,7 +69,8 @@ defmodule Sekreto.Plugins.Gcpsecrets do
           raise Error, message: "sekreto: gcp: no token and metadata server did not answer"
         end
 
-        Cell.put(cell, %{token: got, renewat: Httpjson.renewtime(Json.dig(res.body, ["expires_in"]))})
+        renewat = Httpjson.renewtime(Json.dig(res.body, ["expires_in"]))
+        Cell.put(cell, %{token: got, renewat: renewat})
       end
     end
 
@@ -94,7 +96,8 @@ defmodule Sekreto.Plugins.Gcpsecrets do
             nil
 
           200 != res.status ->
-            raise Error, message: "sekreto: gcp error: " <> Httpjson.tostr(res.status) <> ": " <> url
+            raise Error,
+              message: "sekreto: gcp error: " <> Httpjson.tostr(res.status) <> ": " <> url
 
           true ->
             case Json.asstr(Json.dig(res.body, ["payload", "data"])) do

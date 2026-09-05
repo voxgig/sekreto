@@ -50,6 +50,18 @@
 
 #include "support.h"
 
+/* Every certificate in a PEM bundle, as DER. Declared here and defined at
+ * the foot of the file: `addbundle` below is its only caller anywhere in
+ * the library, so it is a private detail of the TLS binding rather than
+ * something the encoders have to carry. */
+typedef struct {
+  unsigned char **items;
+  size_t *lens;
+  size_t len;
+} sek_ders;
+
+static sek_ders *sek_pemcerts(sek_pool *pool, const char *text);
+
 struct sek_tls_conn {
   SSL_CTX *ctx;
   SSL *ssl;
@@ -92,9 +104,9 @@ static const char *sslreason(sek_pool *pool, SSL *ssl, int code) {
  * certificate the store rejects is discarded and nothing is raised. A
  * wrong path adds no roots and weakens nothing.
  *
- * The PEM is parsed in-tree (crypto.c) rather than through
- * SSL_CTX_load_verify_locations, because the rule keeps PEM on the
- * hand-rolled side of the line even here. */
+ * The PEM is parsed in-tree (at the foot of this file) rather than
+ * through SSL_CTX_load_verify_locations, because the rule keeps PEM on
+ * the hand-rolled side of the line even here. */
 static void addbundle(sek_pool *pool, SSL_CTX *ctx) {
   const char *path = getenv(SEK_CABUNDLE);
   FILE *file;
@@ -341,13 +353,14 @@ void sek_tls_close(sek_tls_conn *conn) {
 
 /* ---- PEM ----------------------------------------------------------- */
 
+
 /* The trust-anchor reader, HERE rather than beside the base64 it uses,
  * because tls.c is its only caller and an object nothing else pulls is an
  * object no other plugin has to carry.
  *
  * Certificates only: no header handling, no other label, no private keys.
  * Trust anchors are all this port ever parses out of a PEM file. */
-sek_ders *sek_pemcerts(sek_pool *pool, const char *text) {
+static sek_ders *sek_pemcerts(sek_pool *pool, const char *text) {
   static const char OPEN[] = "-----BEGIN CERTIFICATE-----";
   static const char CLOSE[] = "-----END CERTIFICATE-----";
 

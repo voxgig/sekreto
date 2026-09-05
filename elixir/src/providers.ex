@@ -171,7 +171,6 @@ defmodule Sekreto.Providers do
   alias Sekreto.AuthSpec
   alias Sekreto.Cell
   alias Sekreto.Error
-  alias Sekreto.ProviderSpec
   alias Voxgig.Plugin.Inst
   alias Voxgig.Plugin.Types
 
@@ -315,6 +314,7 @@ defmodule Sekreto.Providers do
 
     :ok
   end
+
   # --------------------------------------------------------- the built-in
   #
   # "Built in" means: needs nothing of the platform beyond reading a local
@@ -425,6 +425,7 @@ defmodule Sekreto.Providers do
       describe: fn -> "file:" <> dir end
     }
   end
+
   # ------------------------------ providers as voxgig/plugin definitions
 
   @doc """

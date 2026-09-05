@@ -20,10 +20,17 @@
 #include <string>
 #include <vector>
 
-#include "Http.hpp"
 #include "Json.hpp"
 #include "Providers.hpp"
 #include "Sekreto.hpp"
+
+// THE CLI PASSES THE FULL SET. It is the one consumer that genuinely wants
+// all ten kinds - `--source` names any of them at run time - so it includes
+// the whole plugins folder and hands `allplugins()` to the constructor. An
+// app that knows its chain includes the kinds it configures instead, and
+// links nothing else (docs/design/plugin-providers.md).
+#include "All.hpp"
+#include "Httpjson.hpp"
 
 namespace {
 
@@ -206,7 +213,7 @@ int main(int argc, char** argv) {
   std::vector<sekreto::ProviderSpec> chain = chainfor(source);
 
   try {
-    sekreto::Sekreto secrets = sekreto::makesekreto(chain);
+    sekreto::Sekreto secrets = sekreto::makesekreto(chain, sekreto::allplugins());
 
     std::string token;
 
