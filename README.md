@@ -114,7 +114,7 @@ clients are loaded differs.
 | [elixir](elixir/) | switch — pending | | exists |
 | [cpp](cpp/) | switch — pending | | exists |
 | [c](c/) | switch — pending | | exists |
-| [lua](lua/) | switch — pending | | exists |
+| [lua](lua/) | ✅ | `lua/src/sekreto/plugins/` | a checkout, found or fetched by `make deps` |
 | [ocaml](ocaml/) | switch — pending | | exists |
 | [haskell](haskell/) | switch — pending | | exists |
 | [lean](lean/) | switch — pending | | exists |

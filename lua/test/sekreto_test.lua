@@ -38,19 +38,32 @@ end
 --- voxgig/omni is a sibling checkout, not a published artifact, and it
 --- may sit anywhere. The same five-path search every port's Makefile
 --- performs, repeated here so that a single group can be run by hand.
+---
+--- $OMNI_HOME is APPENDED rather than written into a literal list, for
+--- the same reason test/pluginhome.lua appends $PLUGIN_HOME: `os.getenv`
+--- answers nil when the variable is unset, a nil leaves a hole in a table
+--- constructor, and `ipairs` stops dead at the first hole. Written the
+--- other way the whole search was skipped whenever OMNI_HOME was unset -
+--- which is exactly the "run one group by hand" case this function exists
+--- for, since the Makefile always sets it.
 local function omniroot()
-  local candidates = {
-    os.getenv('OMNI_HOME'), '../../omni', '../../../omni',
-    '/workspace/omni', '/home/user/omni',
-  }
+  local candidates = {}
+
+  local given = os.getenv('OMNI_HOME')
+  if nil ~= given and '' ~= given then
+    candidates[#candidates + 1] = given
+  end
+
+  candidates[#candidates + 1] = '../../omni'
+  candidates[#candidates + 1] = '../../../omni'
+  candidates[#candidates + 1] = '/workspace/omni'
+  candidates[#candidates + 1] = '/home/user/omni'
 
   for _, dir in ipairs(candidates) do
-    if nil ~= dir and '' ~= dir then
-      local handle = io.open(dir .. '/spec/fib.json', 'r')
-      if nil ~= handle then
-        handle:close()
-        return dir
-      end
+    local handle = io.open(dir .. '/spec/fib.json', 'r')
+    if nil ~= handle then
+      handle:close()
+      return dir
     end
   end
 

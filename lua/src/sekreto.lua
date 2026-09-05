@@ -253,6 +253,16 @@ function M.Sekreto(options)
   local self = setmetatable({}, Sekreto)
   local opts = options or {}
 
+  -- An options TABLE, not a list of specs. Before the plugin split this
+  -- took `sekreto(specs, cache)` positionally, and that call would now
+  -- find no `providers` key and build an EMPTY CHAIN IN SILENCE - every
+  -- `get` raising `unknown secret` with nothing to say why. A list is
+  -- refused outright instead.
+  if nil ~= opts[1] then
+    err.fail('sekreto: sekreto() takes an options table' ..
+      ' { plugins = ..., providers = ..., cache = ... }, not a list of specs')
+  end
+
   -- Built-ins first, then the plugins, into one catalog: a plugin that
   -- names a built-in kind replaces it, which is how a host substitutes an
   -- implementation and never an accident, because the four names are

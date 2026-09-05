@@ -28,6 +28,10 @@ local allplugins = require('sekreto.plugins').allplugins
 
 local T = plugin.types
 
+-- This suite runs from the port directory (see the Makefile), and the
+-- CLI probe below needs to name it from somewhere else.
+local PORT = io.popen('pwd', 'r'):read('l')
+
 local ONLY = arg[1]
 local PASSCOUNT = 0
 local FAILCOUNT = 0
@@ -220,6 +224,39 @@ testcase('the CLI passes the full set', function()
     'the CLI call site')
 end)
 
+-- ...and it must still FIND voxgig/plugin when it is run the way
+-- test/checks.sh runs it: from another directory, with the environment
+-- wiped. The library requires `plugin` by name and searches nothing, so
+-- everything rests on test/pluginhome.lua - and its first candidate is
+-- $PLUGIN_HOME, which is exactly the one that is not set there. An
+-- earlier draft wrote that candidate into a table constructor, where an
+-- unset variable is a nil, a nil is a hole, and `ipairs` stops at the
+-- first hole: the whole search was skipped precisely when the
+-- environment was wiped. `make test` stayed green; fifteen of the
+-- nineteen integration checks failed.
+--
+-- `--source env` with no such variable set reaches the chain and stops
+-- there, so this needs no server and touches no socket.
+--
+-- `env -i` rather than `env -u PLUGIN_HOME -u LUA_PATH -u LUA_CPATH`,
+-- because test/checks.sh wipes the environment with `env -i` and naming
+-- variables to remove cannot match that. Lua 5.4 reads LUA_PATH_5_4 in
+-- PREFERENCE to LUA_PATH, so a developer with the version-suffixed
+-- variable set had this check pass against the very defect it exists to
+-- catch - the search skipped, the CLI finding voxgig/plugin anyway
+-- because the interpreter's own path already reached it.
+testcase('the CLI finds voxgig/plugin with the environment wiped', function()
+  local pipe = io.popen(
+    'cd / && env -i PATH="$PATH" HOME="$HOME" lua5.4 ' ..
+    PORT .. "/cli/sekreto-cli.lua http://127.0.0.1:1/x --source env 2>&1", 'r')
+  local out = pipe:read('a') or ''
+  pipe:close()
+
+  lacks(out, 'voxgig/plugin not found', 'the wiped-environment CLI')
+  same(out, 'sekreto-cli: sekreto: unknown secret: api.token\n',
+    'the wiped-environment CLI')
+end)
+
 -- --------------------------------------------------- what a consumer sees
 
 testcase('one plugin is enough for a chain that names only it', function()
@@ -376,6 +413,19 @@ testcase('close tears the chain down and keeps redaction', function()
   same(#secrets:stores(), 0, 'the stores are gone')
   same(secrets:tryget('api.token'), nil, 'nothing answers')
   same(secrets:redact('token=tok01'), 'token=[redacted]', 'redaction survives')
+end)
+
+-- The chain moved from a positional argument into `providers`, and a
+-- caller still writing the old shape must be told so. Without this it
+-- builds an EMPTY chain and every read raises `unknown secret`, which
+-- names neither the cause nor the fix.
+testcase('a list of specs is not an options table', function()
+  sekretoerror(function()
+    sekreto.sekreto({ { kind = 'memory', values = { API_TOKEN = 'tok01' } } })
+  end,
+  'sekreto: sekreto() takes an options table' ..
+  ' { plugins = ..., providers = ..., cache = ... }, not a list of specs',
+  'the old positional call')
 end)
 
 -- ----------------------------------------------------- the boundary itself
