@@ -136,14 +136,14 @@ stay distinct across the boundary.
 `test/voxgig/sekreto/test/plugins.clj` is the other half, and the
 conformance suite cannot see any of it: that suite hands every plugin to
 every chain it builds, so it can never notice a missing one. The seam tests
-pin what a consumer sees — the full set holds every kind, an unloaded kind
+pin what a consumer gets — the full set holds every kind, an unloaded kind
 is refused naming the fix, a sekreto error crosses the boundary and comes
 back as itself — and then measure the boundary itself in a fresh JVM:
 `loaded-libs` after each require, and a classpath that is this one minus
 `plugins/`, on which the core still answers and a plugin namespace cannot
 be found at all.
 
-`make check-core` is the same rule read off the compiled classes.  It
+`make check-core` is the same rule read off the compiled classes. It
 AOT-compiles `src` against the Clojure runtime and voxgig/plugin and
 nothing else, then runs `jdeps` over the result: a plugin reached through a
 type hint, an interop call or an inlined constant would show up as a class

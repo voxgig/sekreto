@@ -10,7 +10,7 @@ make test                     # the conformance suite, and the plugin seam
 `Json.java` is sekreto's own and HTTP is `java.net.http.HttpClient`
 (JDK 11+), so the only thing this port depends on is
 [voxgig/plugin](https://github.com/voxgig/plugin) — the provider kinds
-are its definitions. There is **no maven and no gradle**: `javac` and
+are its definitions. There is **no Maven and no Gradle**: `javac` and
 `java` over a source tree, driven from the Makefile, which is also what
 makes the split below a boundary rather than a convention. Only the
 conformance suite needs voxgig/omni, and only on its classpath.
@@ -47,7 +47,7 @@ Definition mystore = Support.providerplugin(
     "mystore", spec -> new MyStore(Support.text(spec.get("addr"))));
 ```
 
-**The boundary is javac's.** `plugins/` is a source root of its own, and
+**The boundary is the one `javac` draws.** `plugins/` is a source root of its own, and
 `make core` compiles `src/` with voxgig/plugin on the classpath and
 nothing else, so an import of a plugin from the core does not compile.
 `make check-core` then reads the compiled classes back with `jdeps` and

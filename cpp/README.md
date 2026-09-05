@@ -16,10 +16,10 @@ only they — also link OpenSSL: `-lssl -lcrypto`, and the distribution's
 OpenSSL is the audit surface. C++ has no TLS, and cryptographic transport
 is the one thing this repository does not hand-roll, so this port binds the
 same library every C++ program that speaks https binds. It is bound
-directly rather than through Boost.Asio's SSL stream or cpp-httplib,
+directly rather than through the Boost Asio SSL stream or cpp-httplib,
 because those are HTTP frameworks and the framing has to stay in-tree.
 Everything else a standard library lacks is written here: JSON, HTTP/1.1,
-SHA-256, HMAC, base64 and PEM. Only the conformance suite needs
+SHA-256, HMAC, base64, and PEM. Only the conformance suite needs
 voxgig/omni, and only on its own include path.
 
 The optional lookup is `tryget`, since `try` is a keyword. A provider
@@ -50,7 +50,7 @@ The consequence is the point: an app whose chain is `[dotenv, env]` links
 `libsekreto.a` and the plugin host and **nothing else** — no HTTP client,
 no request signing, no OpenSSL. `make check-core` proves it by building
 exactly that program without `-lssl -lcrypto`, and by reading the core
-archive's own undefined-symbol list for a socket, a child process or a TLS
+archive's own undefined-symbol list for a socket, a child process, or a TLS
 call. `plugins/All.hpp` is the full set, for the consumer that genuinely
 wants all ten: the CLI, whose `--source` names any of them at run time.
 

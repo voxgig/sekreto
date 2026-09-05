@@ -66,7 +66,7 @@ pass. A custom store is `providerplugin(kind, make)`; see
 The one dependency is voxgig/plugin, which itself has none. There is no
 gem yet, so the library requires it by name — an installed gem wins — and
 a checkout finds the port the way the tests find omni: `PLUGIN_HOME`,
-then the usual places (`test/pluginhome.rb`), for the tests and the CLI.
+then the usual places (`test/pluginhome.rb`) for both the tests and the CLI.
 `make deps` fetches a shallow clone into `../.plugin` when there is none,
 which is what `npm install` and `go mod download` do for the other ports.
 The library itself searches no path.
@@ -96,7 +96,7 @@ likewise for voxgig/plugin.
 `test/test_plugins.rb` is the other half, and the conformance suite
 cannot see any of it: that suite hands every plugin to every chain it
 builds, so it can never notice a missing one. The seam tests pin what a
-consumer sees — the full set holds every kind, an unloaded kind is
+consumer gets — the full set holds every kind, an unloaded kind is
 refused naming the fix, a `SekretoError` crosses the boundary and comes
 back as itself — and, in a fresh interpreter, what `$LOADED_FEATURES`
 holds after each require. That last one is this port's version of a link

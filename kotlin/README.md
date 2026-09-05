@@ -15,7 +15,7 @@ is sekreto's own, and HTTP is `java.net.http.HttpClient`, pinned to
 HTTP/1.1. Only the conformance suite needs voxgig/omni, and only on its
 classpath.
 
-**No gradle, no maven.** `kotlinc` driven from the `Makefile` over a file
+**No Gradle, no Maven.** `kotlinc` driven from the `Makefile` over a file
 list is the whole build system, as it is for the `java` port's `javac`.
 voxgig/plugin is therefore a checkout rather than a coordinate: the
 `Makefile` finds it the way every port finds omni — `PLUGIN_HOME`, then a
@@ -69,7 +69,7 @@ plugins into `sekreto.jar` would make it nominal: an app whose chain is
 clients on its classpath. The core jar is compiled with `plugins/` nowhere
 on the classpath, so a core file that reached for a plugin would not
 compile, and `make check-core` greps the finished jar for a plugin, a
-socket, a cipher and a child process.
+socket, a cipher, and a child process.
 
 ## Use
 
@@ -169,7 +169,7 @@ itself, and the core jar does not reach a plugin.
   `sekreto_error`** and comes back out as itself. The spec pins those
   messages byte for byte, and voxgig/plugin wraps a code-less error raised
   in `define` as `plugin_define_failed`. `providerplugin` puts the code on;
-  `Sekreto` takes it off. Nowhere else catches and rewraps.
+  `Sekreto` takes it off. Nowhere else catches and wraps it again.
 - **The spec crosses the boundary as plugin's own value model**, written
   out field by field in `Support.kt` rather than reflected over — `Sekreto`
   hands `optionsof(spec)` to `host.load`, and a definition's `define` reads

@@ -9,7 +9,7 @@ make test                     # the conformance suite, the seam, the boundary
 
 **Four provider kinds are built in and ten are plugins.** `env`,
 `memory`, `dotenv` and `file` read at most a local file and live in
-`src/`; every kind that opens a socket, signs a request or spawns a
+`src/`; every kind that opens a socket, signs a request, or spawns a
 child — the vault clients, the cloud stores, the two CLIs, and SigV4
 signing with them — is a [voxgig/plugin](https://github.com/voxgig/plugin)
 definition under `plugins/`, and a `sek_sekreto` can build only the kinds
@@ -28,7 +28,7 @@ no version, vendored nowhere, patched nowhere. `ldd build/sekreto-cli`
 names libssl, libcrypto and libc, and nothing else — while a binary that
 links the core alone names **libc alone**, which is what the split is
 for. Everything the standard library lacks is still written in-tree:
-JSON, HTTP/1.1 framing, SHA-256, HMAC-SHA256, hex, base64 and PEM.
+JSON, HTTP/1.1 framing, SHA-256, HMAC-SHA256, hex, base64, and PEM.
 **`libcrypto` is linked for the handshake and is never called for a
 digest** — `make check-tls` runs `nm` over both archives and fails if any
 object but `tls.o` reaches an OpenSSL symbol. Only the conformance suite
@@ -63,7 +63,7 @@ includes a header under `plugins/` or names a symbol defined there, so
 | `src/providers.c` | the four built-in kinds, `sek_spec`, `sek_providerplugin`, `checkaddr` |
 | `src/json.c` | the JSON value model, parser and writer |
 | `src/util.c` | the arena, the buffer, the ordered map and list, the local-file read |
-| `src/internal.h` | what the library's files share and a consumer never sees |
+| `src/internal.h` | what the library's files share and a consumer never reaches |
 | `plugins/sekretoplugins.h` | the ten definitions, the full set, the transport and SigV4 |
 | `plugins/support.h` | what the plugins share and the core must never link |
 | `plugins/hashicorp.c` … | one translation unit per kind; `aws.c` carries both AWS kinds |
@@ -122,7 +122,7 @@ live `sek_provider` in its `provider` field joins the chain as it is —
 the interface is two function pointers, `lookup` and `describe`, and
 `sek_provider_new` fills them in.
 
-`sek_host(secrets)` is the voxgig/plugin host every spec'd provider is an
+`sek_host(secrets)` is the voxgig/plugin host every configured provider is an
 instance of: `host_list` names each store's ref and status, and nothing
 on it advances the chain. `sek_catalog(secrets)` is what this chain can
 build.
@@ -209,7 +209,7 @@ make check-core
   object in is caught even if that object needs nothing new.
 - One link per kind, with the negative control that gives it teeth: a
   store that signs nothing carries no SHA-256 and a store that runs no
-  child carries no launcher, **and** the aws link does carry the digest.
+  child carries no launcher, **and** the `aws` link does carry the digest.
 - A grep for the one thing a symbol table cannot see: a core file that
   `#include`s a plugins header. A preprocessor line is code, not prose.
 
@@ -360,7 +360,7 @@ obligation is made to fail before it is made to pass.
   A definition this port did not make never reaches it, and `sek_new`
   refuses it by name when it exports no provider.
 - **voxgig/plugin is compiled with its own flags.** It is C11 at `-O1`;
-  at this port's `-O2` gcc's `-Wclobbered` fires on three of its
+  at this port's `-O2` the `-Wclobbered` warning fires on three of its
   `setjmp` frames. Turning a warning off — or `-Werror` off — to make a
   checkout this port does not own compile under these flags would weaken
   the gate to suit the dependency, so the dependency is built the way its

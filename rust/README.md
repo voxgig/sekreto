@@ -13,7 +13,7 @@ make check-core               # what the core actually links
 
 Four provider kinds are **built in** — `env`, `memory`, `dotenv` and
 `file` — and what makes them built in is that they read at most a local
-file. Everything that opens a socket, signs a request or spawns a process
+file. Everything that opens a socket, signs a request, or spawns a process
 is a [voxgig/plugin](https://github.com/voxgig/plugin) definition in its
 own crate under `plugins/`, and a `Sekreto` can build exactly the kinds
 its constructor was handed:
@@ -102,7 +102,7 @@ the same file every port runs — through the Rust
 [voxgig/omni](https://github.com/voxgig/omni) runner, pinned by tag; no
 checkout is needed. It hands **every** plugin to every chain it builds, so
 it can never notice a missing one — which is exactly why the two seam
-suites above exist.
+suites preceding this exist.
 
 That suite proves this port computes the same answers as the others. What
 proves it can actually *fetch* a secret is the integration run, from the

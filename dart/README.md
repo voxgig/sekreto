@@ -35,10 +35,10 @@ compile --depfile` writes a ninja depfile naming every source that went
 into a compilation — this language's link map — and `make check-core`
 compiles the core against a package map holding voxgig/plugin alone and
 fails if one of those paths is under `plugins/`. `corecheck.sh` greps the
-core for what a dependency listing cannot see: a socket, a cipher or a
+core for what a dependency listing cannot see: a socket, a cipher, or a
 child process it grew rather than imported. The four boundary tests in
 `test/plugins_test.dart` compare the listings for the core, for one
-plugin, for the aws plugin and for the full set: percent-escaping lives
+plugin, for the `aws` plugin and for the full set: percent-escaping lives
 with the transport rather than with the signer, so a chain that names
 Azure or Doppler compiles no SHA-256 either.
 
@@ -50,7 +50,7 @@ and `plugins/crypto.dart` is a hand-rolled SHA-256 and HMAC-SHA256,
 because the SDK has no cryptography and `package:crypto` is a
 third-party package. HTTP and TLS are `dart:io`'s `HttpClient`.
 
-voxgig/plugin's own dart port ships no pubspec — it takes nothing, so it
+voxgig/plugin's own dart port ships no `pubspec.yaml` — it takes nothing, so it
 has no manifest — so there is nothing for `dart pub` to resolve. This
 port therefore finds a checkout the way it finds its test runner, in
 `$PLUGIN_HOME` and then the usual places, and names it in the package map

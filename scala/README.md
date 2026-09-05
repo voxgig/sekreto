@@ -73,7 +73,7 @@ on the classpath, so a core file that reached for a plugin would not
 compile, and `make check-core` reads the finished jar back three ways —
 `jdeps -verbose:class` for what it actually references, `test/CoreOnly.scala`
 run with the plugins jar absent, and a grep of every entry (`.tasty`
-included, which `jdeps` cannot see) for a plugin, a socket, a cipher and a
+included, which `jdeps` cannot see) for a plugin, a socket, a cipher, and a
 child process.
 
 ## Use
@@ -190,7 +190,7 @@ plugin.
   `sekreto_error`** and comes back out as itself. The spec pins those
   messages byte for byte, and voxgig/plugin wraps a code-less error raised
   in `define` as `plugin_define_failed`. `providerplugin` puts the code on;
-  `Sekreto` takes it off. Nowhere else catches and rewraps.
+  `Sekreto` takes it off. Nowhere else catches and wraps it again.
 - **The spec crosses the boundary as plugin's own value model**, written
   out field by field in `Support.scala` rather than reflected over —
   `Sekreto` hands `optionsof(spec)` to `host.load`, and a definition's

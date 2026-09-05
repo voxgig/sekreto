@@ -46,7 +46,7 @@ decided at run time — the CLI and the conformance suite both take it.
 The boundary is the assembly reference graph, not a convention:
 `plugins/SekretoPlugins.csproj` references `src/Sekreto.csproj`, and
 the core references nothing back — a reference the other way is a cycle
-msbuild refuses to build. So `VoxgigSekreto.dll` cannot name a type in
+`msbuild` refuses to build. So `VoxgigSekreto.dll` cannot name a type in
 `VoxgigSekretoPlugins.dll`, and it names none of the three platform
 assemblies a plugin needs either. `make check-core` reads that out of
 the compiled artifact.

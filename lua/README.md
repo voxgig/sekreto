@@ -49,7 +49,7 @@ separately, for the same reason.
 
 **The line is "reads at most a local file".** `env`, `memory`, `dotenv`
 and `file` are built in and live in `src/sekreto/providers.lua`. The ten
-kinds that open a socket, sign a request or spawn a process are
+kinds that open a socket, sign a request, or spawn a process are
 voxgig/plugin definitions under `src/sekreto/plugins/`, one module each,
 and a `Sekreto` can build one only if the calling project handed it in:
 

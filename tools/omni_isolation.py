@@ -470,7 +470,9 @@ SOURCES = {
     # a guard so a port passes is the move this whole tool exists to stop.
     'ocaml':      dict(globs=['ocaml/src/**/*.ml', 'ocaml/src/**/*.mli',
                               'ocaml/src/**/*.c', 'ocaml/src/**/*.h',
-                              'ocaml/cli/**/*.ml'],
+                              'ocaml/cli/**/*.ml',
+                              'ocaml/plugins/**/*.ml', 'ocaml/plugins/**/*.mli',
+                              'ocaml/plugins/**/*.c', 'ocaml/plugins/**/*.h'],
                        skip=[], outside=['ocaml/test/'], pattern=SOURCE),
     # lean/ffi is the libcurl binding and ships with the library, so it is
     # scanned like lua/native and ocaml's stubs. A further note for editors
@@ -483,7 +485,9 @@ SOURCES = {
     # binding is plain `foreign import ccall` in .hs, needing no stub file.
     'haskell':    dict(globs=['haskell/src/**/*.hs', 'haskell/src/**/*.hsc',
                               'haskell/src/**/*.c', 'haskell/src/**/*.h',
-                              'haskell/cli/**/*.hs'],
+                              'haskell/cli/**/*.hs',
+                              'haskell/plugins/**/*.hs', 'haskell/plugins/**/*.hsc',
+                              'haskell/plugins/**/*.c', 'haskell/plugins/**/*.h'],
                        skip=[], outside=['haskell/test/'], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone

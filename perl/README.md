@@ -14,7 +14,7 @@ CPAN dependency. Its one dependency is
 nothing: perl has no manifest to declare it in, so the checkout is found the
 way omni is - `$PLUGIN_HOME`, then a sibling checkout - and `make deps`
 fetches a shallow clone when there is none. The library searches no path;
-`t/PluginHome.pm` does, for the tests and the CLI.
+`t/PluginHome.pm` does the searching for both the tests and the CLI.
 
 **https is the exception, and it is not this port's to fix.** `HTTP::Tiny`
 loads `IO::Socket::SSL` and `Net::SSLeay` on demand for an https request,
@@ -56,7 +56,7 @@ booleans. The redact-what-was-resolved method is `redactall`, to leave
 ## Four kinds are built in; the rest are plugins
 
 `env`, `memory`, `dotenv` and `file` read at most a local file, and they are
-in `lib/`. Every kind that opens a socket, signs a request or spawns a
+in `lib/`. Every kind that opens a socket, signs a request, or spawns a
 process - the vault clients, the cloud stores, the two CLIs, and `sigv4`
 with them - is a [voxgig/plugin](https://github.com/voxgig/plugin)
 definition under `plugins/`, and a `Sekreto` can build only the kinds its

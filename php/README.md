@@ -14,7 +14,7 @@ library drops into any project.
 
 ## Four kinds are built in; the other ten are plugins
 
-The core holds the chain, the cache, redaction and the four provider kinds
+The core holds the chain, the cache, redaction, and the four provider kinds
 that read at most a local file — `env`, `memory`, `dotenv`, `file`. Every
 kind that opens a socket, signs a request or spawns a process is a
 [voxgig/plugin](https://github.com/voxgig/plugin) definition in its own

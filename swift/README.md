@@ -22,7 +22,7 @@ checkout, then the shallow clone `make deps` fetches) and compiled into
 `build/` here. Nothing is written inside that checkout.
 
 The build leaves a static archive and a `.swiftmodule` per module in
-`build/`, and the CLI, the conformance suite and the seam suite all link
+`build/`, and the CLI, the conformance suite, and the seam suite all link
 that one build. Only the conformance suite needs voxgig/omni, and only on
 its link line.
 

@@ -100,7 +100,7 @@ so:
 
 `Sekreto.Plugins.all/0` is every shipped kind at once, for the CLI, the
 conformance suite, and an app whose chain is decided at run time. Reaching
-it reaches every network client, AWS request signing and the TLS binding
+it reaches every network client, AWS request signing, and the TLS binding
 under them, which is the cost the split exists to remove — so an app names
 the kinds it configures.
 
@@ -145,7 +145,7 @@ ten leaves all fourteen groups green and fails nine integration checks.
 Seventeen tests pin the seam: the full set, that every kind builds, the
 CLI's own call, the refusals, the numbered tags, the `sekreto_error`
 bridge, the boundary itself — and the one pair of opposite answers to a
-single call, `Integer.to_string(n, 16)`, which `src/json.ex` lowercases
+single call, `Integer.to_string(n, 16)`, whose result `src/json.ex` folds to lower case
 and `plugins/http.ex` must not. Flipping either passes all fourteen
 conformance groups and all nineteen integration checks, so a comment in
 each file was all that held them apart; now the whole control range and
@@ -158,7 +158,7 @@ warns on a call into a module that is not available and this port compiles
 with `--warnings-as-errors`. Then every beam it produced is read back
 through its `imports` chunk — the exact `{module, function, arity}` of
 every remote call the compiler emitted, which is this runtime's link map —
-and refused if it names a plugin module, a socket, a hash function or a
+and refused if it names a plugin module, a socket, a hash function, or a
 child process.
 
 That suite proves this port computes the same answers as the others. What
