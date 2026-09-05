@@ -1,4 +1,7 @@
-# AWS Signature Version 4, hand-rolled.
+# AWS Signature Version 4, hand-rolled - and OUTSIDE THE CORE, because it
+# is the library's one cryptographic edge. Only the two aws kinds sign
+# anything, which is why the core of no port imports a hash function:
+# `:crypto` is reached from here and from nowhere else.
 #
 # The AWS providers need exactly one thing from the AWS SDK - request
 # signing - and taking the SDK for it would break the no-dependency rule
@@ -10,9 +13,9 @@
 # carry known-answer cases that all ports must reproduce bit-for-bit, and
 # lets the integration mock recompute the signature server-side.
 #
-# A port of typescript/src/Sigv4.ts, which is canonical.
+# A port of typescript/plugins/sigv4.ts, which is canonical.
 
-defmodule Sekreto.Signing do
+defmodule Sekreto.Plugins.Signing do
   @moduledoc """
   One request to sign - the same declarative shape the shared spec uses.
 
@@ -32,10 +35,15 @@ defmodule Sekreto.Signing do
             session: ""
 end
 
-defmodule Sekreto.Sigv4 do
-  @moduledoc "AWS Signature Version 4."
+defmodule Sekreto.Plugins.Sigv4 do
+  @moduledoc """
+  AWS Signature Version 4.
 
-  alias Sekreto.Signing
+  A plugin module: nothing under `src/` names it, and `:crypto` is
+  reached from here alone. See docs/design/plugin-providers.md.
+  """
+
+  alias Sekreto.Plugins.Signing
 
   @doc "Lowercase hex, two digits a byte."
   def hex(bytes), do: Base.encode16(bytes, case: :lower)
@@ -60,9 +68,12 @@ defmodule Sekreto.Sigv4 do
       else
         # UPPERCASE hex, deliberately: AWS SigV4 specifies uppercase
         # percent-escapes, and Integer.to_string/2 already gives that.
-        # json.ex uses the same call and must LOWERCASE it -- the two are
-        # opposite requirements, which is exactly how one gets copied onto
-        # the other by mistake.
+        # src/json.ex uses the same call and must LOWERCASE it -- the two
+        # are opposite requirements, which is exactly how one gets copied
+        # onto the other by mistake. The split moved this file to
+        # plugins/ and left that one in the core, so the two now sit in
+        # different directories; the asymmetry is unchanged, and each
+        # file names the other.
         "%" <> String.pad_leading(Integer.to_string(ch, 16), 2, "0")
       end
     end)

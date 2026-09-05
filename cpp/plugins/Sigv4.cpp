@@ -4,6 +4,7 @@
 #include <cstdio>
 
 #include "Crypto.hpp"
+#include "Httpjson.hpp"
 
 namespace sekreto {
 
@@ -18,69 +19,6 @@ Bytes hmactext(const Bytes& key, const std::string& text) {
 }
 
 }  // namespace
-
-std::string uriescape(const std::string& text) {
-  std::string out;
-
-  for (unsigned char byte : text) {
-    bool unreserved = ('A' <= byte && 'Z' >= byte) || ('a' <= byte && 'z' >= byte) ||
-                      ('0' <= byte && '9' >= byte) || '-' == byte || '_' == byte ||
-                      '.' == byte || '~' == byte;
-
-    if (unreserved) {
-      out.push_back(static_cast<char>(byte));
-    } else {
-      char buf[8];
-      std::snprintf(buf, sizeof(buf), "%%%02X", byte);
-      out += buf;
-    }
-  }
-
-  return out;
-}
-
-std::string uridecode(const std::string& text) {
-  std::string out;
-  size_t index = 0;
-
-  while (index < text.size()) {
-    bool taken = false;
-
-    if ('%' == text[index] && index + 2 < text.size()) {
-      std::string digits = text.substr(index + 1, 2);
-      bool ok = true;
-      unsigned int code = 0;
-
-      for (char digit : digits) {
-        unsigned int val = 0;
-        if ('0' <= digit && '9' >= digit) {
-          val = static_cast<unsigned int>(digit - '0');
-        } else if ('a' <= digit && 'f' >= digit) {
-          val = static_cast<unsigned int>(digit - 'a' + 10);
-        } else if ('A' <= digit && 'F' >= digit) {
-          val = static_cast<unsigned int>(digit - 'A' + 10);
-        } else {
-          ok = false;
-          break;
-        }
-        code = (code << 4) | val;
-      }
-
-      if (ok) {
-        out.push_back(static_cast<char>(code));
-        index += 3;
-        taken = true;
-      }
-    }
-
-    if (!taken) {
-      out.push_back(text[index]);
-      index++;
-    }
-  }
-
-  return out;
-}
 
 std::string canonicalquery(const std::string& query) {
   if (query.empty()) return "";

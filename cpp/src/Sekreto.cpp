@@ -2,31 +2,11 @@
 
 #include <algorithm>
 
+#include "Providers.hpp"
+#include "ref.hpp"
+#include "types.hpp"
+
 namespace sekreto {
-
-bool Ordered::has(const std::string& key) const {
-  for (const auto& entry : pairs) {
-    if (key == entry.first) return true;
-  }
-  return false;
-}
-
-std::optional<std::string> Ordered::get(const std::string& key) const {
-  for (const auto& entry : pairs) {
-    if (key == entry.first) return entry.second;
-  }
-  return std::nullopt;
-}
-
-void Ordered::set(const std::string& key, const std::string& value) {
-  for (auto& entry : pairs) {
-    if (key == entry.first) {
-      entry.second = value;
-      return;
-    }
-  }
-  pairs.emplace_back(key, value);
-}
 
 std::string asciiupper(const std::string& text) {
   std::string out = text;
@@ -325,15 +305,142 @@ std::string storename(const Provider& provider) {
   return (std::string::npos == at) ? text : text.substr(0, at);
 }
 
+namespace {
+
+/// The message for a kind the catalog does not hold.
+///
+/// A kind sekreto has never heard of is a typo; a kind that exists as a
+/// plugin but was not passed in is the split working as designed and
+/// telling you what to pass. Collapsing the two was the first thing that
+/// made the split confusing to use.
+std::string unknownkind(const std::string& kind, const plugin::Catalog& catalog) {
+  std::string available;
+  plugin::V names = catalog.names();
+
+  for (size_t index = 0; index < plugin::len(names); index++) {
+    if (0 < index) available += ", ";
+    available += plugin::asstr(plugin::at(names, index));
+  }
+
+  std::string out =
+      "sekreto: unknown provider kind: " + kind + " (available: " + available + ")";
+
+  for (const std::string& shipped : KINDS().plugin) {
+    if (shipped == kind) {
+      return out + " - " + kind +
+             " is a sekreto plugin, not built in: pass it in the plugins option";
+    }
+  }
+
+  return out;
+}
+
+}  // namespace
+
+Sekreto::Sekreto(const SekretoOptions& options)
+    : catalog_(plugin::makecatalog()), docache_(options.cache) {
+  // Built-ins first, then the plugins, into one catalog: a plugin that
+  // names a built-in kind replaces it, which is how a host substitutes an
+  // implementation and never an accident, because the four names are
+  // documented.
+  for (const Definition& def : builtins()) catalog_->add(def);
+  for (const Definition& def : options.plugins) {
+    if (nullptr == def) {
+      throw SekretoError("sekreto: not a plugin definition: nothing"
+                         " - pass what providerplugin returned");
+    }
+    catalog_->add(def);
+  }
+
+  plugin::HostOptions hostopts;
+  hostopts.catalog = catalog_;
+  host_ = plugin::makehost(hostopts);
+
+  for (const ProviderSpec& spec : options.providers) {
+    entries_.push_back(declare(spec));
+  }
+}
+
 Sekreto::Sekreto(std::vector<std::shared_ptr<Provider>> providers,
                  std::vector<std::string> names, bool docache)
-    : docache_(docache) {
+    : catalog_(plugin::makecatalog()), docache_(docache) {
+  for (const Definition& def : builtins()) catalog_->add(def);
+
+  plugin::HostOptions hostopts;
+  hostopts.catalog = catalog_;
+  host_ = plugin::makehost(hostopts);
+
   for (size_t index = 0; index < providers.size(); index++) {
     std::string store = index < names.size() ? names[index] : "";
     // An empty name falls back to the provider's kind.
     if (store.empty()) store = storename(*providers[index]);
-    entries_.push_back(Entry{store, providers[index]});
+    entries_.push_back(Entry{store, "", providers[index]});
   }
+}
+
+/// One chain entry, as a plugin instance.
+///
+/// The instance is `kind` for a store named after its kind and
+/// `kind$store` otherwise - `hashicorp$prod` - so `host().list()` reads
+/// like the chain. A store name that is already taken gets a numbered tag
+/// from the host instead, because two providers MAY share a store name (a
+/// directed read walks both) and an instance ref may not.
+Sekreto::Entry Sekreto::declare(const ProviderSpec& spec) {
+  const std::string& kind = spec.kind;
+
+  if (!catalog_->has(kind)) {
+    throw SekretoError(unknownkind(kind, *catalog_));
+  }
+
+  std::string store = first(spec.name, kind);
+
+  if (!plugin::checktag(plugin::vstr(store))) {
+    throw SekretoError("sekreto: invalid store name: " + store);
+  }
+
+  std::string ref =
+      (store == kind) ? kind : plugin::formatref(plugin::vstr(kind), plugin::vstr(store));
+
+  if (nullptr != host_->instance(ref)) ref = host_->autotag(kind);
+
+  plugin::DeclareSpec declaration;
+  declaration.definition = kind;
+  declaration.options = optionsof(spec);
+
+  // A provider built by a `define` that then fails to go live would sit in
+  // its slot for ever; the mark is where to discard back to.
+  double mark = providermark();
+
+  try {
+    // `load` runs the definition's `define`, which builds the provider from
+    // the spec; `activate` takes the instance live. Nothing is contacted by
+    // either: a provider opens nothing until its first lookup.
+    host_->load(ref, declaration);
+    host_->activate(ref);
+  } catch (const plugin::PluginError& err) {
+    providerdiscard(mark);
+
+    // A SekretoError that crossed the boundary comes back out as itself,
+    // byte for byte. Anything else is not sekreto's to rewrite.
+    if (ERROR_CODE == err.code) {
+      throw SekretoError(plugin::asstr(plugin::get(err.details, "cause")));
+    }
+    throw;
+  } catch (...) {
+    providerdiscard(mark);
+    throw;
+  }
+
+  plugin::V ticket = host_->exports(ref + "/" + PROVIDER_EXPORT);
+  std::shared_ptr<Provider> provider =
+      plugin::isnum(ticket) ? takeprovider(plugin::asnum(ticket)) : nullptr;
+
+  if (nullptr == provider) {
+    providerdiscard(mark);
+    throw SekretoError("sekreto: plugin " + kind + " exported no provider");
+  }
+
+  return Entry{store, ref, provider};
 }
 
 std::string Sekreto::get(const Name& name) {
@@ -453,6 +560,10 @@ std::string Sekreto::redact(const std::string& text) const {
 void Sekreto::refresh() { cache_.clear(); }
 
 void Sekreto::close() {
+  // The host's own teardown: every instance is deactivated and unloaded,
+  // in reverse. `seen_` is untouched, so redaction still knows every value
+  // this chain ever resolved.
+  host_->close();
   entries_.clear();
   cache_.clear();
 }
@@ -477,6 +588,16 @@ Json Sekreto::tojson() const {
   }
 
   return Json::obj({{"stores", Json::arr(names)}});
+}
+
+Sekreto makesekreto(const std::vector<ProviderSpec>& specs,
+                    const std::vector<Definition>& plugins, bool cache) {
+  SekretoOptions options;
+  options.providers = specs;
+  options.plugins = plugins;
+  options.cache = cache;
+
+  return Sekreto(options);
 }
 
 }  // namespace sekreto

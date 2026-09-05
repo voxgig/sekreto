@@ -20,6 +20,15 @@
 # Objects are an ORDERED list of pairs, not a map: a payload's field order
 # is signed, and Elixir maps have no order at all above 32 keys.
 #
+# IN THE CORE, THOUGH NO CORE MODULE CALLS IT. What makes a kind a plugin
+# is a socket, a signature or a child process, and this reads a string:
+# there is nothing here to keep out of a chain of built-ins, and the BEAM
+# loads no module nothing calls. It stays because the CLI assembles its
+# one line of output with `quotestr`, and seven plugin kinds parse a
+# vault's answer with `parse` - one writer for both, so the escaping can
+# only be got right or wrong once. java/src/Json.java and
+# kotlin/src/Json.kt sit in their cores for the same reason.
+#
 # A port of typescript/src/Json.ts, which is canonical.
 
 defmodule Sekreto.Json do
@@ -145,9 +154,11 @@ defmodule Sekreto.Json do
         # port emits lowercase here -- rust `\\u{:04x}`, kotlin, scala and
         # java `"\\u%04x"`, csharp `ToString("x4")` -- and the writer is
         # contract, so a port that disagreed would be the thing that is
-        # wrong. Note the deliberate asymmetry with sigv4.ex, where the
-        # SAME call must stay UPPERCASE: AWS percent-escapes are uppercase
-        # by specification. Two sites, one call, opposite answers.
+        # wrong. Note the deliberate asymmetry with plugins/sigv4.ex,
+        # where the SAME call must stay UPPERCASE: AWS percent-escapes
+        # are uppercase by specification. Two sites, one call, opposite
+        # answers -- and since the split they are in two directories, so
+        # each file names the other rather than relying on proximity.
         other when other < 0x20 ->
           "\\u" <>
             String.pad_leading(String.downcase(Integer.to_string(other, 16), :ascii), 4, "0")

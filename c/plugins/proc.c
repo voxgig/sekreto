@@ -1,4 +1,4 @@
-/* Running a child, and the two clock helpers the providers share.
+/* Running a child: the ONE object in this library that forks.
  *
  * The boru and secretspec providers read their secret from a CLI, which
  * is the interface those tools offer a program in another language. Two
@@ -29,10 +29,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/wait.h>
-#include <time.h>
 #include <unistd.h>
 
-#include "internal.h"
+#include "support.h"
 
 static void drainpipe(sek_buf *into, int fd) {
   char chunk[4096];
@@ -228,52 +227,4 @@ sek_err sek_runcmd(sek_pool *pool, char *const argv[], const char *command, cons
   out->status = WIFEXITED(status) ? WEXITSTATUS(status) : 1;
 
   return NULL;
-}
-
-/* ---- clocks -------------------------------------------------------- */
-
-/* now + max(seconds - 60, 1), so a token is renewed shortly before its
- * lease runs out rather than after a vault has already expired it. A
- * missing or zero expiry means never renew, which is what a configured
- * token gets. */
-long long sek_renewtime(const sek_json *expires) {
-  double seconds = 0;
-
-  if (NULL == expires) {
-    return SEK_NEVER;
-  }
-
-  if (SEK_JSON_NUM == expires->type) {
-    seconds = expires->numval;
-  } else if (SEK_JSON_STR == expires->type) {
-    /* Azure IMDS sends expires_in as a STRING. */
-    char *stop = NULL;
-    seconds = strtod(expires->strval, &stop);
-    if (NULL == stop || stop == expires->strval) {
-      seconds = 0;
-    }
-  }
-
-  if (!(0 < seconds)) {
-    return SEK_NEVER;
-  }
-
-  if (60 < seconds) {
-    seconds -= 60;
-  } else {
-    seconds = 1;
-  }
-
-  return sek_nowms() + (long long)(seconds * 1000);
-}
-
-char *sek_awsnow(sek_pool *pool) {
-  time_t now = time(NULL);
-  struct tm parts;
-  char buf[32];
-
-  gmtime_r(&now, &parts);
-  strftime(buf, sizeof(buf), "%Y%m%dT%H%M%SZ", &parts);
-
-  return sek_strdup(pool, buf);
 }

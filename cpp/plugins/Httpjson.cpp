@@ -1,10 +1,10 @@
-#include "Http.hpp"
+#include "Httpjson.hpp"
 
 #include <errno.h>
 #include <fcntl.h>
-#include <signal.h>
 #include <netdb.h>
 #include <poll.h>
+#include <signal.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/time.h>
@@ -12,9 +12,9 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <limits>
 #include <vector>
 
-#include "Crypto.hpp"
 #include "Tls.hpp"
 
 namespace sekreto {
@@ -127,7 +127,10 @@ Target split(const std::string& url) {
   return out;
 }
 
-long nowms() {
+/// The MONOTONIC clock, for deadlines - distinct from `nowms`, which is
+/// wall-clock and answers when a logged-in token expires. A deadline read
+/// off the wall clock moves when the system time does.
+long steadyms() {
   return static_cast<long>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::steady_clock::now().time_since_epoch())
                                .count());
@@ -161,11 +164,11 @@ int connectto(const Target& target, const std::string& url) {
     throw unreachable(url, gai_strerror(code));
   }
 
-  long deadline = nowms() + TIMEOUT * 1000;
+  long deadline = steadyms() + TIMEOUT * 1000;
   std::string last = "no address";
 
   for (addrinfo* step = found; nullptr != step; step = step->ai_next) {
-    long left = deadline - nowms();
+    long left = deadline - steadyms();
     if (0 >= left) {
       last = "timed out";
       break;
@@ -464,6 +467,197 @@ Response httprequest(const std::string& method, const std::string& url,
   }
 
   return out;
+}
+
+
+// ------------------------------------------------------------- url codecs
+
+std::string uriescape(const std::string& text) {
+  std::string out;
+
+  for (unsigned char byte : text) {
+    bool unreserved = ('A' <= byte && 'Z' >= byte) || ('a' <= byte && 'z' >= byte) ||
+                      ('0' <= byte && '9' >= byte) || '-' == byte || '_' == byte ||
+                      '.' == byte || '~' == byte;
+
+    if (unreserved) {
+      out.push_back(static_cast<char>(byte));
+    } else {
+      char buf[8];
+      std::snprintf(buf, sizeof(buf), "%%%02X", byte);
+      out += buf;
+    }
+  }
+
+  return out;
+}
+
+std::string uridecode(const std::string& text) {
+  std::string out;
+  size_t index = 0;
+
+  while (index < text.size()) {
+    bool taken = false;
+
+    if ('%' == text[index] && index + 2 < text.size()) {
+      std::string digits = text.substr(index + 1, 2);
+      bool ok = true;
+      unsigned int code = 0;
+
+      for (char digit : digits) {
+        unsigned int val = 0;
+        if ('0' <= digit && '9' >= digit) {
+          val = static_cast<unsigned int>(digit - '0');
+        } else if ('a' <= digit && 'f' >= digit) {
+          val = static_cast<unsigned int>(digit - 'a' + 10);
+        } else if ('A' <= digit && 'F' >= digit) {
+          val = static_cast<unsigned int>(digit - 'A' + 10);
+        } else {
+          ok = false;
+          break;
+        }
+        code = (code << 4) | val;
+      }
+
+      if (ok) {
+        out.push_back(static_cast<char>(code));
+        index += 3;
+        taken = true;
+      }
+    }
+
+    if (!taken) {
+      out.push_back(text[index]);
+      index++;
+    }
+  }
+
+  return out;
+}
+
+// ----------------------------------------------------------------- base64
+
+
+namespace {
+
+bool b64value(char ch, uint32_t& out) {
+  if ('A' <= ch && 'Z' >= ch) {
+    out = static_cast<uint32_t>(ch - 'A');
+  } else if ('a' <= ch && 'z' >= ch) {
+    out = static_cast<uint32_t>(ch - 'a' + 26);
+  } else if ('0' <= ch && '9' >= ch) {
+    out = static_cast<uint32_t>(ch - '0' + 52);
+  } else if ('+' == ch) {
+    out = 62;
+  } else if ('/' == ch) {
+    out = 63;
+  } else {
+    return false;
+  }
+
+  return true;
+}
+
+}  // namespace
+
+bool unbase64(const std::string& text, std::string& out) {
+  std::string clean;
+  clean.reserve(text.size());
+
+  for (char ch : text) {
+    if (' ' == ch || '\n' == ch || '\r' == ch || '\t' == ch) continue;
+    clean.push_back(ch);
+  }
+
+  if (0 != clean.size() % 4) return false;
+
+  size_t body = clean.size();
+  int padding = 0;
+
+  while (0 < body && '=' == clean[body - 1]) {
+    padding++;
+    body--;
+    if (2 < padding) return false;
+  }
+
+  uint32_t accumulator = 0;
+  int bits = 0;
+  std::string decoded;
+
+  for (size_t index = 0; index < body; index++) {
+    uint32_t sextet = 0;
+    if (!b64value(clean[index], sextet)) return false;
+
+    accumulator = (accumulator << 6) | sextet;
+    bits += 6;
+
+    if (8 <= bits) {
+      bits -= 8;
+      decoded.push_back(static_cast<char>((accumulator >> bits) & 0xff));
+    }
+  }
+
+  out = decoded;
+  return true;
+}
+
+
+// ----------------------------------------------------------------- json
+
+Answer fetchjson(const std::string& method, const std::string& url,
+                 const Ordered& headers, const std::optional<std::string>& body) {
+  Response res = httprequest(method, url, headers, body);
+
+  Answer out;
+  out.status = res.status;
+
+  bool parsed = Json::parse(res.body, out.body);
+
+  // A success status promised JSON; a body that does not parse means the
+  // store could not answer coherently, and treating it as a miss would
+  // fall through to a weaker store. Error statuses may carry any body -
+  // they are decided on status alone.
+  if (200 == res.status && !parsed) {
+    throw SekretoError("sekreto: malformed response from " + bareurl(url));
+  }
+
+  return out;
+}
+
+std::optional<std::string> textof(const Json& val) {
+  std::string out;
+  if (!val.text(out)) return std::nullopt;
+  return out;
+}
+
+// ------------------------------------------------------------ token clocks
+
+const double NEVER = std::numeric_limits<double>::max();
+
+double nowms() {
+  return static_cast<double>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                 std::chrono::system_clock::now().time_since_epoch())
+                                 .count());
+}
+
+double renewtime(const Json& expires) {
+  double seconds = 0;
+  std::string text;
+
+  if (expires.asnum(seconds)) {
+    // Taken as it stands.
+  } else if (expires.asstr(text)) {
+    char* stop = nullptr;
+    seconds = std::strtod(text.c_str(), &stop);
+    if (nullptr == stop || '\0' != *stop) seconds = 0;
+  }
+
+  if (0 >= seconds) return NEVER;
+
+  double lead = seconds - 60;
+  if (1 > lead) lead = 1;
+
+  return nowms() + lead * 1000;
 }
 
 }  // namespace sekreto

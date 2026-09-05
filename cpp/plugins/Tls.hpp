@@ -13,13 +13,13 @@
 // transport only, so Crypto.cpp carries SHA-256 and HMAC in-tree, exactly
 // as rust/src/crypto.rs does beside rustls.
 
-#ifndef SEKRETO_TLS_HPP
-#define SEKRETO_TLS_HPP
+#ifndef SEKRETO_PLUGINS_TLS_HPP
+#define SEKRETO_PLUGINS_TLS_HPP
 
 #include <memory>
 #include <string>
 
-#include "Http.hpp"
+#include "Httpjson.hpp"
 
 namespace sekreto {
 

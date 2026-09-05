@@ -1,4 +1,8 @@
--- The bridge to the transport helper.
+-- The bridge to the transport helper - a PLUGIN module, never the core.
+--
+-- Everything that opens a socket or starts a child process goes through
+-- this file, so a chain of built-in kinds never requires it and never
+-- needs native/sekretonet.c to have been built at all.
 --
 -- Lua cannot open a socket, and `io.popen` is unidirectional - so a
 -- request cannot be written to a child and its answer read back through
@@ -11,9 +15,11 @@
 -- native/sekretonet.c unlinks it before reading a byte of it.
 --
 -- Nothing about HTTP is known here. This module moves bytes, exactly as
--- the helper does.
+-- the helper does - and it runs children, which is the other half of what
+-- the helper is for.
 
 local err = require('sekreto.err')
+local name = require('sekreto.name')
 
 local M = {}
 
@@ -25,7 +31,7 @@ local function helperpath()
   local source = debug.getinfo(1, 'S').source
 
   if '@' == source:sub(1, 1) then
-    local dir = source:sub(2):match('^(.*)/src/sekreto/net%.lua$')
+    local dir = source:sub(2):match('^(.*)/src/sekreto/plugins/net%.lua$')
     if nil ~= dir then
       return dir .. '/build/sekreto-net'
     end
@@ -168,6 +174,22 @@ function M.exec(argv, overrides)
   end
 
   return got
+end
+
+--- What a finished child process left behind, with a failure to start it
+--- raised rather than returned.
+---
+--- Both streams are drained concurrently and stdin is closed; see
+--- native/sekretonet.c, which does the draining. Argv is an array and
+--- never a shell string, and no secret is ever put on a command line.
+function M.runcmd(argv, overrides, command)
+  local ran, why = M.exec(argv, overrides)
+
+  if nil == ran then
+    err.fail('sekreto: cannot run ' .. command .. ': ' .. why)
+  end
+
+  return ran.out, name.trim(ran.why), ran.status
 end
 
 return M

@@ -1,4 +1,5 @@
-# The providers a Sekreto chains together.
+# What a provider is, how a provider kind becomes a voxgig/plugin
+# definition - and the four BUILT-IN kinds.
 #
 # A provider answers one question: "do you have this secret?" It returns
 # the value, or nil to mean "ask the next one". Nothing else about a
@@ -12,7 +13,17 @@
 # configuration - is an ERROR: falling through there would quietly reach
 # for a weaker store.
 #
-# A port of typescript/src/Providers.ts, which is canonical.
+# THIS MODULE OPENS NO SOCKET, SIGNS NOTHING AND SPAWNS NOTHING. What
+# makes a kind built in is that it needs nothing of the platform beyond
+# reading a local file; every kind that opens a socket, signs a request or
+# spawns a process is a voxgig/plugin definition under plugins/, its own
+# module, loaded only by a program that names it. `elixirc` proves it:
+# `make check-core` compiles src/ alone, and a call into a module that is
+# not there is a warning this repository treats as an error
+# (docs/design/plugin-providers.md).
+#
+# A port of typescript/src/provider/support.ts and
+# typescript/src/provider/builtin.ts, which are canonical.
 
 defmodule Sekreto.AuthSpec do
   @moduledoc """
@@ -148,33 +159,36 @@ defimpl Inspect, for: Sekreto.ProviderSpec do
 end
 
 defmodule Sekreto.Providers do
-  @moduledoc "The fourteen provider kinds, and the factory that builds them."
+  @moduledoc """
+  Provider support, and the four built-in provider kinds.
+
+  A provider kind is a voxgig/plugin `Definition`, and `providerplugin/2`
+  is the whole bridge between the two libraries - the four kinds below are
+  made with it, the ten under plugins/ are made with it, and so is a
+  caller's own.
+  """
 
   alias Sekreto.AuthSpec
   alias Sekreto.Cell
   alias Sekreto.Error
-  alias Sekreto.Http
-  alias Sekreto.Json
   alias Sekreto.ProviderSpec
-  alias Sekreto.Sigv4
-  alias Sekreto.Signing
-
-  # The Key Vault audience an Azure token is minted for.
-  @resource "https://vault.azure.net"
-
-  # A token with no expiry is never renewed.
-  @never 9_223_372_036_854_775_807
+  alias Voxgig.Plugin.Inst
+  alias Voxgig.Plugin.Types
 
   @doc "What a credential field reports about itself."
   def setornot(value), do: if("" == value or nil == value, do: "[unset]", else: "[set]")
 
-  @doc "An environment variable, or the empty string."
+  @doc """
+  An environment variable, or the empty string.
+
+  Kept here rather than under plugins/ although only the aws and gcp kinds
+  read one: `System.get_env/1` is what the built-in `env` kind already
+  calls, so this reaches nothing the core does not reach anyway.
+  """
   def getenv(name), do: System.get_env(name) || ""
 
   @doc "The first candidate that is set and non-empty, or the empty string."
   def first(candidates), do: Enum.find(candidates, "", fn value -> is_binary(value) and "" != value end)
-
-  defp trimslash(text), do: Sekreto.dropsuffix(text, "/")
 
   # ------------------------------------------------------------ addresses
 
@@ -301,121 +315,6 @@ defmodule Sekreto.Providers do
 
     :ok
   end
-
-  # ---------------------------------------------------------- round-trips
-
-  @doc """
-  One JSON round-trip. Answers `%{status: integer, body: json | :none}`.
-
-  Network failure is always an error - an unreachable store is a store that
-  could not answer. A success status promised JSON, so a 200 whose body
-  does not parse is a store that answered incoherently, and treating that
-  as a miss would fall through to a weaker store. Error statuses may carry
-  any body at all: they are decided on status alone.
-  """
-  def fetchjson(method, url, headers \\ [], body \\ nil) do
-    answer = Http.fetch(method, url, headers, body)
-
-    parsed =
-      case Json.parse(answer.body) do
-        {:ok, value} -> value
-        :error -> :none
-      end
-
-    if 200 == answer.status and :none == parsed do
-      raise Error, message: "sekreto: malformed response from " <> Http.bare(url)
-    end
-
-    %{status: answer.status, body: parsed}
-  end
-
-  @doc """
-  Run a child to completion and collect both its streams.
-
-  The BEAM's ports cannot give a parent the child's stderr on a channel of
-  its own - and boru's and SecretSpec's miss detection is a phrase they
-  print THERE, so merging it into stdout would put a diagnostic where a
-  secret is supposed to be. The child is therefore started through `sh`
-  with its stderr redirected to a file and its stdin taken from
-  `/dev/null`, which also delivers the other two obligations: a CLI that
-  prompts for a passphrase sees EOF rather than hanging, and a child that
-  writes more than one 64 KiB pipe buffer to stderr cannot deadlock,
-  because nothing is draining a pipe.
-
-  The arguments go through `$0` and `$@`, so nothing is ever parsed by the
-  shell, and the redirect target arrives in the environment rather than
-  spliced into the script text.
-  """
-  def runcmd(command, args, env \\ []) do
-    exe = System.find_executable(command)
-
-    if nil == exe do
-      raise Error, message: "sekreto: cannot run " <> command <> ": no such file or directory"
-    end
-
-    errfile =
-      Path.join(
-        System.tmp_dir() || "/tmp",
-        "sekreto-stderr-#{:erlang.unique_integer([:positive])}"
-      )
-
-    script = ~s|exec "$0" "$@" </dev/null 2>"$SEKRETO_STDERR_FILE"|
-
-    try do
-      {out, status} =
-        System.cmd("/bin/sh", ["-c", script, exe | args],
-          env: [{"SEKRETO_STDERR_FILE", errfile} | env],
-          stderr_to_stdout: false
-        )
-
-      why =
-        case File.read(errfile) do
-          {:ok, text} -> String.trim(text)
-          {:error, _why} -> ""
-        end
-
-      %{out: out, why: why, status: status}
-    rescue
-      err in [ErlangError, ArgumentError] ->
-        raise Error, message: "sekreto: cannot run " <> command <> ": " <> Exception.message(err)
-    after
-      File.rm(errfile)
-    end
-  end
-
-  @doc """
-  When a logged-in token must be renewed, from its expiry in seconds (a
-  JSON number, or a string as Azure IMDS sends it): now + max(seconds - 60,
-  1). A missing or zero expiry means never renew.
-  """
-  def renewtime(expires) do
-    seconds =
-      case expires do
-        {:num, value} ->
-          value
-
-        {:str, value} ->
-          case Float.parse(value) do
-            {value, _rest} -> value
-            :error -> 0.0
-          end
-
-        _other ->
-          0.0
-      end
-
-    if 0 >= seconds do
-      @never
-    else
-      System.system_time(:millisecond) + trunc(max(seconds - 60, 1.0) * 1000)
-    end
-  end
-
-  defp expired?(cell) do
-    held = Cell.get(cell)
-    "" == held.token or System.system_time(:millisecond) >= held.renewat
-  end
-
   # --------------------------------------------------------- the built-in
   #
   # "Built in" means: needs nothing of the platform beyond reading a local
@@ -526,1024 +425,106 @@ defmodule Sekreto.Providers do
       describe: fn -> "file:" <> dir end
     }
   end
-
-  # ------------------------------------------------------------ hashicorp
-
-  @doc """
-  HashiCorp Vault.
-
-  KV v2 (the default): `api.token` reads `{addr}/v1/{mount}/data/api` and
-  takes the `token` field of `data.data`. KV v1 reads
-  `{addr}/v1/{mount}/api` and takes the field of `data`. A 404 means "not
-  here" - a miss - so a vault can sit in a chain with fallbacks.
-
-  A Vault Enterprise namespace rides the `X-Vault-Namespace` header, on
-  logins as well as reads.
-
-  Instead of being handed a token, the provider can log in: Kubernetes auth
-  (the pod's service-account JWT, from its conventional path) or AppRole. A
-  failed login is an error, never a miss - it means this store could not
-  answer at all.
-  """
-  def hashicorp(addr, token, mountgiven, kvgiven, vaultnamespace, auth) do
-    mount = first([mountgiven, "secret"])
-    kv = kvgiven || 2
-
-    # A version typo like kv: 3 must not quietly behave as v2 and turn its
-    # 404s into misses; there is nothing safe to assume it meant.
-    if 1 != kv and 2 != kv do
-      raise Error, message: "sekreto: hashicorp: unsupported kv version: " <> tostr(kv)
-    end
-
-    # A configured token is kept forever; a logged-in token is renewed
-    # shortly before its lease runs out - a long-running process must not
-    # keep presenting a token the vault already expired.
-    cell = Cell.new(%{token: token, renewat: @never})
-
-    base = fn -> if "" == vaultnamespace, do: [], else: [{"X-Vault-Namespace", vaultnamespace}] end
-
-    login = fn ->
-      if nil == auth do
-        raise Error, message: "sekreto: hashicorp: no token and no auth method"
-      end
-
-      authmount = first([auth.mount, auth.method])
-      url = trimslash(addr) <> "/v1/auth/" <> authmount <> "/login"
-
-      body =
-        case auth.method do
-          "kubernetes" ->
-            jwt =
-              if "" != auth.jwt do
-                auth.jwt
-              else
-                jwtfile =
-                  first([auth.jwtfile, "/var/run/secrets/kubernetes.io/serviceaccount/token"])
-
-                case File.read(jwtfile) do
-                  {:ok, text} ->
-                    String.trim(text)
-
-                  {:error, _why} ->
-                    raise Error,
-                      message: "sekreto: hashicorp: cannot read jwt file " <> jwtfile
-                end
-              end
-
-            Json.obj([{"role", Json.str(auth.role)}, {"jwt", Json.str(jwt)}])
-
-          "approle" ->
-            Json.obj([
-              {"role_id", Json.str(auth.roleid)},
-              {"secret_id", Json.str(auth.secretid)}
-            ])
-
-          other ->
-            raise Error, message: "sekreto: hashicorp: unknown auth method: " <> other
-        end
-
-      res = fetchjson("POST", url, base.(), Json.stringify(body))
-      got = Json.text(Json.dig(res.body, ["auth", "client_token"]))
-
-      if 200 != res.status or :none == got or "" == got do
-        raise Error,
-          message: "sekreto: hashicorp login failed: " <> tostr(res.status) <> ": " <> url
-      end
-
-      Cell.put(cell, %{
-        token: got,
-        renewat: renewtime(Json.dig(res.body, ["auth", "lease_duration"]))
-      })
-    end
-
-    %{
-      lookup: fn name ->
-        checkaddr(addr)
-
-        if expired?(cell), do: login.()
-
-        ref = Sekreto.vaultref(name)
-        stem = trimslash(addr) <> "/v1/" <> mount
-        url = if 1 == kv, do: stem <> "/" <> ref.path, else: stem <> "/data/" <> ref.path
-
-        headers = base.() ++ [{"X-Vault-Token", Cell.get(cell).token}]
-        res = fetchjson("GET", url, headers)
-
-        cond do
-          404 == res.status ->
-            nil
-
-          200 != res.status ->
-            raise Error,
-              message: "sekreto: hashicorp error: " <> tostr(res.status) <> ": " <> url
-
-          true ->
-            data =
-              if 1 == kv,
-                do: Json.dig(res.body, ["data"]),
-                else: Json.dig(res.body, ["data", "data"])
-
-            nonone(Json.text(Json.dig(data, [ref.field])))
-        end
-      end,
-      describe: fn -> "hashicorp:" <> addr <> "/" <> mount end
-    }
-  end
-
-  # ----------------------------------------------------------------- boru
+  # ------------------------------ providers as voxgig/plugin definitions
 
   @doc """
-  A boru vault.
-
-  Two ways in, both boru's own.
-
-  With no `addr`, the CLI: `boru vault get --reveal <alias>` prints the
-  secret on stdout and nothing else. The passphrase is read by boru itself
-  from `BORU_VAULT_PASSPHRASE`; sekreto never accepts it as config and
-  never puts it on a command line, where it would show up in the process
-  table.
-
-  With an `addr`, boru's wire protocol: a read-only, HashiCorp-shaped
-  provision API authenticated by a capability token. A sekreto name is
-  already a valid boru alias, and boru aliases keep their dots, so
-  `api.token` is the single path segment `api.token` - not the `api`/`token`
-  split a HashiCorp KV gets. The value is the `value` field.
+  The export key under which a provider definition publishes the provider
+  it built. `Sekreto` reads `<ref>/provider` off the host.
   """
-  def boru(commandgiven, namespace, home, addrgiven, token, mountgiven) do
-    command = first([commandgiven, "boru"])
-    addr = trimslash(addrgiven)
-    mount = first([mountgiven, "secret"])
-
-    %{
-      lookup: fn name ->
-        Sekreto.checkname(name)
-
-        if "" != addr do
-          checkaddr(addr)
-
-          # The dotted name stays one path segment: boru aliases keep dots.
-          alias_ = if "" == namespace, do: name, else: namespace <> "/" <> name
-          url = addr <> "/v1/" <> mount <> "/data/" <> alias_
-
-          res = fetchjson("GET", url, [{"X-Vault-Token", token}])
-
-          cond do
-            404 == res.status ->
-              nil
-
-            200 != res.status ->
-              raise Error,
-                message: "sekreto: boru serve error: " <> tostr(res.status) <> ": " <> url
-
-            true ->
-              nonone(Json.text(Json.dig(res.body, ["data", "data", "value"])))
-          end
-        else
-          alias_ = if "" == namespace, do: name, else: namespace <> ":" <> name
-          env = if "" == home, do: [], else: [{"BORU_HOME", home}]
-
-          ran = runcmd(command, ["vault", "get", "--reveal", alias_], env)
-
-          cond do
-            # boru prints the value and one newline, and nothing else.
-            0 == ran.status ->
-              Sekreto.dropsuffix(ran.out, "\n")
-
-            # "no alias named" is boru saying it does not hold this secret,
-            # which is a miss. A locked vault or a wrong passphrase is not:
-            # treating it as one would fall through to a weaker store
-            # without saying so.
-            borumiss(ran.why) ->
-              nil
-
-            true ->
-              raise Error,
-                message:
-                  "sekreto: boru vault error: " <>
-                    if("" == ran.why, do: "exit " <> tostr(ran.status), else: ran.why)
-          end
-        end
-      end,
-      describe: fn ->
-        cond do
-          "" != addr -> "boru:" <> addr
-          "" != namespace -> "boru:" <> namespace
-          true -> "boru"
-        end
-      end
-    }
-  end
+  def provider_export, do: "provider"
 
   @doc """
-  Does this boru failure mean "no such secret" rather than "I could not
-  answer"? Matched on boru's own wording for a missing alias.
-  """
-  def borumiss(why), do: String.contains?(why, "no alias named")
+  The voxgig/plugin error code a `Sekreto.Error` travels under when it is
+  raised inside a definition's `define`.
 
-  # ----------------------------------------------------------- secretspec
+  plugin wraps a code-less error raised by a callback as
+  `plugin_define_failed`, and keeps an error that already carries a code. A
+  provider that refuses its own configuration - `kv: 3`, a missing project
+  - raises a `Sekreto.Error`, and that message is pinned by the spec byte
+  for byte, so it must come back out of the host exactly as it went in.
+  `providerplugin/2` gives it this code on the way in; `Sekreto` turns it
+  back into a `Sekreto.Error` on the way out.
+  """
+  def error_code, do: "sekreto_error"
 
   @doc """
-  SecretSpec.
-
-  SecretSpec is a declaration - a `secretspec.toml` naming the secrets a
-  project needs - plus a chain of its own backends to satisfy them from.
-  That makes it the same shape as sekreto one level down, and the reason to
-  support it is the same reason sekreto exists: a project that has already
-  declared its secrets there should not have to declare them again here.
-
-  A reason is required, not optional: SecretSpec records every read in an
-  audit log and refuses to read at all without one.
-  """
-  def secretspec(commandgiven, file, profile, backend, reason, prefix) do
-    command = first([commandgiven, "secretspec"])
-
-    %{
-      lookup: fn name ->
-        key = Sekreto.envkey(name, prefix)
-
-        args =
-          (if "" == file, do: [], else: ["--file", file]) ++
-            ["get", key] ++
-            (if "" == backend, do: [], else: ["--provider", backend]) ++
-            (if "" == profile, do: [], else: ["--profile", profile]) ++
-            ["--reason", first([reason, "sekreto"])]
-
-        ran = runcmd(command, args)
-
-        cond do
-          0 == ran.status ->
-            Sekreto.dropsuffix(ran.out, "\n")
-
-          secretspecmiss(ran.why, key) ->
-            nil
-
-          true ->
-            raise Error,
-              message:
-                "sekreto: secretspec error: " <>
-                  if("" == ran.why, do: "exit " <> tostr(ran.status), else: ran.why)
-        end
-      end,
-      describe: fn -> if "" == backend, do: "secretspec", else: "secretspec:" <> backend end
-    }
-  end
-
-  @doc """
-  Does this SecretSpec failure mean "no such secret" rather than "I could
-  not answer"?
-
-  SecretSpec says `Secret 'API_TOKEN' not found` for both a name it does
-  not declare and one declared with no value, and both are misses.
-
-  MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
-  `Provider backend 'keyring' not found`, which is a store that could not
-  answer at all - and reading that as a miss is the worst failure this
-  library has, because the chain then falls through to a weaker store
-  without saying so.
-  """
-  def secretspecmiss(why, key), do: String.contains?(why, "Secret '" <> key <> "' not found")
-
-  # ------------------------------------------------------------------ aws
-
-  @doc "The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now."
-  def awsnow do
-    {{year, month, day}, {hour, minute, second}} = :calendar.universal_time()
-
-    pad = fn value, width ->
-      value |> Integer.to_string() |> String.pad_leading(width, "0")
-    end
-
-    pad.(year, 4) <>
-      pad.(month, 2) <>
-      pad.(day, 2) <> "T" <> pad.(hour, 2) <> pad.(minute, 2) <> pad.(second, 2) <> "Z"
-  end
-
-  @doc """
-  Region and credentials, from config first and the standard AWS_*
-  environment variables second - those are AWS's own convention, and a pod
-  or CI job that has them set should just work. Missing either is an error:
-  an AWS store with no credentials could not answer.
-  """
-  def awsauth(region, keyid, secret, session) do
-    useregion = first([region, getenv("AWS_REGION"), getenv("AWS_DEFAULT_REGION")])
-    usekeyid = first([keyid, getenv("AWS_ACCESS_KEY_ID")])
-    usesecret = first([secret, getenv("AWS_SECRET_ACCESS_KEY")])
-    usesession = first([session, getenv("AWS_SESSION_TOKEN")])
-
-    if "" == useregion do
-      raise Error, message: "sekreto: aws: no region (set region or AWS_REGION)"
-    end
-
-    if "" == usekeyid or "" == usesecret do
-      raise Error,
-        message:
-          "sekreto: aws: no credentials" <>
-            " (set keyid/secret or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)"
-    end
-
-    %{region: useregion, keyid: usekeyid, secret: usesecret, session: usesession}
-  end
-
-  @doc "One signed call to an AWS JSON-1.1 API."
-  def awscall(opts, service, target, payload) do
-    auth = awsauth(opts.region, opts.keyid, opts.secret, opts.session)
-
-    # The China partition lives under its own suffix; every other
-    # commercial region is plain amazonaws.com.
-    suffix =
-      if String.starts_with?(auth.region, "cn-"),
-        do: ".amazonaws.com.cn",
-        else: ".amazonaws.com"
-
-    useaddr = first([opts.addr, "https://" <> service <> "." <> auth.region <> suffix])
-    checkaddr(useaddr)
-
-    url = trimslash(useaddr) <> "/"
-
-    extras = [
-      {"content-type", "application/x-amz-json-1.1"},
-      {"x-amz-target", target}
-    ]
-
-    signed =
-      Sigv4.sigv4(%Signing{
-        method: "POST",
-        url: url,
-        service: service,
-        region: auth.region,
-        keyid: auth.keyid,
-        secret: auth.secret,
-        datetime: awsnow(),
-        headers: extras,
-        body: payload,
-        session: auth.session
-      })
-
-    fetchjson("POST", url, extras ++ signed, payload)
-  end
-
-  @doc """
-  Does this AWS error body name one of the not-found types? Those are a
-  miss; every other failure is a store that could not answer.
-  """
-  def awsmiss(body, types) do
-    case Json.asstr(Json.dig(body, ["__type"])) do
-      :none -> false
-      errtype -> Enum.any?(types, fn want -> String.contains?(errtype, want) end)
-    end
-  end
-
-  @doc """
-  AWS Secrets Manager.
-
-  `api.token` reads the secret named `api` (the vaultref path, so
-  `db.pass.main` reads `db/pass`) and takes the `token` field of its JSON
-  SecretString - the AWS idiom of one JSON map per secret. A SecretString
-  that is not JSON is the value itself, under the conventional field
-  `value`.
-  """
-  def awssecrets(opts) do
-    %{
-      lookup: fn name ->
-        ref = Sekreto.vaultref(name)
-
-        res =
-          awscall(
-            opts,
-            "secretsmanager",
-            "secretsmanager.GetSecretValue",
-            Json.stringify(Json.obj([{"SecretId", Json.str(ref.path)}]))
-          )
-
-        cond do
-          400 == res.status and awsmiss(res.body, ["ResourceNotFoundException"]) ->
-            nil
-
-          200 != res.status ->
-            raise Error, message: "sekreto: aws secretsmanager error: " <> tostr(res.status)
-
-          true ->
-            case Json.asstr(Json.dig(res.body, ["SecretString"])) do
-              :none ->
-                # A binary secret has no fields to address; only the
-                # conventional `value` field can mean "the bytes
-                # themselves".
-                bin = Json.asstr(Json.dig(res.body, ["SecretBinary"]))
-
-                if :none != bin and "value" == ref.field do
-                  case unbase64(bin) do
-                    :error ->
-                      raise Error, message: "sekreto: aws secretsmanager: undecodable secret"
-
-                    text ->
-                      text
-                  end
-                end
-
-              text ->
-                case Json.parse(text) do
-                  {:ok, {:obj, _pairs} = parsed} ->
-                    nonone(Json.text(Json.dig(parsed, [ref.field])))
-
-                  # A plain-string secret is the whole value; it has no
-                  # named fields.
-                  _other ->
-                    if "value" == ref.field, do: text
-                end
-            end
-        end
-      end,
-      # Config only, never the environment: describe() feeds the spec's
-      # sources group, which must answer the same everywhere.
-      describe: fn -> "awssecrets:" <> opts.region end
-    }
-  end
-
-  @doc """
-  AWS SSM Parameter Store.
-
-  `db.pass.main` reads the parameter `/db/pass/main` (under an optional
-  prefix path), decrypted. Parameter Store carries flat strings, so there
-  is no field indirection.
-  """
-  def awsparams(opts, prefix) do
-    %{
-      lookup: fn name ->
-        payload =
-          Json.obj([
-            {"Name", Json.str(Sekreto.awsparam(name, prefix))},
-            {"WithDecryption", Json.bool(true)}
-          ])
-
-        res = awscall(opts, "ssm", "AmazonSSM.GetParameter", Json.stringify(payload))
-
-        cond do
-          400 == res.status and awsmiss(res.body, ["ParameterNotFound"]) ->
-            nil
-
-          200 != res.status ->
-            raise Error, message: "sekreto: aws ssm error: " <> tostr(res.status)
-
-          true ->
-            nonone(Json.text(Json.dig(res.body, ["Parameter", "Value"])))
-        end
-      end,
-      describe: fn -> "awsparams:" <> opts.region <> prefix end
-    }
-  end
-
-  # ------------------------------------------------------------------ gcp
-
-  @doc """
-  GCP Secret Manager.
-
-  `api.token` reads secret `api_token` (dots flattened to `_`; Secret
-  Manager ids have no hierarchy and reject dots), latest version. The token
-  comes from config, then `GOOGLE_OAUTH_ACCESS_TOKEN`, then the GCE/GKE
-  metadata server - so on Google's own platform no credential configuration
-  is needed at all.
-
-  The metadata call itself is plain http to a link-local host by platform
-  design; no credential rides on it, so `checkaddr` guards the Secret
-  Manager address instead.
-  """
-  def gcpsecrets(project, token, addr, metadataaddr) do
-    cell = Cell.new(%{token: "", renewat: @never})
-
-    usemetadataaddr = fn ->
-      cond do
-        "" != metadataaddr -> metadataaddr
-        "" != getenv("GCE_METADATA_HOST") -> "http://" <> getenv("GCE_METADATA_HOST")
-        true -> "http://metadata.google.internal"
-      end
-    end
-
-    login = fn ->
-      configured = first([token, getenv("GOOGLE_OAUTH_ACCESS_TOKEN")])
-
-      if "" != configured do
-        Cell.put(cell, %{token: configured, renewat: @never})
-      else
-        url =
-          trimslash(usemetadataaddr.()) <>
-            "/computeMetadata/v1/instance/service-accounts/default/token"
-
-        res = fetchjson("GET", url, [{"Metadata-Flavor", "Google"}])
-        got = Json.text(Json.dig(res.body, ["access_token"]))
-
-        if 200 != res.status or :none == got or "" == got do
-          raise Error, message: "sekreto: gcp: no token and metadata server did not answer"
-        end
-
-        Cell.put(cell, %{token: got, renewat: renewtime(Json.dig(res.body, ["expires_in"]))})
-      end
-    end
-
-    %{
-      lookup: fn name ->
-        if "" == project, do: raise(Error, message: "sekreto: gcp: no project")
-
-        useaddr = first([addr, "https://secretmanager.googleapis.com"])
-        checkaddr(useaddr)
-
-        if expired?(cell), do: login.()
-
-        url =
-          trimslash(useaddr) <>
-            "/v1/projects/" <>
-            project <> "/secrets/" <> Sekreto.flatname(name, "_") <> "/versions/latest:access"
-
-        res =
-          fetchjson("GET", url, [{"authorization", "Bearer " <> Cell.get(cell).token}])
-
-        cond do
-          404 == res.status ->
-            nil
-
-          200 != res.status ->
-            raise Error, message: "sekreto: gcp error: " <> tostr(res.status) <> ": " <> url
-
-          true ->
-            case Json.asstr(Json.dig(res.body, ["payload", "data"])) do
-              :none ->
-                nil
-
-              data ->
-                case unbase64(data) do
-                  :error -> raise Error, message: "sekreto: gcp: undecodable secret"
-                  text -> text
-                end
-            end
-        end
-      end,
-      describe: fn -> "gcpsecrets:" <> project end
-    }
-  end
-
-  # ---------------------------------------------------------------- azure
-
-  @doc """
-  Azure Key Vault.
-
-  `api.token` reads secret `api-token` (dots flattened to `-`; Key Vault
-  names allow nothing else), current version. The token comes from config,
-  then a client-credentials login when tenant/clientid/clientsecret are
-  given, then the IMDS managed-identity endpoint - so on Azure's own
-  platform no credential configuration is needed.
-  """
-  def azuresecrets(opts) do
-    cell = Cell.new(%{token: "", renewat: @never})
-
-    login = fn ->
-      cond do
-        "" != opts.token ->
-          Cell.put(cell, %{token: opts.token, renewat: @never})
-
-        "" != opts.tenant and "" != opts.clientid and "" != opts.clientsecret ->
-          useloginaddr = first([opts.loginaddr, "https://login.microsoftonline.com"])
-          checkaddr(useloginaddr)
-
-          url = trimslash(useloginaddr) <> "/" <> opts.tenant <> "/oauth2/v2.0/token"
-
-          form =
-            "grant_type=client_credentials&client_id=" <>
-              Sigv4.uriescape(opts.clientid) <>
-              "&client_secret=" <>
-              Sigv4.uriescape(opts.clientsecret) <>
-              "&scope=" <> Sigv4.uriescape(@resource <> "/.default")
-
-          res =
-            fetchjson(
-              "POST",
-              url,
-              [{"content-type", "application/x-www-form-urlencoded"}],
-              form
-            )
-
-          got = Json.text(Json.dig(res.body, ["access_token"]))
-
-          if 200 != res.status or :none == got or "" == got do
-            raise Error, message: "sekreto: azure login failed: " <> tostr(res.status)
-          end
-
-          Cell.put(cell, %{token: got, renewat: renewtime(Json.dig(res.body, ["expires_in"]))})
-
-        true ->
-          imds =
-            trimslash(first([opts.imdsaddr, "http://169.254.169.254"])) <>
-              "/metadata/identity/oauth2/token?api-version=2018-02-01&resource=" <>
-              Sigv4.uriescape(@resource)
-
-          res = fetchjson("GET", imds, [{"Metadata", "true"}])
-          got = Json.text(Json.dig(res.body, ["access_token"]))
-
-          if 200 != res.status or :none == got or "" == got do
-            raise Error,
-              message: "sekreto: azure: no token, no client credentials, and IMDS did not answer"
-          end
-
-          # IMDS sends expires_in as a STRING, unlike everyone else.
-          Cell.put(cell, %{token: got, renewat: renewtime(Json.dig(res.body, ["expires_in"]))})
-      end
-    end
-
-    %{
-      lookup: fn name ->
-        if "" == opts.vault, do: raise(Error, message: "sekreto: azure: no vault")
-
-        # Only an explicit scheme is a URL; a vault NAMED httpvault must
-        # still become https://httpvault.vault.azure.net.
-        vaulturl =
-          if String.starts_with?(opts.vault, "http://") or
-               String.starts_with?(opts.vault, "https://") do
-            opts.vault
-          else
-            "https://" <> opts.vault <> ".vault.azure.net"
-          end
-
-        checkaddr(vaulturl)
-
-        if expired?(cell), do: login.()
-
-        url =
-          trimslash(vaulturl) <>
-            "/secrets/" <>
-            Sekreto.flatname(name, "-") <> "?api-version=" <> first([opts.apiversion, "7.4"])
-
-        res = fetchjson("GET", url, [{"authorization", "Bearer " <> Cell.get(cell).token}])
-
-        cond do
-          404 == res.status ->
-            nil
-
-          200 != res.status ->
-            raise Error,
-              message: "sekreto: azure error: " <> tostr(res.status) <> ": " <> Http.bare(url)
-
-          true ->
-            nonone(Json.text(Json.dig(res.body, ["value"])))
-        end
-      end,
-      describe: fn -> "azuresecrets:" <> opts.vault end
-    }
-  end
-
-  # ------------------------------------------------------------ 1password
-
-  @doc """
-  1Password, through a Connect server.
-
-  The item titled `api.token` (titles keep their dots), in the named vault.
-  The value is the field with purpose PASSWORD, or the field labelled
-  `value`. A vault that cannot be found is an error - config names it, so
-  its absence is a broken store, not a missing secret.
-  """
-  def onepassword(addr, token, vault) do
-    cell = Cell.new(:unresolved)
-    auth = [{"authorization", "Bearer " <> token}]
-
-    resolvevault = fn useaddr ->
-      if "" == vault, do: raise(Error, message: "sekreto: onepassword: no vault")
-
-      res = fetchjson("GET", useaddr <> "/v1/vaults", auth)
-      list = Json.asarr(res.body)
-
-      if 200 != res.status or :none == list do
-        raise Error,
-          message: "sekreto: onepassword error: " <> tostr(res.status) <> ": listing vaults"
-      end
-
-      found =
-        Enum.find(list, fn entry ->
-          vault == Json.text(Json.dig(entry, ["id"])) or
-            vault == Json.text(Json.dig(entry, ["name"]))
-        end)
-
-      if nil == found do
-        raise Error, message: "sekreto: onepassword: no vault named " <> vault
-      end
-
-      case Json.text(Json.dig(found, ["id"])) do
-        :none -> ""
-        id -> id
-      end
-    end
-
-    %{
-      lookup: fn name ->
-        Sekreto.checkname(name)
-
-        useaddr = trimslash(addr)
-        if "" == useaddr, do: raise(Error, message: "sekreto: onepassword: no addr")
-        checkaddr(useaddr)
-
-        id =
-          case Cell.get(cell) do
-            :unresolved ->
-              resolved = resolvevault.(useaddr)
-              Cell.put(cell, resolved)
-              resolved
-
-            resolved ->
-              resolved
-          end
-
-        filter = Sigv4.uriescape(~s|title eq "| <> name <> ~s|"|)
-        found = fetchjson("GET", useaddr <> "/v1/vaults/" <> id <> "/items?filter=" <> filter, auth)
-
-        items = Json.asarr(found.body)
-
-        if 200 != found.status or :none == items do
-          raise Error,
-            message: "sekreto: onepassword error: " <> tostr(found.status) <> ": finding " <> name
-        end
-
-        if [] == items do
-          nil
-        else
-          itemid =
-            case Json.text(Json.dig(hd(items), ["id"])) do
-              :none -> ""
-              value -> value
-            end
-
-          item = fetchjson("GET", useaddr <> "/v1/vaults/" <> id <> "/items/" <> itemid, auth)
-
-          if 200 != item.status do
-            raise Error,
-              message:
-                "sekreto: onepassword error: " <> tostr(item.status) <> ": reading " <> name
-          end
-
-          fields =
-            case Json.asarr(Json.dig(item.body, ["fields"])) do
-              :none -> []
-              value -> value
-            end
-
-          # Two full passes, in order: purpose first, then label.
-          chosen =
-            Enum.find(fields, fn field ->
-              "PASSWORD" == Json.asstr(Json.dig(field, ["purpose"]))
-            end) ||
-              Enum.find(fields, fn field ->
-                "value" == Json.asstr(Json.dig(field, ["label"]))
-              end)
-
-          if nil == chosen, do: nil, else: nonone(Json.text(Json.dig(chosen, ["value"])))
-        end
-      end,
-      describe: fn -> "onepassword:" <> vault end
-    }
-  end
-
-  # -------------------------------------------------------------- doppler
-
-  @doc """
-  Doppler.
-
-  The whole config is downloaded once - Doppler's own bulk endpoint - and
-  answered from memory, like a remote .env: `api.token` is the `API_TOKEN`
-  entry. A service token is config-scoped, so project and config are only
-  needed with broader tokens.
-
-  The `prefix` option is not consulted by this kind.
-  """
-  def doppler(token, project, config, addr) do
-    cell = Cell.new(:unloaded)
-
-    load = fn ->
-      useaddr = trimslash(first([addr, "https://api.doppler.com"]))
-      checkaddr(useaddr)
-
-      url =
-        useaddr <>
-          "/v3/configs/config/secrets/download?format=json" <>
-          if("" == project, do: "", else: "&project=" <> Sigv4.uriescape(project)) <>
-          if("" == config, do: "", else: "&config=" <> Sigv4.uriescape(config))
-
-      res = fetchjson("GET", url, [{"authorization", "Bearer " <> token}])
-      body = Json.asobj(res.body)
-
-      if 200 != res.status or :none == body do
-        raise Error, message: "sekreto: doppler error: " <> tostr(res.status)
-      end
-
-      Enum.reduce(body, [], fn {key, value}, out ->
-        case Json.text(value) do
-          :none -> out
-          text -> Sekreto.pairput(out, key, text)
-        end
+  A provider kind, as a voxgig/plugin definition.
+
+  This is the whole bridge between the two libraries. The definition's
+  `name` is the `kind` a spec names; its `define` reads the spec as
+  `Inst.options/1`, builds the provider with `make`, and exports it.
+  Nothing runs at `activate`: a provider opens nothing until its first
+  lookup, so there is nothing to capture - a provider that does hold a
+  resource acquires it there and lets the instance scope unwind it.
+
+  Every built-in and every plugin is made this way, so a custom provider
+  kind is one call:
+
+      Sekreto.providerplugin("mystore", fn spec ->
+        %{lookup: fn name -> ... end, describe: fn -> "mystore" end}
       end)
-    end
 
+  A definition is a plain map with STRING keys, which is what voxgig/plugin
+  reads a catalog entry as.
+  """
+  def providerplugin(kind, make) do
     %{
-      lookup: fn name ->
-        values =
-          case Cell.get(cell) do
-            :unloaded ->
-              # A failed load caches nothing, so the next lookup retries.
-              loaded = load.()
-              Cell.put(cell, loaded)
-              loaded
-
-            loaded ->
-              loaded
+      "name" => kind,
+      "define" => fn inst ->
+        provider =
+          try do
+            make.(Inst.options(inst))
+          rescue
+            err in Error ->
+              # Re-raised with a code, so that plugin keeps the message
+              # rather than wrapping it as `plugin_define_failed`.
+              Types.fail(error_code(), Exception.message(err), %{
+                "ref" => Inst.ref(inst),
+                "cause" => Exception.message(err)
+              })
           end
 
-        Sekreto.pairget(values, Sekreto.envkey(name))
-      end,
-      describe: fn ->
-        if "" == project, do: "doppler", else: "doppler:" <> project <> "/" <> config
+        Inst.export(inst, provider_export(), provider)
       end
     }
   end
 
-  # ------------------------------------------------------------ infisical
+  @doc """
+  The four built-in provider kinds - the same four in every port.
+
+  What makes a kind built in is that it needs nothing of the platform
+  beyond reading a local file: no socket, no TLS, no crypto, no child
+  process. A chain of these four works with no plugin loaded at all.
+  """
+  def builtins do
+    [
+      providerplugin("env", fn spec -> env(spec.prefix) end),
+      providerplugin("memory", fn spec -> memory(spec.values, spec.prefix) end),
+      providerplugin("dotenv", fn spec -> dotenv(first([spec.file, ".env"]), spec.prefix) end),
+      providerplugin("file", fn spec -> file(spec.dir, spec.prefix) end)
+    ]
+  end
 
   @doc """
-  Infisical.
-
-  `api.token` reads the secret keyed `API_TOKEN` (Infisical's own
-  convention is environment-style keys) at a secret path in one environment
-  of a project. Auth is a token, or a universal-auth (machine identity)
-  login with clientid/clientsecret.
+  Every kind this library ships, built in or as a plugin, so that an
+  unknown kind can be told from a plugin that was not passed in.
   """
-  def infisical(opts) do
-    cell = Cell.new(%{token: "", renewat: @never})
-
-    login = fn useaddr ->
-      if "" != opts.token do
-        Cell.put(cell, %{token: opts.token, renewat: @never})
-      else
-        if "" == opts.clientid or "" == opts.clientsecret do
-          raise Error, message: "sekreto: infisical: no token and no client credentials"
-        end
-
-        body =
-          Json.obj([
-            {"clientId", Json.str(opts.clientid)},
-            {"clientSecret", Json.str(opts.clientsecret)}
-          ])
-
-        res =
-          fetchjson(
-            "POST",
-            useaddr <> "/api/v1/auth/universal-auth/login",
-            [{"content-type", "application/json"}],
-            Json.stringify(body)
-          )
-
-        got = Json.text(Json.dig(res.body, ["accessToken"]))
-
-        if 200 != res.status or :none == got or "" == got do
-          raise Error, message: "sekreto: infisical login failed: " <> tostr(res.status)
-        end
-
-        # camelCase, unlike everyone else's expires_in.
-        Cell.put(cell, %{token: got, renewat: renewtime(Json.dig(res.body, ["expiresIn"]))})
-      end
-    end
-
+  def kinds do
     %{
-      lookup: fn name ->
-        useaddr = trimslash(first([opts.addr, "https://app.infisical.com"]))
-        checkaddr(useaddr)
-
-        if "" == opts.project or "" == opts.environment do
-          raise Error, message: "sekreto: infisical: no project/environment"
-        end
-
-        if expired?(cell), do: login.(useaddr)
-
-        url =
-          useaddr <>
-            "/api/v3/secrets/raw/" <>
-            Sekreto.envkey(name) <>
-            "?workspaceId=" <>
-            Sigv4.uriescape(opts.project) <>
-            "&environment=" <>
-            Sigv4.uriescape(opts.environment) <>
-            "&secretPath=" <> Sigv4.uriescape(first([opts.path, "/"]))
-
-        res = fetchjson("GET", url, [{"authorization", "Bearer " <> Cell.get(cell).token}])
-
-        cond do
-          404 == res.status -> nil
-          200 != res.status -> raise Error, message: "sekreto: infisical error: " <> tostr(res.status)
-          true -> nonone(Json.text(Json.dig(res.body, ["secret", "secretValue"])))
-        end
-      end,
-      describe: fn -> "infisical:" <> opts.project <> "/" <> opts.environment end
+      builtin: ["env", "memory", "dotenv", "file"],
+      plugin: [
+        "hashicorp",
+        "boru",
+        "awssecrets",
+        "awsparams",
+        "gcpsecrets",
+        "azuresecrets",
+        "onepassword",
+        "doppler",
+        "infisical",
+        "secretspec"
+      ]
     }
-  end
-
-  # ---------------------------------------------------------------- shared
-
-  @doc """
-  Strict base64.
-
-  Whitespace is stripped first - the canonical function accepts embedded
-  newlines - and then anything outside the standard alphabet, or a length
-  that is not a multiple of four, is REFUSED. A lenient decoder silently
-  skips what it does not recognise and hands back plausible bytes for a
-  corrupted payload, which then get returned as the secret.
-  """
-  def unbase64(text) do
-    stripped = String.replace(text, ~r/\s/, "")
-
-    case Base.decode64(stripped, padding: true) do
-      {:ok, bytes} -> bytes
-      :error -> :error
-    end
-  end
-
-  defp nonone(:none), do: nil
-  defp nonone(value), do: value
-
-  defp tostr(value) when is_binary(value), do: value
-  defp tostr(value) when is_integer(value), do: Integer.to_string(value)
-  defp tostr(value) when is_float(value), do: Json.numstr(value)
-  defp tostr(value), do: inspect(value)
-
-  # --------------------------------------------------------- the factory
-
-  @doc """
-  Build a provider from its declarative form - the same shape the shared
-  spec and an app's config file use.
-  """
-  def makeprovider(%ProviderSpec{} = spec) do
-    awsopts = %{
-      region: spec.region,
-      keyid: spec.keyid,
-      secret: spec.secret,
-      session: spec.session,
-      addr: spec.addr
-    }
-
-    case spec.kind do
-      "env" ->
-        env(spec.prefix)
-
-      "dotenv" ->
-        dotenv(first([spec.file, ".env"]), spec.prefix)
-
-      "memory" ->
-        memory(spec.values, spec.prefix)
-
-      "file" ->
-        file(spec.dir, spec.prefix)
-
-      "hashicorp" ->
-        hashicorp(spec.addr, spec.token, spec.mount, spec.kv, spec.vaultnamespace, spec.auth)
-
-      "boru" ->
-        boru(spec.command, spec.namespace, spec.home, spec.addr, spec.token, spec.mount)
-
-      "awssecrets" ->
-        awssecrets(awsopts)
-
-      "awsparams" ->
-        awsparams(awsopts, spec.prefix)
-
-      "gcpsecrets" ->
-        gcpsecrets(spec.project, spec.token, spec.addr, spec.metadataaddr)
-
-      "azuresecrets" ->
-        azuresecrets(%{
-          vault: spec.vault,
-          token: spec.token,
-          tenant: spec.tenant,
-          clientid: spec.clientid,
-          clientsecret: spec.clientsecret,
-          loginaddr: spec.loginaddr,
-          imdsaddr: spec.imdsaddr,
-          apiversion: spec.apiversion
-        })
-
-      "onepassword" ->
-        onepassword(spec.addr, spec.token, spec.vault)
-
-      "doppler" ->
-        doppler(spec.token, spec.project, spec.config, spec.addr)
-
-      "infisical" ->
-        infisical(%{
-          addr: spec.addr,
-          token: spec.token,
-          clientid: spec.clientid,
-          clientsecret: spec.clientsecret,
-          project: spec.project,
-          environment: spec.environment,
-          path: spec.path
-        })
-
-      "secretspec" ->
-        secretspec(spec.command, spec.file, spec.profile, spec.backend, spec.reason, spec.prefix)
-
-      other ->
-        raise Error, message: "sekreto: unknown provider kind: " <> other
-    end
   end
 
   @doc "An AuthSpec, for callers building one by hand."

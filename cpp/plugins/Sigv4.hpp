@@ -13,11 +13,12 @@
 //
 // A port of typescript/plugins/sigv4.ts, which is canonical.
 
-#ifndef SEKRETO_SIGV4_HPP
-#define SEKRETO_SIGV4_HPP
+#ifndef SEKRETO_PLUGINS_SIGV4_HPP
+#define SEKRETO_PLUGINS_SIGV4_HPP
 
 #include <string>
 
+#include "Httpjson.hpp"
 #include "Sekreto.hpp"
 
 namespace sekreto {
@@ -39,16 +40,6 @@ struct Signing {
 
 /// SHA-256 of some text, as lowercase hex.
 std::string sha256hex(const std::string& text);
-
-/// RFC 3986 escaping, stricter than the usual URL encoder: the unreserved
-/// set is exactly `A-Za-z0-9-_.~`, everything else becomes `%XX` with
-/// UPPERCASE hex, byte by byte over UTF-8. `!'()*` are escaped too, which
-/// is where this differs from the encoders most standard libraries offer.
-std::string uriescape(const std::string& text);
-
-/// Percent-decode, and nothing else: `+` stays `+`, as on the wire, and a
-/// malformed escape is kept literal.
-std::string uridecode(const std::string& text);
 
 /// The canonical query string: each pair decoded then RFC 3986-escaped,
 /// sorted by escaped key then escaped value.

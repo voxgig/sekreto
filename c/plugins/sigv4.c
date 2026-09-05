@@ -2,7 +2,13 @@
  *
  * The AWS providers need exactly one thing from the AWS SDK - request
  * signing - and there is no SDK to take in C anyway. SigV4 is a stable,
- * published algorithm built from HMAC-SHA256, which crypto.c carries.
+ * published algorithm built from HMAC-SHA256, which `sha256.c` carries.
+ *
+ * IT MOVED HERE WITH THE AWS PLUGIN, and the core of no port imports a
+ * hash function any more. Only this file and `sha256.c` name a digest;
+ * the percent-encoder it needs is in `encode.c` with the transport, so
+ * that a store which builds URLs but signs nothing never pulls SHA-256
+ * into its link.
  *
  * `sek_sigv4` is pure: the caller passes the timestamp, so the same input
  * yields the same signature everywhere. That is what lets the shared spec
@@ -16,34 +22,7 @@
 
 #include <string.h>
 
-#include "internal.h"
-
-/* RFC 3986 escaping, stricter than any stdlib encoder: the unreserved set
- * is exactly A-Za-z0-9-_.~ and everything else, byte by byte over UTF-8,
- * becomes %XX with UPPERCASE hex. `!'()*` are escaped, which is the gap
- * against the usual encodeURIComponent. */
-char *sek_uriescape(sek_pool *pool, const char *text) {
-  static const char digits[] = "0123456789ABCDEF";
-  sek_buf out;
-  size_t index;
-
-  sek_buf_init(&out, pool);
-
-  for (index = 0; NULL != text && '\0' != text[index]; index++) {
-    unsigned char ch = (unsigned char)text[index];
-
-    if (('A' <= ch && 'Z' >= ch) || ('a' <= ch && 'z' >= ch) || ('0' <= ch && '9' >= ch) ||
-        '-' == ch || '_' == ch || '.' == ch || '~' == ch) {
-      sek_buf_addch(&out, (char)ch);
-    } else {
-      sek_buf_addch(&out, '%');
-      sek_buf_addch(&out, digits[(ch >> 4) & 0x0f]);
-      sek_buf_addch(&out, digits[ch & 0x0f]);
-    }
-  }
-
-  return out.data;
-}
+#include "support.h"
 
 static int hexval(char ch) {
   if ('0' <= ch && '9' >= ch) {

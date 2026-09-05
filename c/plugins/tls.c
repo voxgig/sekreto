@@ -1,14 +1,20 @@
 /* The TLS binding, and the only file in this port that names OpenSSL.
  *
+ * It is under `plugins/` because it is what a plugin is. A chain of the
+ * four built-in kinds links no socket, so it links no TLS either, and a
+ * consumer that never configures a vault does not carry libssl at all -
+ * `make check-core` reads the core archive and says so.
+ *
  * The rule this file exists under is AGENTS.md's, stated as a principle
  * rather than a list: cryptographic transport is not hand-rolled. Where a
  * port's standard library has TLS it uses it; where it does not - and C's
  * does not - it binds the platform's audited TLS library, which in C is
  * the one the whole C ecosystem binds. Everything ELSE a standard library
- * lacks is still written in-tree, so json.c, http.c, crypto.c and the PEM
- * reader in crypto.c stay hand-rolled even though libcrypto could do all
- * four. Rust is the worked precedent: `ring` sits inside rustls's closure
- * and rust/src/crypto.rs carries SHA-256 and HMAC anyway.
+ * lacks is still written in-tree, so the core's json.c, this directory's
+ * httpjson.c and sha256.c, and the PEM reader at the foot of this file
+ * stay hand-rolled even though libcrypto could do all four. Rust is the
+ * worked precedent: `ring` sits inside rustls's closure and
+ * rust/src/crypto.rs carries SHA-256 and HMAC anyway.
  *
  * THE AUDIT SURFACE IS `-lssl -lcrypto`, and it is the distribution's
  * OpenSSL: this port pins no version, vendors no source and carries no
@@ -42,7 +48,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
 
-#include "internal.h"
+#include "support.h"
 
 struct sek_tls_conn {
   SSL_CTX *ctx;
@@ -331,4 +337,68 @@ void sek_tls_close(sek_tls_conn *conn) {
     SSL_CTX_free(conn->ctx);
     conn->ctx = NULL;
   }
+}
+
+/* ---- PEM ----------------------------------------------------------- */
+
+/* The trust-anchor reader, HERE rather than beside the base64 it uses,
+ * because tls.c is its only caller and an object nothing else pulls is an
+ * object no other plugin has to carry.
+ *
+ * Certificates only: no header handling, no other label, no private keys.
+ * Trust anchors are all this port ever parses out of a PEM file. */
+sek_ders *sek_pemcerts(sek_pool *pool, const char *text) {
+  static const char OPEN[] = "-----BEGIN CERTIFICATE-----";
+  static const char CLOSE[] = "-----END CERTIFICATE-----";
+
+  sek_ders *out = (sek_ders *)sek_alloc(pool, sizeof(sek_ders));
+  size_t cap = 8;
+  const char *rest = text;
+
+  out->items = (unsigned char **)sek_alloc(pool, cap * sizeof(unsigned char *));
+  out->lens = (size_t *)sek_alloc(pool, cap * sizeof(size_t));
+  out->len = 0;
+
+  while (NULL != rest) {
+    const char *start = strstr(rest, OPEN);
+    const char *body;
+    const char *end;
+    char *span;
+    size_t derlen = 0;
+    unsigned char *der;
+
+    if (NULL == start) {
+      break;
+    }
+
+    body = start + sizeof(OPEN) - 1;
+    end = strstr(body, CLOSE);
+    if (NULL == end) {
+      break;
+    }
+
+    span = sek_strndup(pool, body, (size_t)(end - body));
+    der = sek_unbase64(pool, span, &derlen);
+
+    if (NULL != der && 0 < derlen) {
+      if (out->len == cap) {
+        size_t bigger = cap * 2;
+        unsigned char **items =
+            (unsigned char **)sek_alloc(pool, bigger * sizeof(unsigned char *));
+        size_t *lens = (size_t *)sek_alloc(pool, bigger * sizeof(size_t));
+        memcpy(items, out->items, out->len * sizeof(unsigned char *));
+        memcpy(lens, out->lens, out->len * sizeof(size_t));
+        out->items = items;
+        out->lens = lens;
+        cap = bigger;
+      }
+      out->items[out->len] = der;
+      out->lens[out->len] = derlen;
+      out->len++;
+    }
+
+    rest = end + sizeof(CLOSE) - 1;
+  }
+
+  return out;
 }

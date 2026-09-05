@@ -1,4 +1,4 @@
-// SHA-256 and HMAC-SHA256, hand-rolled, plus hex and strict base64.
+// SHA-256 and HMAC-SHA256, hand-rolled, plus hex.
 //
 // This port links OpenSSL, so `EVP_Digest` and `HMAC` are a function call
 // away - and calling them here would break the rule that allows the link
@@ -13,8 +13,14 @@
 //
 // A port of rust/src/crypto.rs.
 
-#ifndef SEKRETO_CRYPTO_HPP
-#define SEKRETO_CRYPTO_HPP
+// NOTHING BUT THE SIGNER INCLUDES THIS. Percent-encoding and base64 used
+// to sit here; they moved to Httpjson.hpp, because the plugins that need
+// them - Azure, 1Password, Doppler, Infisical, GCP - sign nothing, and
+// including this file for a query string would put SHA-256 into their link
+// maps.
+
+#ifndef SEKRETO_PLUGINS_CRYPTO_HPP
+#define SEKRETO_PLUGINS_CRYPTO_HPP
 
 #include <cstdint>
 #include <string>
@@ -37,15 +43,6 @@ Bytes hmacsha256(const Bytes& key, const Bytes& data);
 
 /// Lowercase, zero-padded, two digits a byte.
 std::string hex(const Bytes& data);
-
-/// Decode standard (not URL-safe) base64, STRICTLY.
-///
-/// Whitespace is stripped first; anything outside `A-Za-z0-9+/`, more than
-/// two `=`, or a length that is not a multiple of four is a REFUSAL. A
-/// lenient decoder skips bytes it does not know and hands back plausible
-/// bytes for a corrupted payload - which then get returned as the secret.
-/// Call sites: an AWS SecretBinary, a GCP payload, a PEM body.
-bool unbase64(const std::string& text, std::string& out);
 
 }  // namespace sekreto
 

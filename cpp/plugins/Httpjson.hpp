@@ -14,15 +14,27 @@
 // keep-alive, no proxies, no client certificates. Each of those absences
 // is load-bearing and the reasons are at their call sites.
 //
+// The shared transport of the plugins, and it is UNDER plugins/ for the
+// reason the whole split exists: a chain of built-ins must never link an
+// HTTP client, a TLS library or the socket beneath them.
+//
+// The percent-encoding and the base64 decoder live here rather than beside
+// the SigV4 signer, because most of what needs them signs nothing: Azure,
+// 1Password, Doppler and Infisical build query strings, and AWS and GCP
+// decode payloads. Keeping them with the signer would put SHA-256 in the
+// link map of every plugin that only ever speaks HTTP.
+//
 // A port of rust/src/http.rs.
 
-#ifndef SEKRETO_HTTP_HPP
-#define SEKRETO_HTTP_HPP
+#ifndef SEKRETO_PLUGINS_HTTPJSON_HPP
+#define SEKRETO_PLUGINS_HTTPJSON_HPP
 
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
+#include "Json.hpp"
 #include "Sekreto.hpp"
 
 namespace sekreto {
@@ -82,6 +94,63 @@ Response httprequest(const std::string& method, const std::string& url,
 /// a text file is not transport. No header handling, no attributes, no
 /// other label types, no private keys.
 std::vector<std::string> pemcerts(const std::string& text);
+
+/// One JSON round-trip's result: the status, and the parsed body. An
+/// unparsed body is Null, which every accessor reads as "no value".
+struct Answer {
+  int status = 0;
+  Json body;
+};
+
+/// One JSON round-trip. Network failure is always an error - an
+/// unreachable store is a store that could not answer.
+///
+/// Redirects are never followed: a vault API does not legitimately
+/// redirect, and a followed redirect would carry X-Vault-Token to a host
+/// checkaddr never saw, and could downgrade https to http. Proxies are
+/// never consulted: the GCP and Azure metadata endpoints are not loopback,
+/// and an `http_proxy` in the environment has sent a Vault token in the
+/// clear before. Httpjson.cpp does neither, so there is nothing to switch
+/// off.
+Answer fetchjson(const std::string& method, const std::string& url,
+                 const Ordered& headers = Ordered(),
+                 const std::optional<std::string>& body = std::nullopt);
+
+/// A field's text, or nothing.
+std::optional<std::string> textof(const Json& val);
+
+/// RFC 3986 escaping, stricter than the usual URL encoder: the unreserved
+/// set is exactly `A-Za-z0-9-_.~`, everything else becomes `%XX` with
+/// UPPERCASE hex, byte by byte over UTF-8. `!\'()*` are escaped too, which
+/// is where this differs from the encoders most standard libraries offer.
+std::string uriescape(const std::string& text);
+
+/// Percent-decode, and nothing else: `+` stays `+`, as on the wire, and a
+/// malformed escape is kept literal.
+std::string uridecode(const std::string& text);
+
+/// Decode standard (not URL-safe) base64, STRICTLY.
+///
+/// Whitespace is stripped first; anything outside `A-Za-z0-9+/`, more than
+/// two `=`, or a length that is not a multiple of four is a REFUSAL. A
+/// lenient decoder skips bytes it does not know and hands back plausible
+/// bytes for a corrupted payload - which then get returned as the secret.
+/// Call sites: an AWS SecretBinary, a GCP payload, a PEM body.
+bool unbase64(const std::string& text, std::string& out);
+
+/// Milliseconds since the epoch. The only clock a provider reads, and it
+/// is read for token renewal alone - never for a signature, which takes
+/// its timestamp from its caller.
+double nowms();
+
+/// A renewal time that never comes.
+extern const double NEVER;
+
+/// When a logged-in token must be renewed, from its expiry in seconds (a
+/// JSON number, or a string as Azure IMDS sends it): now + max(seconds -
+/// 60, 1). A missing or zero expiry means never renew, which is also what
+/// a configured token gets.
+double renewtime(const Json& expires);
 
 }  // namespace sekreto
 

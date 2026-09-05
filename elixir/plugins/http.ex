@@ -1,4 +1,8 @@
-# One HTTP round-trip, framed in-tree over OTP's own sockets.
+# One HTTP round-trip, framed in-tree over OTP's own sockets - and
+# OUTSIDE THE CORE, because a socket is what makes a kind a plugin. Seven
+# of the ten plugin kinds reach a vault over HTTPS; a chain of the four
+# built-ins never loads this module at all, and the BEAM never loads a
+# module nothing calls.
 #
 # `:httpc` is in the distribution and is not used. Three of this library's
 # rules are not expressible through it: the 8 MiB body bound (httpc
@@ -17,11 +21,16 @@
 # The models are rust/src/http.rs and the framing recipe every port
 # without a client follows.
 
-defmodule Sekreto.Http do
-  @moduledoc "The HTTP/1.1 client sekreto carries."
+defmodule Sekreto.Plugins.Http do
+  @moduledoc """
+  The HTTP/1.1 client sekreto carries, and the TLS binding with it.
+
+  A plugin module: nothing under `src/` names it. See
+  docs/design/plugin-providers.md.
+  """
 
   alias Sekreto.Error
-  alias Sekreto.Sigv4
+  alias Sekreto.Plugins.Sigv4
 
   # How long any single vault round-trip may take before the store is
   # treated as unreachable. Ports carry the same bound, and it covers the

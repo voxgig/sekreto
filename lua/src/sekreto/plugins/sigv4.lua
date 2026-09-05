@@ -3,18 +3,28 @@
 -- The AWS providers need exactly one thing from the AWS SDK - request
 -- signing - and taking the SDK for it would break the no-dependency rule
 -- that keeps every port honest. SigV4 is a stable, published algorithm
--- built from HMAC-SHA256, which src/sekreto/crypto.lua carries.
+-- built from HMAC-SHA256, which src/sekreto/plugins/crypto.lua carries.
+-- It moved out of the core with the aws plugin: the core of no port
+-- imports a hash function (docs/design/plugin-providers.md).
 --
 -- `sigv4` is pure: the caller passes the timestamp, so the same input
 -- yields the same signature everywhere. That is what lets the shared spec
 -- carry known-answer cases that all ports must reproduce bit for bit, and
 -- lets the integration mock recompute the signature server-side.
 --
+-- `uriescape` and `uridecode` live in support, because four plugins that
+-- sign nothing need them and reaching them through here would put
+-- SHA-256 and HMAC behind all four.
+--
 -- A port of typescript/plugins/sigv4.ts, which is canonical.
 
-local crypto = require('sekreto.crypto')
+local crypto = require('sekreto.plugins.crypto')
+local support = require('sekreto.plugins.support')
 
 local M = {}
+
+local uriescape = support.uriescape
+local uridecode = support.uridecode
 
 -- ASCII case folding, spelled out. `string.upper` and `string.lower` go
 -- through the C library's toupper/tolower, which follow the machine's
@@ -25,61 +35,6 @@ end
 
 local function upperascii(text)
   return (text:gsub('[a-z]', function(ch) return string.char(ch:byte() - 32) end))
-end
-
---- RFC 3986 escaping, which is stricter than the usual URL encoder: AWS
---- wants everything but the unreserved set escaped, with uppercase hex.
---- `!'()*` are escaped here and are not by JavaScript's own encoder.
-function M.uriescape(text)
-  local out = {}
-
-  for index = 1, #text do
-    local byte = text:byte(index)
-    local ch = text:sub(index, index)
-
-    if (65 <= byte and 90 >= byte) or
-      (97 <= byte and 122 >= byte) or
-      (48 <= byte and 57 >= byte) or
-      45 == byte or 95 == byte or 46 == byte or 126 == byte
-    then
-      out[#out + 1] = ch
-    else
-      out[#out + 1] = string.format('%%%02X', byte)
-    end
-  end
-
-  return table.concat(out)
-end
-
-local HEX = '0123456789abcdefABCDEF'
-
---- Percent-decode, and nothing else: `+` stays `+`, as on the wire, and a
---- malformed escape is kept literal.
-function M.uridecode(text)
-  local out = {}
-  local index = 1
-
-  while index <= #text do
-    local ch = text:sub(index, index)
-
-    if '%' == ch and index + 2 <= #text then
-      local digits = text:sub(index + 1, index + 2)
-      if nil ~= HEX:find(digits:sub(1, 1), 1, true) and
-        nil ~= HEX:find(digits:sub(2, 2), 1, true)
-      then
-        out[#out + 1] = string.char(tonumber(digits, 16))
-        index = index + 3
-        goto continue
-      end
-    end
-
-    out[#out + 1] = ch
-    index = index + 1
-
-    ::continue::
-  end
-
-  return table.concat(out)
 end
 
 --- The canonical query string: each pair RFC 3986-escaped, sorted by
@@ -101,8 +56,8 @@ function M.canonicalquery(query)
     local value = eq and piece:sub(eq + 1) or ''
 
     pairlist[#pairlist + 1] = {
-      M.uriescape(M.uridecode(key)),
-      M.uriescape(M.uridecode(value)),
+      uriescape(uridecode(key)),
+      uriescape(uridecode(value)),
     }
 
     if not stop then

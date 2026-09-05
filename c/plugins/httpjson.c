@@ -1,4 +1,11 @@
-/* Just enough HTTP to ask a vault for a secret.
+/* Just enough HTTP to ask a vault for a secret: the shared HTTP-JSON
+ * helper every store above it is written against.
+ *
+ * It lives under `plugins/` with the stores that use it, because a chain
+ * of the four built-in kinds must never link a socket. `sek_fetch` is
+ * published from here rather than from the core for the same reason: the
+ * CLI needs an HTTP client to call the API it just fetched a token for,
+ * and every other port reaches for its platform's.
  *
  * C has no HTTP client, so this speaks HTTP/1.1 over a POSIX socket
  * directly: a GET or POST with headers and an optional body, a status
@@ -42,15 +49,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#include "internal.h"
-
-long long sek_nowms(void) {
-  struct timespec now;
-
-  clock_gettime(CLOCK_MONOTONIC, &now);
-
-  return (long long)now.tv_sec * 1000ll + now.tv_nsec / 1000000ll;
-}
+#include "support.h"
 
 /* A url split into the parts a request needs. */
 typedef struct {

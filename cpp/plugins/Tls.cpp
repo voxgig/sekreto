@@ -2,16 +2,15 @@
 
 #include <arpa/inet.h>
 #include <errno.h>
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
 #include <unistd.h>
 
 #include <cstdlib>
 #include <fstream>
 #include <sstream>
-
-#include <openssl/err.h>
-#include <openssl/ssl.h>
-#include <openssl/x509.h>
-#include <openssl/x509v3.h>
 
 #include "Crypto.hpp"
 

@@ -1,4 +1,4 @@
-/* SHA-256, HMAC-SHA256, hex, strict base64 and PEM - all by hand.
+/* SHA-256 and HMAC-SHA256, by hand.
  *
  * This port links libcrypto, and these are still written out. That is the
  * rule and not an oversight: the dependency exception in AGENTS.md covers
@@ -8,6 +8,14 @@
  * EVP_Digest for a SigV4 signature would quietly widen the exception from
  * "we do not hand-roll TLS" to "we use whatever the TLS library ships",
  * which is a different and much larger claim.
+ *
+ * THIS OBJECT EXISTS SO THAT ONLY THE SIGNER PULLS IT. The aws plugin is
+ * the only thing in the library that hashes anything, and a static
+ * archive is linked an object at a time - so keeping the digest here, and
+ * the base64 and percent encoders in `encode.c` where four non-signing
+ * stores can reach them, is what makes "a plugin that signs nothing does
+ * not link SHA-256" true rather than merely intended. `make check-core`
+ * measures it.
  *
  * Correctness is not asserted, it is proved: SigV4 is a chain of these
  * primitives, so one wrong bit anywhere fails the five known-answer
@@ -28,7 +36,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "internal.h"
+#include "support.h"
 
 /* ---- SHA-256, FIPS 180-4 ------------------------------------------- */
 
@@ -256,157 +264,4 @@ char *sek_sha256hex(sek_pool *pool, const char *text) {
   sek_sha256((const unsigned char *)use, strlen(use), digest);
 
   return sek_hex(pool, digest, SEK_SHA256_LEN);
-}
-
-/* ---- base64, decode only ------------------------------------------- */
-
-static int unb64digit(char ch) {
-  if ('A' <= ch && 'Z' >= ch) {
-    return ch - 'A';
-  }
-  if ('a' <= ch && 'z' >= ch) {
-    return ch - 'a' + 26;
-  }
-  if ('0' <= ch && '9' >= ch) {
-    return ch - '0' + 52;
-  }
-  if ('+' == ch) {
-    return 62;
-  }
-  if ('/' == ch) {
-    return 63;
-  }
-  return -1;
-}
-
-/* Strict, and that is the point. A lenient decoder skips bytes outside
- * the alphabet and hands back plausible bytes for a corrupted payload -
- * and this library then returns those bytes AS THE SECRET. Anything
- * rejected here is an error at its call site, never a miss. */
-unsigned char *sek_unbase64(sek_pool *pool, const char *text, size_t *outlen) {
-  sek_buf packed;
-  size_t index;
-  size_t pad = 0;
-  unsigned char *out;
-  size_t at = 0;
-
-  if (NULL == text) {
-    return NULL;
-  }
-
-  /* Whitespace is stripped first: the canonical function accepts embedded
-   * newlines, which a strict decoder would otherwise reject. */
-  sek_buf_init(&packed, pool);
-  for (index = 0; '\0' != text[index]; index++) {
-    char ch = text[index];
-    if (' ' == ch || '\t' == ch || '\n' == ch || '\r' == ch || '\v' == ch || '\f' == ch) {
-      continue;
-    }
-    sek_buf_addch(&packed, ch);
-  }
-
-  if (0 != packed.len % 4) {
-    return NULL;
-  }
-
-  while (2 > pad && pad < packed.len && '=' == packed.data[packed.len - 1 - pad]) {
-    pad++;
-  }
-
-  for (index = 0; index + pad < packed.len; index++) {
-    if (0 > unb64digit(packed.data[index])) {
-      return NULL;
-    }
-  }
-
-  out = (unsigned char *)sek_alloc(pool, packed.len / 4 * 3 + 4);
-
-  for (index = 0; index + 3 < packed.len; index += 4) {
-    int a = unb64digit(packed.data[index]);
-    int b = unb64digit(packed.data[index + 1]);
-    int c = unb64digit(packed.data[index + 2]);
-    int d = unb64digit(packed.data[index + 3]);
-    unsigned int acc;
-
-    if (0 > a || 0 > b) {
-      return NULL;
-    }
-
-    acc = (unsigned int)(a << 18) | (unsigned int)(b << 12);
-    out[at++] = (unsigned char)((acc >> 16) & 0xff);
-
-    if (0 <= c) {
-      acc |= (unsigned int)(c << 6);
-      out[at++] = (unsigned char)((acc >> 8) & 0xff);
-    }
-    if (0 <= d) {
-      acc |= (unsigned int)d;
-      out[at++] = (unsigned char)(acc & 0xff);
-    }
-  }
-
-  out[at] = '\0';
-  *outlen = at;
-
-  return out;
-}
-
-/* ---- PEM ----------------------------------------------------------- */
-
-/* Certificates only: no header handling, no other label, no private keys.
- * Trust anchors are all this port ever parses out of a PEM file. */
-sek_ders *sek_pemcerts(sek_pool *pool, const char *text) {
-  static const char OPEN[] = "-----BEGIN CERTIFICATE-----";
-  static const char CLOSE[] = "-----END CERTIFICATE-----";
-
-  sek_ders *out = (sek_ders *)sek_alloc(pool, sizeof(sek_ders));
-  size_t cap = 8;
-  const char *rest = text;
-
-  out->items = (unsigned char **)sek_alloc(pool, cap * sizeof(unsigned char *));
-  out->lens = (size_t *)sek_alloc(pool, cap * sizeof(size_t));
-  out->len = 0;
-
-  while (NULL != rest) {
-    const char *start = strstr(rest, OPEN);
-    const char *body;
-    const char *end;
-    char *span;
-    size_t derlen = 0;
-    unsigned char *der;
-
-    if (NULL == start) {
-      break;
-    }
-
-    body = start + sizeof(OPEN) - 1;
-    end = strstr(body, CLOSE);
-    if (NULL == end) {
-      break;
-    }
-
-    span = sek_strndup(pool, body, (size_t)(end - body));
-    der = sek_unbase64(pool, span, &derlen);
-
-    if (NULL != der && 0 < derlen) {
-      if (out->len == cap) {
-        size_t bigger = cap * 2;
-        unsigned char **items =
-            (unsigned char **)sek_alloc(pool, bigger * sizeof(unsigned char *));
-        size_t *lens = (size_t *)sek_alloc(pool, bigger * sizeof(size_t));
-        memcpy(items, out->items, out->len * sizeof(unsigned char *));
-        memcpy(lens, out->lens, out->len * sizeof(size_t));
-        out->items = items;
-        out->lens = lens;
-        cap = bigger;
-      }
-      out->items[out->len] = der;
-      out->lens[out->len] = derlen;
-      out->len++;
-    }
-
-    rest = end + sizeof(CLOSE) - 1;
-  }
-
-  return out;
 }

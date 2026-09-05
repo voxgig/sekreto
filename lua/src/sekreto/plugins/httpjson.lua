@@ -1,10 +1,12 @@
--- HTTP/1.1, framed by hand.
+-- HTTP/1.1, framed by hand, plus the one JSON round-trip every store
+-- client makes - the HTTP half of the plugins, in one place and OUTSIDE
+-- the core. A chain of built-in kinds never requires this file.
 --
 -- Lua has no client, and the dependency rule covers cryptographic
 -- transport and nothing else - so the request line, the headers, the
 -- length-counted and chunked bodies are all written here. The bytes go
--- through src/sekreto/net.lua to a socket the helper owns; nothing in
--- this file knows whether that socket is TLS.
+-- through src/sekreto/plugins/net.lua to a socket the helper owns;
+-- nothing in this file knows whether that socket is TLS.
 --
 -- Everything the transport contract asks of a round-trip is here:
 --
@@ -17,11 +19,13 @@
 --     http_proxy: the socket is opened to the address that was checked.
 --     A proxy has sent a Vault token in the clear before.
 --
--- A port of rust/src/http.rs, which is the model for a hand-framed port.
+-- A port of typescript/plugins/httpjson.ts and of rust/src/http.rs, which
+-- is the model for a hand-framed port.
 
 local err = require('sekreto.err')
 local addr = require('sekreto.addr')
-local net = require('sekreto.net')
+local net = require('sekreto.plugins.net')
+local json = require('sekreto.plugins.json')
 
 local M = {}
 
@@ -204,6 +208,38 @@ function M.request(method, url, headers, body)
   end
 
   return { status = status, headers = answerheaders, body = rest, raw = #raw }
+end
+
+--- One JSON round-trip's result: the status, and the parsed body.
+---
+--- Network failure is always an error - an unreachable store is a store
+--- that could not answer, and answering a miss there would fall silently
+--- through to a weaker store.
+function M.fetchjson(method, url, headers, body)
+  local res, why = M.request(method, url, headers, body)
+
+  if nil == res then
+    err.fail('sekreto: cannot reach ' .. addr.bare(url) .. ': ' .. why)
+  end
+
+  -- One byte over the bound is enough to know it was exceeded. An endless
+  -- body is a store that could not answer, so this raises rather than
+  -- returning a miss - the latter would fall through to a weaker store on
+  -- an attacker's cue.
+  if M.MAXBODY < res.raw then
+    err.fail('sekreto: oversized response from ' .. addr.bare(url))
+  end
+
+  local parsed = json.parse(res.body)
+
+  -- A success status promised JSON; a body that does not parse means the
+  -- store could not answer coherently. Error statuses may carry any body
+  -- - they are decided on status alone.
+  if 200 == res.status and nil == parsed then
+    err.fail('sekreto: malformed response from ' .. addr.bare(url))
+  end
+
+  return { status = res.status, body = parsed }
 end
 
 return M
