@@ -243,13 +243,13 @@ $(B)/sekreto-core: $(LIB)/.stamp test/CoreOnly.lean
 #   2. no symbol from $(PROCSYMS) may appear
 #   3. every `initialize_` the core wants must match $(COREMODS)
 #
-# (1) ALONE IS NOT THE PROOF IT LOOKS LIKE, and the reason is worth
-# writing down. The premise "reaching a platform needs an `@[extern]`,
-# and every `@[extern]` falls outside `l_`/`lean_`/`initialize_`" is
-# false: LEAN'S OWN RUNTIME BINDINGS ARE `lean_*`, so `IO.Process.spawn`
-# compiles to an undefined `lean_io_process_spawn` that (1) skips, needs
-# no `@[extern]` of ours and no import at all - `Init` is auto-imported -
-# and links against the runtime. An audit demonstrated it: a core that
+# (1) ALONE IS NOT THE PROOF IT LOOKS LIKE. The premise - "reaching a
+# platform needs an `@[extern]`, and every `@[extern]` falls outside
+# `l_`/`lean_`/`initialize_`" - is false. LEAN'S OWN RUNTIME BINDINGS ARE
+# `lean_*`, so `IO.Process.spawn` compiles to an undefined
+# `lean_io_process_spawn` that (1) skips, needs no `@[extern]` of ours
+# and no import at all - `Init` is auto-imported - and links against the
+# runtime. An audit demonstrated it: a core that
 # ran `/bin/sh -c id` passed (1) and the whole target. (2) is widened to
 # `lean_io_process_` for that reason.
 #
@@ -282,8 +282,10 @@ check-core: $(PLIB)/.stamp $(B)/sekreto-core
 	  nm --defined-only --format=posix $(B)/sekreto-core | awk 'NF>1 {print $$1}' | sort -u > $(B)/corebin.syms; \
 	  nm --defined-only --format=posix $(B)/sekreto-cli | awk 'NF>1 {print $$1}' | sort -u > $(B)/clibin.syms; \
 	  test -s $(B)/core.syms || { echo "check-core: read no symbols from the core objects" >&2; exit 1; }; \
-	  grep -qx initialize_Sekreto_Chain $(B)/core.syms $(B)/corebin.syms >/dev/null \
+	  grep -qx initialize_Sekreto_Chain $(B)/core.syms \
 	    || { echo "check-core: the core objects do not name the chain - nm read the wrong thing" >&2; exit 1; }; \
+	  grep -qx initialize_Sekreto_Chain $(B)/corebin.syms \
+	    || { echo "check-core: build/sekreto-core does not name the chain - nm read the wrong thing" >&2; exit 1; }; \
 	  echo "== the control: every forbidden name exists, on the plugin side"; \
 	  unseen=$$(comm -23 $(B)/forbidden.txt $(B)/plugin.syms); \
 	  if [ -n "$$unseen" ]; then \
