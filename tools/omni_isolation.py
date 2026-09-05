@@ -479,6 +479,7 @@ SOURCES = {
     # of this port: the COMMENT rule knows Lean's `--` but NOT its block
     # form `/-`, so a `/-` comment naming omni would be reported.
     'lean':       dict(globs=['lean/src/**/*.lean', 'lean/cli/**/*.lean',
+                              'lean/plugins/**/*.lean',
                               'lean/ffi/**/*.c', 'lean/ffi/**/*.h'],
                        skip=[], outside=['lean/test/'], pattern=SOURCE),
     # .hsc and .c are included in case the FFI grows either; today the
