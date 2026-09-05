@@ -474,6 +474,18 @@ func everyspecfieldsurvivestheroundtrip() throws {
   try same(there.keys, WHOLESPEC, "the options map")
   try same(there.at("auth").keys, WHOLEAUTH.sorted(), "the auth map")
 
+  // ...and the list above is the STRUCT's, read off it rather than kept in
+  // step by hand. A thirty-fifth field that nobody taught `optionsof`,
+  // `specof` or this list about would otherwise be carried by none of the
+  // three and noticed by none of them either - a provider quietly losing
+  // an option it was configured with, at run time, against a real store.
+  try same(
+    Mirror(reflecting: spec).children.compactMap { $0.label }.sorted(), WHOLESPEC,
+    "ProviderSpec's own fields")
+  try same(
+    Mirror(reflecting: spec.auth!).children.compactMap { $0.label }.sorted(),
+    WHOLEAUTH.sorted(), "AuthSpec's own fields")
+
   // An absent field stays absent: an omitted key and an authored empty
   // string are not the same thing to a provider that defaults on
   // emptiness - `mount` defaults to `secret`, and "" must not become it.
@@ -546,6 +558,31 @@ func thecorenamesnopluginandreachesnoplatform() throws {
   try truth(3 < files, "read only \(files) core sources")
 }
 
+// The POSIX spellings of the same two capabilities, which Foundation's
+// names are only the polite form of. `import Foundation` re-exports Glibc
+// on Linux, so `socket`, `connect` and `posix_spawn` are in scope in every
+// core file with NO IMPORT to give them away - a core could open a socket
+// and spawn a child without naming one word a source scan looks for. The
+// archive's own list of what it needs from outside is the half that cannot
+// be talked around, so the list is read for these too.
+let PLATFORMSYMBOLS: Set<String> = [
+  "socket", "connect", "bind", "listen", "accept", "accept4",
+  "getaddrinfo", "gethostbyname", "gethostbyname2",
+  "posix_spawn", "posix_spawnp", "fork", "vfork",
+  "execv", "execve", "execvp", "execl", "execlp", "popen", "system",
+  "dlopen", "dlsym",
+]
+
+/// The name of each symbol `nm -u` printed: "                 U socket"
+/// is one field once the padding is gone. An EXACT name, because these are
+/// C symbols and a substring test on them would fire on any mangled swift
+/// symbol that happened to spell `system` or `connect` inside itself.
+func neededby(_ out: String) -> Set<String> {
+  return Set(out.components(separatedBy: "\n").compactMap {
+    $0.split(separator: " ").last.map(String.init)
+  })
+}
+
 // ...and what the ARTIFACT says, which is the claim itself rather than a
 // proxy for it. A static archive records every symbol it needs from
 // outside; the core's list holds no URLSession, no Process and nothing
@@ -560,6 +597,21 @@ func thecorearchivelinksnoplugin() throws {
       throw fail("the core archive needs \(word): \(symbol)")
     }
   }
+
+  let needed = neededby(out)
+
+  // The control for the read itself: the core needs libc for memory, so a
+  // list with none of these in it is a list that was not parsed, and an
+  // empty intersection below would mean nothing.
+  try truth(
+    !needed.intersection(["malloc", "free", "memcpy", "memset"]).isEmpty,
+    "no libc name came out of nm - the symbol read has no teeth")
+
+  let reached = needed.intersection(PLATFORMSYMBOLS).sorted()
+
+  try truth(
+    reached.isEmpty,
+    "the core archive needs \(reached.joined(separator: ", ")) - a socket or a child process")
 
   // ...and the same read of the plugins archive finds the socket, which is
   // what makes the first half a measurement rather than a tautology.

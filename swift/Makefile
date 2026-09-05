@@ -96,11 +96,18 @@ build: deps
 # on its own - FoundationNetworking and Process are one `import Foundation`
 # away in every core file.
 #
+# AND SO IS POSIX. `import Foundation` re-exports Glibc on Linux, so
+# `socket`, `connect` and `posix_spawn` are in scope in every core file
+# with no import for a scan to key on - a socket and a child process
+# without a single word from the line above. Foundation's own names are
+# the polite spelling of the same two capabilities, not the only one, so
+# the raw ones are named here too.
+#
 # Prose is exempt, and has to be: the comments in src/ point at the plugins
 # on purpose, because that is how a reader finds them.
 check-core:
 	@if grep -rn -E \
-	    'URLSession|FoundationNetworking|(^|[^A-Za-z])Process\(|Pipe\(|sha256|hmac|sigv4|import SekretoPlugins' \
+	    'URLSession|FoundationNetworking|(^|[^A-Za-z])Process\(|Pipe\(|sha256|hmac|sigv4|import SekretoPlugins|posix_spawn|(^|[^A-Za-z_])(socket|connect|getaddrinfo|fork|execv|execve|execvp|execl|execlp|popen|dlopen|dlsym)\(' \
 	    src \
 	    | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*//' \
 	    | grep -v -E '^[^:]+:[0-9]+:[[:space:]]*///'; then \

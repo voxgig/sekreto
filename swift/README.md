@@ -116,11 +116,13 @@ src/Provider.swift:14:8: error: circular dependency between modules
 ```
 
 What the compiler cannot see is everything else: `URLSession`, `Process`
-and a hash function are one `import Foundation` away in any core file.
-`make check-core` greps for those, and `nm -u build/libSekreto.a` is the
-same claim read off the artifact rather than the source — the core's
-undefined symbols name no `URLSession`, no `Process` and nothing from
-`SekretoPlugins`, and the plugins' do.
+and a hash function are one `import Foundation` away in any core file —
+and so are `socket`, `connect` and `posix_spawn`, because that same import
+re-exports Glibc, which is a socket and a child process with no import to
+name. `make check-core` greps for all of them, and `nm -u
+build/libSekreto.a` is the same claim read off the artifact rather than
+the source — the core's undefined symbols name no `URLSession`, no
+`Process`, no POSIX socket or spawn, and nothing from `SekretoPlugins`.
 
 **A swift module is compiled whole**, which is the one place this port
 differs from go and rust: linking `libSekretoPlugins.a` links all ten

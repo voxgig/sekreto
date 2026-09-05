@@ -109,7 +109,7 @@ clients are loaded differs.
 | [kotlin](kotlin/) | ✅ | `kotlin/plugins/` | a checkout, found or fetched by `make deps` |
 | [scala](scala/) | switch — pending | | exists |
 | [clojure](clojure/) | ✅ | `clojure/plugins/` | a checkout, found by `make deps`; classpaths written by the Makefile (plugin's clojure port ships no `deps.edn`) |
-| [swift](swift/) | switch — pending | | exists |
+| [swift](swift/) | ✅ | `swift/plugins/` (its own module) | a checkout, found or fetched by `make deps` |
 | [dart](dart/) | ✅ | `dart/plugins/` | a checkout, found or fetched by `make deps` (plugin's dart port is not on pub, so nothing declares it) |
 | [elixir](elixir/) | switch — pending | | exists |
 | [cpp](cpp/) | switch — pending | | exists |
