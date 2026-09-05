@@ -1,8 +1,18 @@
-# The Dart port of sekreto declares no dependencies, and none may be added:
-# every port carries its own JSON, its own SHA-256 and its own HMAC rather
-# than reach for a package. `dart pub get` is never run, and nothing here
+# The Dart port of sekreto declares no package dependencies, and none may be
+# added: every port carries its own JSON, its own SHA-256 and its own HMAC
+# rather than reach for one. `dart pub get` is never run, and nothing here
 # names voxgig/omni - the conformance suite finds it through a package map
 # the Makefile writes into build/.
+#
+# THE ONE LIBRARY DEPENDENCY IS voxgig/plugin, AND IT IS NOT A PUB PACKAGE.
+# Its dart port ships no pubspec at all - it takes nothing itself, so it has
+# no manifest - which means there is nothing for `dart pub` to resolve and
+# nothing a `dependencies:` entry here could point at. So this port takes it
+# the way the kotlin and zig ports do, and the way every port takes the
+# conformance runner: a checkout, found by the Makefile in the usual places
+# and named in the package map that `dart compile` and `dart run` are given
+# with --packages. `make deps` fetches a shallow clone when there is none.
+# See AGENTS.md rule 3 and docs/design/plugin-providers.md.
 name: sekreto
 description: "sekreto: one interface for secrets, wherever they live."
 version: 0.1.0

@@ -1,0 +1,20 @@
+# the Doppler provider
+#
+# One plugin, one crate: `cargo tree -p voxgig_sekreto_doppler` is the honest
+# answer to "what does this kind actually link?", and the core links none
+# of it (docs/design/plugin-providers.md, AGENTS.md rule 4).
+[package]
+name = "voxgig_sekreto_doppler"
+version = "0.1.0"
+edition = "2021"
+description = "sekreto: the Doppler provider"
+license = "MIT"
+
+[dependencies]
+voxgig_sekreto = { path = "../.." }
+voxgig_plugin = { path = "../../.plugin/rust" }
+voxgig_sekreto_httpjson = { path = "../httpjson" }
+
+[lib]
+name = "voxgig_sekreto_doppler"
+path = "src/lib.rs"

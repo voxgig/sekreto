@@ -1,0 +1,20 @@
+# the GCP Secret Manager provider
+#
+# One plugin, one crate: `cargo tree -p voxgig_sekreto_gcpsecrets` is the honest
+# answer to "what does this kind actually link?", and the core links none
+# of it (docs/design/plugin-providers.md, AGENTS.md rule 4).
+[package]
+name = "voxgig_sekreto_gcpsecrets"
+version = "0.1.0"
+edition = "2021"
+description = "sekreto: the GCP Secret Manager provider"
+license = "MIT"
+
+[dependencies]
+voxgig_sekreto = { path = "../.." }
+voxgig_plugin = { path = "../../.plugin/rust" }
+voxgig_sekreto_httpjson = { path = "../httpjson" }
+
+[lib]
+name = "voxgig_sekreto_gcpsecrets"
+path = "src/lib.rs"

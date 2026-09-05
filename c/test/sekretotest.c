@@ -29,6 +29,7 @@
 
 #include "omni.h"
 #include "sekreto.h"
+#include "sekretoplugins.h"
 
 static omni_pool *POOL = NULL;  /* omni's values */
 static sek_pool *SEK = NULL;    /* the library's */
@@ -152,18 +153,31 @@ static sek_spec specof(omni_json *entry) {
  * construction has to happen where omni can see the failure as a subject
  * error.
  *
+ * EVERY PLUGIN IS PASSED TO EVERY CHAIN, which is what makes this suite
+ * blind to a consumer's plugin list: it can see that a kind is missing
+ * from the full set, because `sources` and `stores` name all ten, and it
+ * can never see that a consumer passed the wrong list. test/plugintest.c
+ * is where that is pinned.
+ *
  * Caching is off on every constructed chain, as in every port. */
 static sek_err chainof(omni_json *entry, sek_sekreto **out) {
   omni_json *chain = omni_map_get(entry, "chain");
   size_t count = omni_islist(chain) ? chain->listlen : 0;
   sek_spec *specs = (sek_spec *)sek_alloc(SEK, (0 == count ? 1 : count) * sizeof(sek_spec));
+  sek_options options;
   size_t index;
 
   for (index = 0; index < count; index++) {
     specs[index] = specof(chain->list[index]);
   }
 
-  return sek_sekreto_of(SEK, specs, count, 0, out);
+  memset(&options, 0, sizeof(options));
+  options.providers = specs;
+  options.count = count;
+  options.plugincount = sek_allplugins(&options.plugins);
+  options.nocache = 1;
+
+  return sek_new(SEK, &options, out);
 }
 
 static omni_result ok(omni_json *val) {

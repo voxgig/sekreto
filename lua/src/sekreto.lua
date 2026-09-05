@@ -5,18 +5,38 @@
 -- variables in development and a vault in production without changing a
 -- line of its own code.
 --
--- This module is the whole public surface: the facade, the pure name
+-- This module is the whole core surface: the facade, the pure name
 -- functions (re-exported from sekreto.name, which the providers need
--- too), the error type, and the declarative factory.
+-- too), the error type, and the four built-in provider kinds.
+--
+-- THE CORE REQUIRES NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR
+-- SIGNS A REQUEST. The four built-in kinds - env, memory, dotenv, file -
+-- read at most a local file; every other kind is a voxgig/plugin
+-- definition under sekreto/plugins/, and a chain may name one only if the
+-- calling project handed it in through `plugins`:
+--
+--     local sekreto = require('sekreto')
+--     local hashicorp = require('sekreto.plugins.hashicorp').hashicorp
+--
+--     local secrets = sekreto.sekreto({
+--       plugins = { hashicorp },
+--       providers = {
+--         { kind = 'env' },
+--         { kind = 'hashicorp', addr = addr, token = token },
+--       },
+--     })
+--
+-- or, for every kind at once, `allplugins` from `sekreto.plugins`. See
+-- docs/design/plugin-providers.md.
 --
 -- A port of typescript/src/Sekreto.ts, which is canonical.
+
+local plugin = require('plugin')
 
 local err = require('sekreto.err')
 local name = require('sekreto.name')
 local addr = require('sekreto.addr')
 local providers = require('sekreto.providers')
-local sigv4 = require('sekreto.sigv4')
-local json = require('sekreto.json')
 
 local M = {}
 
@@ -39,15 +59,16 @@ M.storename = name.storename
 M.checkaddr = addr.checkaddr
 M.safeaddr = addr.safeaddr
 
-M.sigv4 = sigv4.sigv4
-M.uriescape = sigv4.uriescape
-
 M.spec = providers.spec
 M.authspec = providers.authspec
-M.makeprovider = providers.makeprovider
-M.KINDS = providers.KINDS
 
-M.json = json
+-- The plugin bridge, and the four kinds built on it. `providerplugin` is
+-- how a calling project adds a fifth.
+M.providerplugin = providers.providerplugin
+M.BUILTINS = providers.BUILTINS
+M.KINDS = providers.KINDS
+M.PROVIDER_EXPORT = providers.PROVIDER_EXPORT
+M.ERROR_CODE = providers.ERROR_CODE
 
 -- ------------------------------------------------------------- the type
 
@@ -85,22 +106,194 @@ function Sekreto:tojson()
   return { stores = self:stores() }
 end
 
---- Make a Sekreto from live providers.
----
---- `names` gives the store names positionally; an entry left nil or empty
---- falls back to the provider's own kind. Construction contacts nothing:
---- the first network call is the first lookup.
-function M.Sekreto(useproviders, names, docache)
-  local self = setmetatable({}, Sekreto)
+-- ------------------------------------------------------- the plugin seam
 
+--- Is this a voxgig/plugin definition?
+local function isdefinition(value)
+  return 'table' == type(value) and 'string' == type(value.name)
+    and 'function' == type(value.define)
+end
+
+--- The name a table is loaded under, when it is a module.
+---
+--- Lua gives a module no identity of its own, so the registry is asked.
+--- It is only ever consulted on the error path below, where naming the
+--- module is the whole point of the message.
+local function modulename(value)
+  for key, loaded in pairs(package.loaded) do
+    if loaded == value then
+      return key
+    end
+  end
+  return nil
+end
+
+--- A plugin entry, checked to be a definition before the catalog sees it.
+---
+--- `require('sekreto.plugins.hashicorp')` hands back the MODULE, and the
+--- definition is one field further on - so the thing nearest to hand is
+--- not a definition, and a module in the catalog would fail deep inside
+--- voxgig/plugin with a message about a definition name. Refused here
+--- instead, naming the module and what to pass out of it.
+local function definition(entry)
+  if isdefinition(entry) then
+    return entry
+  end
+
+  local modname = ('table' == type(entry)) and modulename(entry) or nil
+
+  if nil ~= modname then
+    -- What the module holds that could have been meant: a definition, or
+    -- a list of them.
+    local holds = {}
+    for key, value in pairs(entry) do
+      if isdefinition(value) or
+        ('table' == type(value) and isdefinition(value[1]))
+      then
+        holds[#holds + 1] = key
+      end
+    end
+    table.sort(holds)
+
+    if 0 < #holds then
+      err.fail('sekreto: not a plugin definition: the module ' .. modname ..
+        " - pass a definition it holds, such as require('" .. modname ..
+        "')." .. holds[1])
+    end
+
+    err.fail('sekreto: not a plugin definition: the module ' .. modname)
+  end
+
+  err.fail('sekreto: not a plugin definition: ' .. tostring(entry))
+end
+
+--- The message for a kind the catalog does not hold.
+---
+--- A kind sekreto has never heard of is a typo; a kind that exists as a
+--- plugin but was not passed in is the split working as designed and
+--- telling you what to pass. Collapsing the two was the first thing that
+--- made the split confusing to use.
+local function unknownkind(kind, catalog)
+  local message = 'sekreto: unknown provider kind: ' .. tostring(kind) ..
+    ' (available: ' .. table.concat(catalog:names(), ', ') .. ')'
+
+  for _, known in ipairs(providers.KINDS.plugin) do
+    if known == kind then
+      return message .. ' - ' .. tostring(kind) ..
+        ' is a sekreto plugin, not built in: pass it in the plugins option'
+    end
+  end
+
+  return message
+end
+
+--- A SekretoError that crossed the plugin boundary comes back out as
+--- itself, byte for byte. Anything else is not sekreto's to rewrite.
+local function unwrap(raised)
+  if providers.ERROR_CODE == plugin.codeof(raised) then
+    local cause = ('table' == type(raised.details)) and raised.details.cause or nil
+    if 'string' == type(cause) then
+      return err.SekretoError(cause)
+    end
+  end
+
+  return raised
+end
+
+--- One chain entry, as a plugin instance.
+---
+--- The instance is `kind` for a store named after its kind and
+--- `kind$store` otherwise - `hashicorp$prod` - so `host:list()` reads like
+--- the chain. A store name that is already taken gets a numbered tag from
+--- the host instead, because two providers MAY share a store name (a
+--- directed read walks both) and an instance ref may not.
+function Sekreto:declare(spec)
+  local kind = ('table' == type(spec)) and spec.kind or nil
+
+  if 'string' ~= type(kind) or not self.catalog:has(kind) then
+    err.fail(unknownkind(kind, self.catalog))
+  end
+
+  local store = providers.nonempty(spec.name) and spec.name or kind
+
+  if 'string' ~= type(store) or not plugin.check_tag(store) then
+    err.fail('sekreto: invalid store name: ' .. tostring(store))
+  end
+
+  local ref = (store == kind) and kind or plugin.format_ref(kind, store)
+  if nil ~= self.host:instance(ref) then
+    ref = self.host:autotag(kind)
+  end
+
+  -- `load` runs the definition's `define`, which builds the provider from
+  -- the spec; `activate` takes the instance live. Nothing is contacted by
+  -- either: a provider opens nothing until its first lookup.
+  local ok, raised = pcall(function()
+    self.host:load(ref, plugin.types.map({ options = spec }))
+    self.host:activate(ref)
+  end)
+
+  if not ok then
+    error(unwrap(raised), 0)
+  end
+
+  return {
+    store = store,
+    provider = self.host:exports(ref .. '/' .. providers.PROVIDER_EXPORT),
+  }
+end
+
+--- Make a Sekreto.
+---
+--- `options` carries `plugins` (the definitions this chain may build,
+--- beyond the four built-ins), `providers` (the chain itself, as specs or
+--- as live providers) and `cache`. Construction contacts nothing: the
+--- first network call is the first lookup.
+function M.Sekreto(options)
+  local self = setmetatable({}, Sekreto)
+  local opts = options or {}
+
+  -- An options TABLE, not a list of specs. Before the plugin split this
+  -- took `sekreto(specs, cache)` positionally, and that call would now
+  -- find no `providers` key and build an EMPTY CHAIN IN SILENCE - every
+  -- `get` raising `unknown secret` with nothing to say why. A list is
+  -- refused outright instead.
+  if nil ~= opts[1] then
+    err.fail('sekreto: sekreto() takes an options table' ..
+      ' { plugins = ..., providers = ..., cache = ... }, not a list of specs')
+  end
+
+  -- Built-ins first, then the plugins, into one catalog: a plugin that
+  -- names a built-in kind replaces it, which is how a host substitutes an
+  -- implementation and never an accident, because the four names are
+  -- documented.
+  --
+  -- `catalog` is the definitions this Sekreto can build; `host` is the
+  -- voxgig/plugin host every spec'd provider is an instance of. Read them
+  -- for introspection - `host:list()` names each store's ref and status -
+  -- and nothing on either advances the chain.
+  local defs = {}
+  for _, builtin in ipairs(providers.BUILTINS) do
+    defs[#defs + 1] = builtin
+  end
+  for _, given in ipairs(opts.plugins or {}) do
+    defs[#defs + 1] = definition(given)
+  end
+
+  self.catalog = plugin.make_catalog(defs)
+  self.host = plugin.make_host(plugin.types.map({ catalog = self.catalog }))
+
+  -- {store, provider} pairs, in chain order. A provider handed in live is
+  -- backed by no instance; a spec'd one is an instance of its kind on the
+  -- host.
   self.entries = {}
 
-  for index, provider in ipairs(useproviders or {}) do
-    local given = (names or {})[index]
-    self.entries[index] = {
-      store = (nil == given or '' == given) and name.storename(provider) or given,
-      provider = provider,
-    }
+  for index, entry in ipairs(opts.providers or {}) do
+    if 'function' == type(entry.lookup) then
+      self.entries[index] = { store = name.storename(entry), provider = entry }
+    else
+      self.entries[index] = self:declare(entry)
+    end
   end
 
   -- A list, not a map: the store a value came from stays attached, and
@@ -116,7 +309,7 @@ function M.Sekreto(useproviders, names, docache)
 
   -- A strict identity test, as canonical: only an exact `false` turns
   -- caching off, so nil leaves it on.
-  self.docache = (false ~= docache)
+  self.docache = (false ~= opts.cache)
 
   return self
 end
@@ -255,10 +448,13 @@ function Sekreto:refresh()
   self.cache = {}
 end
 
---- Tear the chain down. Afterwards `stores()` and `sources()` are empty,
---- `tryget` misses and `get` raises - and `redact` still knows every
---- value ever resolved.
+--- Tear the chain down: every plugin instance is deactivated and
+--- unloaded, in reverse, releasing whatever a provider acquired at
+--- activation. Afterwards `stores()` and `sources()` are empty, `tryget`
+--- misses and `get` raises - and `redact` still knows every value ever
+--- resolved.
 function Sekreto:close()
+  self.host:close()
   self.entries = {}
   self.cache = {}
 end
@@ -267,27 +463,14 @@ M.SekretoClass = Sekreto
 
 -- ---------------------------------------------------------- the factory
 
---- Make a Sekreto from declarative provider specs - the same shape the
---- shared spec and an app's config file use.
+--- Make a Sekreto from options - the same shape the shared spec and an
+--- app's config file use.
 ---
---- An element that already has a callable `lookup` is taken as a live
---- provider (duck-typed, never by class identity) and keeps its own
---- describe()-derived store name.
-function M.sekreto(specs, cache)
-  local built = {}
-  local names = {}
-
-  for index, spec in ipairs(specs or {}) do
-    if 'function' == type(spec.lookup) then
-      built[index] = spec
-      names[index] = nil
-    else
-      built[index] = providers.makeprovider(spec)
-      names[index] = spec.name
-    end
-  end
-
-  return M.Sekreto(built, names, cache)
+--- A `providers` element that already has a callable `lookup` is taken as
+--- a live provider (duck-typed, never by class identity) and keeps its
+--- own describe()-derived store name.
+function M.sekreto(options)
+  return M.Sekreto(options)
 end
 
 return M

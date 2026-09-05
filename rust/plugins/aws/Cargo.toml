@@ -1,0 +1,20 @@
+# the AWS Secrets Manager and Parameter Store providers, with SigV4
+#
+# One plugin, one crate: `cargo tree -p voxgig_sekreto_aws` is the honest
+# answer to "what does this kind actually link?", and the core links none
+# of it (docs/design/plugin-providers.md, AGENTS.md rule 4).
+[package]
+name = "voxgig_sekreto_aws"
+version = "0.1.0"
+edition = "2021"
+description = "sekreto: the AWS Secrets Manager and Parameter Store providers, with SigV4"
+license = "MIT"
+
+[dependencies]
+voxgig_sekreto = { path = "../.." }
+voxgig_plugin = { path = "../../.plugin/rust" }
+voxgig_sekreto_httpjson = { path = "../httpjson" }
+
+[lib]
+name = "voxgig_sekreto_aws"
+path = "src/lib.rs"

@@ -24,17 +24,22 @@ import com.voxgig.sekreto.{
   AuthSpec,
   ProviderSpec,
   Sekreto,
-  Signing,
   awsparam,
   envkey,
   flatname,
   parsedotenv,
   redact,
   sekreto as makesekreto,
-  sigv4,
   validname,
   vaultref,
 }
+
+// sigv4 moved out of the core with the AWS kinds - the core of no port
+// imports a hash function - so the suite reaches it where it lives now.
+// The chains below are built with the FULL SET passed in, which is why
+// this suite cannot see the plugin seam at all: every kind is always
+// available to it. test/PluginsTest.scala is what pins that half.
+import com.voxgig.sekreto.plugins.{Plugins, Signing, sigv4}
 
 object SekretoTest:
 
@@ -148,7 +153,11 @@ object SekretoTest:
 
   /** Build a Sekreto from the spec's declarative chain description. */
   def chainof(entry: Json): Sekreto =
-    makesekreto(entry.get("chain").aslist.getOrElse(List.empty).map(specof), cache = false)
+    makesekreto(
+      entry.get("chain").aslist.getOrElse(List.empty).map(specof),
+      Plugins.ALL,
+      cache = false,
+    )
 
   /** The name a group's entry asks about. */
   def namearg(entry: Json): String = entry.get("name").asstr.getOrElse("")

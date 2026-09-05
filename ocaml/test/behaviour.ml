@@ -53,7 +53,7 @@ let () =
     ]
   in
   List.iter
-    (fun addr -> same ("checkaddr allows " ^ addr) "" (refusal (fun () -> Providers.checkaddr addr)))
+    (fun addr -> same ("checkaddr allows " ^ addr) "" (refusal (fun () -> Provider.checkaddr addr)))
     allowed;
 
   let refused =
@@ -82,7 +82,7 @@ let () =
   in
   List.iter
     (fun (addr, want) ->
-      same ("checkaddr refuses " ^ addr) want (refusal (fun () -> Providers.checkaddr addr)))
+      same ("checkaddr refuses " ^ addr) want (refusal (fun () -> Provider.checkaddr addr)))
     refused
 
 (* ---- strict base64 ---------------------------------------------------- *)
@@ -110,12 +110,11 @@ let () =
   output_string och "from-a-file\n";
   close_out och;
 
-  let provider = Providers.makeprovider { Providers.nospec with kind = "file"; dir = holder } in
+  let provider = Provider.file_provider holder "" in
   same "file strips one trailing newline" (Some "from-a-file") (provider.Sekreto.lookup "api.token");
   same "file: no such name is a MISS" None (provider.Sekreto.lookup "other.name");
 
-  let gone = Providers.makeprovider
-      { Providers.nospec with kind = "file"; dir = "/nonexistent-sekreto-behaviour" } in
+  let gone = Provider.file_provider "/nonexistent-sekreto-behaviour" "" in
   same "file: no such directory is a MISS" None (gone.Sekreto.lookup "api.token");
 
   (* A directory where a file should be is EISDIR, which is a store that
@@ -127,14 +126,12 @@ let () =
 
   (* dotenv is read once, lazily: a chain that never looks anything up must
      not read whatever .env sits in the working directory. *)
-  let absent = Providers.makeprovider
-      { Providers.nospec with kind = "dotenv"; file = "/nonexistent-sekreto-behaviour/.env" } in
+  let absent = Provider.dotenv_provider "/nonexistent-sekreto-behaviour/.env" "" in
   same "dotenv: absent file describes" "dotenv:/nonexistent-sekreto-behaviour/.env"
     (absent.Sekreto.describe ());
   same "dotenv: absent file is a MISS" None (absent.Sekreto.lookup "api.token");
 
-  let unreadable = Providers.makeprovider
-      { Providers.nospec with kind = "dotenv"; file = holder } in
+  let unreadable = Provider.dotenv_provider holder "" in
   check "dotenv: a directory RAISES"
     (String.starts_with ~prefix:"sekreto: dotenv provider cannot read "
        (refusal (fun () -> ignore (unreadable.Sekreto.lookup "api.token"))));
@@ -147,10 +144,10 @@ let () =
 
 let () =
   let chain =
-    Providers.sekreto
+    Sekreto.sekreto
       [
-        { Providers.nospec with kind = "memory"; name = "local"; values = [ ("API_TOKEN", "AAAA1111") ] };
-        { Providers.nospec with kind = "memory"; name = "shared"; values = [ ("API_TOKEN", "BBBB2222"); ("EMPTY_ONE", "") ] };
+        { Provider.nospec with kind = "memory"; name = "local"; values = [ ("API_TOKEN", "AAAA1111") ] };
+        { Provider.nospec with kind = "memory"; name = "shared"; values = [ ("API_TOKEN", "BBBB2222"); ("EMPTY_ONE", "") ] };
       ]
   in
 
@@ -185,39 +182,43 @@ let () =
   same "redaction survives close" "[redacted]" (Sekreto.redacttext chain "AAAA1111");
 
   let uncached =
-    Providers.sekreto ~cache:false
-      [ { Providers.nospec with kind = "memory"; values = [ ("API_TOKEN", "CCCC3333") ] } ]
+    Sekreto.sekreto ~cache:false
+      [ { Provider.nospec with kind = "memory"; values = [ ("API_TOKEN", "CCCC3333") ] } ]
   in
   ignore (Sekreto.get uncached "api.token");
   same "cache:false still redacts" "[redacted]" (Sekreto.redacttext uncached "CCCC3333");
 
-  same "an empty chain prints" "Sekreto { stores: [  ] }" (Sekreto.to_string (Providers.sekreto []))
+  same "an empty chain prints" "Sekreto { stores: [  ] }" (Sekreto.to_string (Sekreto.sekreto []))
 
-(* ---- the kind roll-call ------------------------------------------------ *)
+(* ---- the kind roll-call ------------------------------------------------
+
+   Every kind builds from a spec, with the full set handed in. Which kinds
+   are built in and which are plugins, and what happens when one is NOT
+   handed in, is test/plugins.ml's half. *)
 
 let () =
-  let kinds =
-    [ "env"; "memory"; "dotenv"; "file"; "hashicorp"; "boru"; "awssecrets"; "awsparams";
-      "gcpsecrets"; "azuresecrets"; "onepassword"; "doppler"; "infisical"; "secretspec" ]
-  in
+  let kinds = Provider.builtinkinds @ Provider.pluginkinds in
   same "fourteen kinds" 14 (List.length kinds);
   List.iter
     (fun kind ->
       same ("kind builds: " ^ kind) ""
-        (refusal (fun () -> ignore (Providers.makeprovider { Providers.nospec with kind }))))
+        (refusal (fun () ->
+             ignore
+               (Sekreto.sekreto ~plugins:(Allplugins.all ())
+                  [ { Provider.nospec with kind } ]))))
     kinds;
-  same "an unknown kind is named" "sekreto: unknown provider kind: nope"
-    (refusal (fun () -> ignore (Providers.makeprovider { Providers.nospec with kind = "nope" })));
   same "a kv typo is refused at construction" "sekreto: hashicorp: unsupported kv version: 3"
     (refusal (fun () ->
-         ignore (Providers.makeprovider { Providers.nospec with kind = "hashicorp"; kv = 3 })));
+         ignore
+           (Sekreto.sekreto ~plugins:(Allplugins.all ())
+              [ { Provider.nospec with kind = "hashicorp"; kv = 3 } ])));
   (* A spec printer must never hand a credential to a log line. *)
   let printed =
-    Providers.spectostring
-      { Providers.nospec with kind = "hashicorp"; token = "s3cr3t"; secret = "s3cr3t";
-        clientsecret = "s3cr3t"; auth = Some { Providers.noauth with amethod = "approle"; secretid = "s3cr3t" } }
+    Provider.spectostring
+      { Provider.nospec with kind = "hashicorp"; token = "s3cr3t"; secret = "s3cr3t";
+        clientsecret = "s3cr3t"; auth = Some { Provider.noauth with amethod = "approle"; secretid = "s3cr3t" } }
   in
-  check "the spec printer suppresses credentials" (None = Sigv4.findsub printed "s3cr3t")
+  check "the spec printer suppresses credentials" (None = Sekreto.findsub printed "s3cr3t")
 
 (* ---- JSON ------------------------------------------------------------- *)
 

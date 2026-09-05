@@ -3,6 +3,12 @@
   "version": "0.1.2",
   "description": "One interface for secrets, wherever they live",
   "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./plugins": "./plugins/index.js",
+    "./plugins/*": "./plugins/*.js",
+    "./package.json": "./package.json"
+  },
   "type": "commonjs",
   "homepage": "https://github.com/voxgig/sekreto",
   "keywords": [
@@ -21,10 +27,10 @@
     "test-cov": "rm -rf ./coverage && mkdir -p ./coverage && node --experimental-test-coverage --test-reporter=spec --test-reporter-destination=stdout --test-reporter=lcov --test-reporter-destination=coverage/lcov.info --enable-source-maps --test test/*.test.js",
     "test-some": "node --enable-source-maps --test-name-pattern=\"$npm_config_pattern\" --test test/*.test.js",
     "build": "node -e \"console.log('No build step for JavaScript')\"",
-    "lint": "eslint src test cli",
-    "lint:fix": "eslint src test cli --fix",
-    "format": "prettier --write \"src/**/*.js\" \"test/**/*.js\" \"cli/**/*.js\"",
-    "format:check": "prettier --check \"src/**/*.js\" \"test/**/*.js\" \"cli/**/*.js\"",
+    "lint": "eslint src plugins test cli",
+    "lint:fix": "eslint src plugins test cli --fix",
+    "format": "prettier --write \"src/**/*.js\" \"plugins/**/*.js\" \"test/**/*.js\" \"cli/**/*.js\"",
+    "format:check": "prettier --check \"src/**/*.js\" \"plugins/**/*.js\" \"test/**/*.js\" \"cli/**/*.js\"",
     "clean": "rm -rf coverage node_modules yarn.lock package-lock.json",
     "reset": "npm run clean && npm i && npm test",
     "repo-tag": "REPO_VERSION=`node -e \"console.log(require('./package').version)\"` && echo TAG: javascript/v$REPO_VERSION && git commit -a -m javascript/v$REPO_VERSION && git push && git tag javascript/v$REPO_VERSION && git push --tags;",
@@ -36,8 +42,12 @@
   "license": "MIT",
   "files": [
     "LICENSE",
-    "src"
+    "src",
+    "plugins"
   ],
+  "dependencies": {
+    "@voxgig/plugin-js": "^0.1.6"
+  },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
     "@voxgig/omni-js": "^0.1.2",

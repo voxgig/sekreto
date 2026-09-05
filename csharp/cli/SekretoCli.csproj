@@ -8,5 +8,9 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../src/Sekreto.csproj" />
+    <!-- The CLI's chain is decided at run time from the source option, so it wants
+         every kind and takes the whole plugin assembly. An application
+         with a fixed chain references only the kinds it configures. -->
+    <ProjectReference Include="../plugins/SekretoPlugins.csproj" />
   </ItemGroup>
 </Project>

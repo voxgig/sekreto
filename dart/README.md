@@ -4,18 +4,59 @@ The Dart port of [sekreto](../README.md): one interface for secrets,
 wherever they live.
 
 ```sh
-make test                     # the conformance suite
+make test                     # the conformance suite, and the seam
+make seam                     # the plugin seam alone
+make check-core               # the core, with the plugins absent
 ```
 
-The library and the CLI depend on nothing but the Dart SDK, and nothing
-may be added: `pubspec.yaml` declares no dependencies, so `dart pub get`
-is never run and no lock file is resolved. `json.dart` is sekreto's own
-value model over `dart:convert`, and `crypto.dart` is a hand-rolled
-SHA-256 and HMAC-SHA256, because the SDK has no cryptography and
-`package:crypto` is a third-party package. HTTP and TLS are `dart:io`'s
-`HttpClient`. Only the conformance suite needs voxgig/omni, and it
-reaches it through a package map the Makefile writes into `build/` —
-nothing a consumer resolves names omni.
+## Four kinds are built in; ten are plugins
+
+`env`, `memory`, `dotenv` and `file` are in `src/`, because what makes a
+kind built in is that it reads at most a local file. Every kind that
+opens a socket, signs a request or spawns a process is a
+[voxgig/plugin](https://github.com/voxgig/plugin) definition under
+`plugins/`, and a `Sekreto` can build only the kinds its constructor was
+handed:
+
+```dart
+import '../plugins/hashicorp.dart';
+
+final secrets = sekreto(chain, plugins: [hashicorp]);
+```
+
+Loading is a list handed to a constructor — never a side effect of
+importing — so a compiler cannot erase it, and the set of stores an app
+can reach is decided where the app is written rather than discovered at
+run time. A chain of the four built-in kinds needs no plugin at all, and
+compiles neither the HTTP client, nor SHA-256, nor a child process.
+
+**The boundary is the import graph, and the compiler draws it.** `dart
+compile --depfile` writes a ninja depfile naming every source that went
+into a compilation — this language's link map — and `make check-core`
+compiles the core against a package map holding voxgig/plugin alone and
+fails if one of those paths is under `plugins/`. `corecheck.sh` greps the
+core for what a dependency listing cannot see: a socket, a cipher, or a
+child process it grew rather than imported. The four boundary tests in
+`test/plugins_test.dart` compare the listings for the core, for one
+plugin, for the `aws` plugin and for the full set: percent-escaping lives
+with the transport rather than with the signer, so a chain that names
+Azure or Doppler compiles no SHA-256 either.
+
+The library and the CLI depend on nothing but the Dart SDK and
+voxgig/plugin, and nothing may be added: `pubspec.yaml` declares no
+dependencies, so `dart pub get` is never run and no lock file is
+resolved. `json.dart` is sekreto's own value model over `dart:convert`,
+and `plugins/crypto.dart` is a hand-rolled SHA-256 and HMAC-SHA256,
+because the SDK has no cryptography and `package:crypto` is a
+third-party package. HTTP and TLS are `dart:io`'s `HttpClient`.
+
+voxgig/plugin's own dart port ships no `pubspec.yaml` — it takes nothing, so it
+has no manifest — so there is nothing for `dart pub` to resolve. This
+port therefore finds a checkout the way it finds its test runner, in
+`$PLUGIN_HOME` and then the usual places, and names it in the package map
+the Makefile writes into `build/`; `make deps` fetches a shallow clone
+when there is none. Nothing a consumer resolves names the test runner
+either.
 
 The optional lookup is `tryget`, since `try` is a Dart keyword. A
 provider answers `String?`, where `null` is the miss that sends the chain
@@ -42,22 +83,35 @@ values, a signed request body, and the SigV4 output all need.
 | | |
 |---|---|
 | `src/sekreto.dart` | the facade, the name helpers, `redact` |
-| `src/providers.dart` | the provider kinds, `ProviderSpec`, `checkaddr` |
-| `src/sigv4.dart` | AWS request signing |
-| `src/crypto.dart` | SHA-256 and HMAC-SHA256 |
+| `src/providers.dart` | the four built-in kinds, and `BUILTINS` |
+| `src/support.dart` | `providerplugin`, and the spec across the boundary |
+| `src/spec.dart` | `ProviderSpec` and `AuthSpec` |
+| `src/addr.dart` | `checkaddr`: what sekreto will and will not dial |
 | `src/json.dart` | the JSON value model, reader and writer |
 | `src/provider.dart` | the two-method interface a provider implements |
+| `plugins/<kind>.dart` | one plugin kind each, and its definition |
+| `plugins/httpjson.dart` | the shared HTTP-JSON transport, and `runcmd` |
+| `plugins/sigv4.dart` | AWS request signing |
+| `plugins/crypto.dart` | SHA-256 and HMAC-SHA256 |
+| `plugins/plugins.dart` | the full set, `allplugins` |
 | `test/sekreto_test.dart` | the conformance suite |
+| `test/plugins_test.dart` | the plugin seam, which the suite cannot see |
+| `test/coreonly.dart` | the core, compiled with the plugins absent |
 | `cli/cli.dart` | the app that needs a secret |
 
 ## Use
 
 ```dart
-final secrets = sekreto([
-  ProviderSpec(kind: 'env'),
-  ProviderSpec(kind: 'dotenv', file: '.env'),
-  ProviderSpec(kind: 'hashicorp', addr: vaultaddr, token: vaulttoken),
-]);
+import '../plugins/hashicorp.dart';
+
+final secrets = sekreto(
+  [
+    ProviderSpec(kind: 'env'),
+    ProviderSpec(kind: 'dotenv', file: '.env'),
+    ProviderSpec(kind: 'hashicorp', addr: vaultaddr, token: vaulttoken),
+  ],
+  plugins: [hashicorp],
+);
 
 // the chain answers
 final token = await secrets.get('api.token');
@@ -67,9 +121,20 @@ final same = await secrets.getfrom('hashicorp', 'api.token');
 ```
 
 `ProviderSpec` takes named arguments, so a chain reads as configuration
-and the compiler checks every field. `Sekreto(providers: ..., names:
-..., cache: ...)` takes live `Provider` instances instead, for a provider
-of your own.
+and the compiler checks every field. `Sekreto(providers: ..., plugins:
+..., names: ..., cache: ...)` also takes live `Provider` instances, for a
+provider of your own; a custom KIND is one call:
+
+```dart
+final mystore = providerplugin('mystore', (spec) => Mystore(spec.addr));
+```
+
+Every configured provider is a plugin instance on `secrets.host`,
+addressed by name and tag — `hashicorp` for a store named after its kind,
+`hashicorp$prod` for one that is not — so `secrets.host.list()` reads
+like the chain. `secrets.close()` deactivates and unloads them in
+reverse; nothing is contacted by any of it, because a provider opens
+nothing until its first lookup.
 
 ## Testing
 
@@ -88,6 +153,20 @@ there, and this port takes typed specs, so absent, null, and value stay
 distinct across the boundary. It also holds the one adaptation the corpus
 needs, `validname` returning a JSON boolean, which belongs in the test
 rather than in the library.
+
+It also hands `allplugins` to every chain it builds, because the spec's
+chain groups name every kind and a conformance suite may not choose which
+ones a case gets. That is why the suite CANNOT SEE the plugin split: it
+is only ever testing the one consumer that passes the full set, so the
+CLI's own set, the refusals a consumer meets, and the import graph are
+all invisible to it. `test/plugins_test.dart` is where those live —
+twenty tests over the full set, the refusals, the `sekreto_error`
+bridge and the compiler's dependency listing.
+
+```sh
+make seam                    # the plugin seam alone
+PLUGIN_HOME=/path/to/plugin make seam
+```
 
 That suite proves this port computes the same answers as the others. What
 proves it can actually *fetch* a secret is the integration run, from the

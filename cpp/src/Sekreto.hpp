@@ -5,6 +5,15 @@
 // variables in development and a vault in production without changing a
 // line of its own code.
 //
+// THE CORE INCLUDES NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR
+// SIGNS A REQUEST. The four built-in kinds - env, memory, dotenv, file -
+// read at most a local file; every other kind is a voxgig/plugin
+// definition under plugins/, and a chain may name one only if the calling
+// project handed it in through `plugins`. That is what keeps an SDK whose
+// chain is `[dotenv, env]` from linking AWS request signing, seven HTTP
+// vault clients and OpenSSL behind them. See
+// docs/design/plugin-providers.md.
+//
 // A port of typescript/src/Sekreto.ts, which is canonical.
 
 #ifndef SEKRETO_SEKRETO_HPP
@@ -12,7 +21,6 @@
 
 #include <memory>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -25,31 +33,21 @@ namespace sekreto {
 /// A secret name: dot-separated lowercase segments, e.g. `api.token`.
 using Name = std::string;
 
-/// Anything sekreto refuses to do: a bad name, a missing secret, a
-/// provider that could not be reached.
+/// How a Sekreto is built.
 ///
-/// The message is the whole contract - no code, no fields, no cause - and
-/// the shared spec pins it byte for byte.
-class SekretoError : public std::runtime_error {
- public:
-  explicit SekretoError(const std::string& message) : std::runtime_error(message) {}
-};
-
-/// An insertion-ordered string map.
-///
-/// `std::map` orders by key and `std::unordered_map` by nothing at all;
-/// the spec compares whole maps, and a signed AWS payload's field order is
-/// part of what was signed. So this is a vector of pairs.
-class Ordered {
- public:
-  std::vector<std::pair<std::string, std::string>> pairs;
-
-  bool has(const std::string& key) const;
-  /// The value, or nothing. Absence is nothing; an empty string is a value.
-  std::optional<std::string> get(const std::string& key) const;
-  /// Insert, or overwrite in place so the original position is kept.
-  void set(const std::string& key, const std::string& value);
-  bool empty() const { return pairs.empty(); }
+/// `plugins` is STATIC AND EXPLICIT: the calling project includes the
+/// kinds it needs and passes them here, and a kind it did not pass is
+/// unknown to this Sekreto. No dynamic discovery, no registry filled at
+/// load, no module named by a string - the set of stores an app can reach
+/// is not something to find out at run time, and a side effect of linking
+/// is a thing a linker can drop.
+struct SekretoOptions {
+  /// The provider chain, in resolution order, declaratively.
+  std::vector<ProviderSpec> providers;
+  /// The provider kinds beyond the built-ins that `providers` may name.
+  std::vector<Definition> plugins;
+  /// Cache resolved values (default: true).
+  bool cache = true;
 };
 
 /// Uppercase and lowercase the ASCII letters and nothing else. The C
@@ -118,8 +116,29 @@ std::string storename(const Provider& provider);
 /// asked.
 class Sekreto {
  public:
+  /// A chain from declarative specs, built on a voxgig/plugin host: the
+  /// catalog is the four built-ins plus whatever `plugins` names, and each
+  /// spec becomes one instance on the host.
+  ///
+  /// Eager and in chain order, so a chain that cannot be built says so at
+  /// once. Construction contacts nothing: `load` runs a definition's
+  /// `define`, which builds the provider, `activate` takes it live, and
+  /// the first network call is still the first lookup.
+  explicit Sekreto(const SekretoOptions& options);
+
+  /// A chain of providers already built. Nothing is declared on the host,
+  /// so `host().list()` is empty - a live provider has no instance behind
+  /// it, and never needed one.
   Sekreto(std::vector<std::shared_ptr<Provider>> providers,
           std::vector<std::string> names, bool docache = true);
+
+  /// The voxgig/plugin host every spec'd provider is an instance of. Read
+  /// it for introspection - `list()` names each store's ref and status -
+  /// and nothing on it advances the chain.
+  plugin::Host& host() const { return *host_; }
+  /// The definitions this Sekreto can build: the built-ins plus what
+  /// `plugins` handed in.
+  plugin::Catalog& catalog() const { return *catalog_; }
 
   /// The secret, or a SekretoError if no provider has it.
   std::string get(const Name& name);
@@ -146,7 +165,8 @@ class Sekreto {
 
   /// Drop cached values, so the next `get` asks the providers again.
   void refresh();
-  /// Tear the chain down. Afterwards nothing resolves - but redaction
+  /// Tear the chain down: every plugin instance is deactivated and
+  /// unloaded, in reverse. Afterwards nothing resolves - but redaction
   /// still knows every value ever resolved.
   void close();
 
@@ -159,8 +179,12 @@ class Sekreto {
   Json tojson() const;
 
  private:
+  /// One provider in the chain, under the store name it answers to, and
+  /// the ref of the plugin instance that built it - empty for a live
+  /// provider handed in directly, which no instance backs.
   struct Entry {
     std::string store;
+    std::string ref;
     std::shared_ptr<Provider> provider;
   };
 
@@ -170,9 +194,13 @@ class Sekreto {
     std::string value;
   };
 
+  Entry declare(const ProviderSpec& spec);
+
   std::optional<std::string> resolve(const std::string& store, const Name& name,
                                      const std::vector<Entry>& useentries);
 
+  plugin::CatalogPtr catalog_;
+  plugin::HostPtr host_;
   std::vector<Entry> entries_;
   // A list, not a map: the store a value came from stays attached, and
   // redaction order does not vary between runs.
@@ -184,6 +212,12 @@ class Sekreto {
   std::vector<std::string> seen_;
   bool docache_;
 };
+
+/// Make a Sekreto from declarative provider specs and the plugin kinds
+/// they may name - the same shape the shared spec and an app's config file
+/// use.
+Sekreto makesekreto(const std::vector<ProviderSpec>& specs,
+                    const std::vector<Definition>& plugins = {}, bool cache = true);
 
 }  // namespace sekreto
 

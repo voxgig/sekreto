@@ -5,38 +5,58 @@ edition = "2021"
 description = "sekreto: one interface for secrets, wherever they live (Rust)"
 license = "MIT"
 
-[dependencies]
-# The one exception to this repo's no-dependencies rule, and a deliberate
-# one: a secrets library that talks to a remote vault needs TLS, and
-# hand-rolling TLS would be far worse than taking a well-audited crate.
-# rustls is pure Rust and memory-safe; webpki-roots supplies the Mozilla
-# root set. This is the only port with a production dependency at all.
+# THE CORE, AND ITS DEPENDENCY LIST IS ONE LINE.
 #
-# Two direct, TWELVE in the closure: rustls brings once_cell, ring,
-# rustls-pki-types, rustls-webpki, subtle and zeroize, and ring in turn
-# brings cfg-if, getrandom and untrusted, with getrandom bringing libc.
-# `cargo tree --edges normal` prints the current set. Worth knowing before
-# adding anything else here - the audit surface is the closure, not the two
-# lines below.
-rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
-webpki-roots = "0.26"
+# This crate used to name rustls and webpki-roots, and every consumer paid
+# for them - twelve crates in the closure - whether or not its chain ever
+# touched a remote vault. It no longer does. The four built-in kinds read
+# at most a local file, and every kind that opens a socket, signs a request
+# or spawns a process is a plugin crate under `plugins/`, linked only by a
+# binary that names it (docs/design/plugin-providers.md, AGENTS.md rule 4).
+#
+# The TLS exception of AGENTS.md rule 3 has not gone away - it has moved to
+# `plugins/httpjson`, which is where the sockets are. `cargo tree -p
+# voxgig_sekreto --edges normal` is the proof that it is not here, and
+# `make check-core` is the proof that nothing here reaches for it by hand.
+#
+# voxgig/plugin is the one Voxgig dependency AGENTS.md rule 3 permits, and
+# it takes nothing itself. It has no registry release, so it arrives the
+# way every port finds omni: a checkout, linked at `.plugin/rust` by `make
+# deps` from $PLUGIN_HOME or a sibling, and shallow-cloned when there is
+# none. The link is gitignored; the manifest names a stable path.
+[dependencies]
+voxgig_plugin = { path = ".plugin/rust" }
 
 [lib]
 name = "voxgig_sekreto"
 path = "src/lib.rs"
 
-[[bin]]
-name = "sekreto-cli"
-path = "src/bin/sekreto-cli.rs"
-
-# voxgig/omni drives the conformance suite only - the library and CLI depend
-# on nothing but the crates above. The suite is its own package (`corpus/`),
-# so that omni - which it needs and this library does not - stays out of this
-# manifest entirely. Cargo resolves dev-dependencies even for `cargo build`,
-# so a dev-dependency here broke a checkout with no omni link under vendor/.
-# Omni register 4.13; the same shape as voxgig/struct#97.
-# `vendor` is excluded as well: the link under it points at a whole sibling
-# checkout, which can be a workspace root of its own - unexcluded, Cargo
-# reads it as a nested root of THIS workspace and refuses to build.
+# The plugins are workspace MEMBERS, one crate per kind, so that `cargo
+# tree -p <crate>` answers "what does this one plugin actually link?" - and
+# so that the CLI, which wants all ten, and a lean app, which wants one,
+# are two different dependency graphs rather than two comments.
+#
+# `corpus` stays excluded: the conformance suite is its own package so that
+# omni - which it needs and this library does not - stays out of every
+# manifest here. Cargo resolves dev-dependencies even for `cargo build`, so
+# a dev-dependency in this file broke a checkout with no omni. Omni
+# register 4.13; the same shape as voxgig/struct#97.
+#
+# `.plugin` and `vendor` are excluded because each holds a link to a WHOLE
+# sibling checkout, which can be a workspace root of its own - unexcluded,
+# Cargo reads one as a nested root of THIS workspace and refuses to build.
 [workspace]
-exclude = ["corpus", "vendor"]
+members = [
+  "plugins/httpjson",
+  "plugins/hashicorp",
+  "plugins/boru",
+  "plugins/aws",
+  "plugins/gcpsecrets",
+  "plugins/azuresecrets",
+  "plugins/onepassword",
+  "plugins/doppler",
+  "plugins/infisical",
+  "plugins/secretspec",
+  "plugins/all",
+]
+exclude = ["corpus", "vendor", ".plugin"]

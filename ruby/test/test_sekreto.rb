@@ -8,7 +8,23 @@
 
 require 'minitest/autorun'
 
+# voxgig_plugin: installed, or a sibling checkout (see pluginhome.rb).
+require_relative 'pluginhome'
+
+pluginpath
+
 require_relative '../lib/voxgig_sekreto'
+
+# THE CONFORMANCE SUITE LOADS EVERY PLUGIN, deliberately. The spec is the
+# contract for the whole library and exercises all fourteen provider
+# kinds, so this suite hands the full set to every Sekreto it builds.
+# That is the split working, not a leak of it: a CONSUMER passes the
+# kinds it configures and requires nothing else, while the suite that
+# proves all fourteen behave has to have all fourteen.
+#
+# `sigv4` lives with the aws plugin - it is the crypto edge, and only the
+# two aws kinds use it (docs/design/plugin-providers.md).
+require_relative '../lib/voxgig_sekreto/plugins'
 
 # Find the shared spec directory by walking up from this file.
 def specfile(name)
@@ -45,7 +61,8 @@ require File.join(omnihome, 'ruby', 'lib', 'voxgig_omni')
 
 # Build a Sekreto from the spec's declarative chain description.
 def chainof(spec)
-  VoxgigSekreto::Sekreto.new('providers' => spec['chain'], 'cache' => false)
+  VoxgigSekreto::Sekreto.new('plugins' => VoxgigSekreto::Plugins::ALL,
+                             'providers' => spec['chain'], 'cache' => false)
 end
 
 R = VoxgigOmni.make_runner(specfile('sekreto.json')).call('sekreto')

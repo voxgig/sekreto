@@ -17,6 +17,7 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -387,4 +388,52 @@ char *sek_lowercase(sek_pool *pool, const char *text) {
   }
 
   return out;
+}
+
+/* ---- reading a local file ------------------------------------------ */
+
+/* The one thing the CORE does with the platform beyond the environment,
+ * and the reason the line between core and plugin is "reads at most a
+ * local file": `dotenv` reads a `.env`, `file` reads a mounted secret
+ * directory, and a hashicorp login reads its service-account JWT off the
+ * same helper from the plugin side. */
+char *sek_readfile(sek_pool *pool, const char *path, int *why) {
+  FILE *file = fopen(path, "rb");
+  sek_buf out;
+  char chunk[8192];
+  size_t got;
+
+  *why = 0;
+
+  if (NULL == file) {
+    *why = errno;
+    return NULL;
+  }
+
+  sek_buf_init(&out, pool);
+  while (0 < (got = fread(chunk, 1, sizeof(chunk), file))) {
+    sek_buf_addn(&out, chunk, got);
+  }
+
+  if (0 != ferror(file)) {
+    *why = errno;
+    fclose(file);
+    return NULL;
+  }
+
+  fclose(file);
+
+  return out.data;
+}
+
+int sek_absent(int why) { return ENOENT == why || ENOTDIR == why; }
+
+const char *sek_first3(const char *a, const char *b, const char *c) {
+  if (!sek_empty(a)) {
+    return a;
+  }
+  if (!sek_empty(b)) {
+    return b;
+  }
+  return sek_orempty(c);
 }

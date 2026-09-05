@@ -18,9 +18,13 @@ use voxgig_omni::{
     make_runner, Flags, Json as OmniJson, Provider as OmniProvider, RunPack, Subject,
 };
 use voxgig_sekreto::{
-    awsparam, envkey, flatname, makechain, parsedotenv, redact, sigv4, validname, vaultref,
-    ProviderSpec, Sekreto, Sigv4Input,
+    awsparam, envkey, flatname, parsedotenv, redact, validname, vaultref, Options, ProviderSpec,
+    Sekreto,
 };
+// sigv4 moved out of the core with the aws plugin: the core of no port
+// imports a hash function.
+use voxgig_sekreto_aws::{sigv4, Sigv4Input};
+use voxgig_sekreto_plugins::all;
 
 // Find the shared spec directory by walking up from this file.
 fn specfile(name: &str) -> String {
@@ -102,10 +106,12 @@ fn chainof(value: &OmniJson) -> Result<Sekreto, String> {
         _ => Vec::new(),
     };
 
-    let names: Vec<String> = specs.iter().map(|spec| spec.name.clone()).collect();
-    let providers = makechain(&specs).map_err(|err| err.message)?;
-
-    Ok(Sekreto::named(providers, &names, false))
+    Sekreto::new(Options {
+        plugins: all(),
+        providers: specs,
+        nocache: true,
+    })
+    .map_err(|err| err.message())
 }
 
 fn runner() -> RunPack {

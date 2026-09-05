@@ -17,6 +17,18 @@
 
 const { Sekreto } = require('../src')
 
+// THE FULL SET, passed to Sekreto. The CLI is asked for any provider
+// kind on the command line, so it is the one consumer that legitimately
+// wants all ten plugins; an app passes the one or two it configures.
+//
+// It must be passed as a VALUE. An earlier shape of this split
+// registered kinds as a side effect of requiring them, and the canonical
+// port's only import of the full set named a TYPE, which the compiler
+// erased: every kind but env and memory failed as `unknown provider
+// kind`, caught by the integration suite while `make test` stayed green.
+// Handing the list to the constructor is what makes that impossible.
+const { allplugins } = require('../plugins')
+
 const LANG = 'javascript'
 
 function chainfor(source) {
@@ -167,7 +179,7 @@ async function main() {
   const storeflag = args.indexOf('--store')
   const store = -1 === storeflag ? '' : args[storeflag + 1]
 
-  const secrets = new Sekreto({ providers: chainfor(source) })
+  const secrets = new Sekreto({ plugins: allplugins, providers: chainfor(source) })
 
   let token
   try {

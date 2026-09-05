@@ -1,4 +1,11 @@
 <Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- THE CORE. It references voxgig/plugin and NOTHING ELSE - in
+       particular not ../plugins/SekretoPlugins.csproj, which references
+       this project. The one-way reference is the boundary: an assembly
+       cannot name a type in an assembly it does not reference, and a
+       reference back would be a cycle msbuild refuses. -->
+
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <Nullable>disable</Nullable>
@@ -6,4 +13,16 @@
     <AssemblyName>VoxgigSekreto</AssemblyName>
     <RootNamespace>Voxgig.Sekreto</RootNamespace>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- voxgig/plugin has no NuGet package, so it comes from a checkout the
+         way voxgig/omni does; the Makefile finds it and passes the path.
+         The LIBRARY searches no path - the build does. -->
+    <ProjectReference Include="$(PluginPath)" Condition="'$(PluginPath)' != ''" />
+  </ItemGroup>
+
+  <Target Name="CheckPluginPath" BeforeTargets="BeforeBuild" Condition="'$(PluginPath)' == ''">
+    <Error Text="sekreto: voxgig/plugin not found - build with `make` (which finds it), set PLUGIN_HOME, or pass -p:PluginPath=&lt;plugin&gt;/csharp/src/VoxgigPlugin.csproj" />
+  </Target>
+
 </Project>

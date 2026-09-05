@@ -4,18 +4,25 @@ The Elixir port of [sekreto](../README.md): one interface for secrets,
 wherever they live.
 
 ```sh
-make test                     # the conformance suite
+make test                     # both suites
+make check-core               # the core reaches no plugin
 ```
 
-The library and the CLI depend on nothing but Elixir and OTP — `json.ex`
-is sekreto's own, and the HTTP/1.1 framing in `http.ex` is written here,
-over `:gen_tcp` and `:ssl`. `:crypto` supplies SHA-256 and HMAC, `:ssl`
-supplies TLS, and nothing else is reached for. There is no mix project, so
-there is no manifest a resolver could ever read a dependency out of:
-`elixirc` is called directly and `:escript.create/2` packs the result,
-with Elixir's own `ebin` alongside it, into `build/sekreto-cli`. That
-escript runs from any working directory with nothing beside it. Only the
-conformance suite needs voxgig/omni, and only on its code path.
+The library and the CLI depend on nothing but Elixir, OTP and
+[voxgig/plugin](https://github.com/voxgig/plugin) — `json.ex` is sekreto's
+own, and the HTTP/1.1 framing in `plugins/http.ex` is written here, over
+`:gen_tcp` and `:ssl`. `:crypto` supplies SHA-256 and HMAC, `:ssl` supplies
+TLS, and nothing else is reached for. There is no mix project, so there is
+no manifest a resolver could ever read a dependency out of: `elixirc` is
+called directly and `:escript.create/2` packs the result, with Elixir's own
+`ebin` and voxgig/plugin's beams alongside it, into `build/sekreto-cli`.
+That escript runs from any working directory with nothing beside it. Only
+the conformance suite needs voxgig/omni, and only on its code path.
+
+voxgig/plugin has no registry to be declared in, so the Makefile finds a
+checkout the way every port finds omni — `$PLUGIN_HOME`, then a sibling,
+then the usual places — and `make deps` fetches a shallow clone when there
+is none. The library itself searches no path.
 
 The optional lookup is `tryget`, since `try` is a special form. A provider
 answers a string, or `nil` — the miss that sends the chain on to the next
@@ -31,27 +38,46 @@ payload's field order is signed.
 
 ## Layout
 
+Four provider kinds are **built in** — `env`, `memory`, `dotenv` and
+`file`, the ones that read at most a local file. Every other kind opens a
+socket, signs a request or spawns a process, and is a voxgig/plugin
+definition under `plugins/` that the calling project hands to the
+constructor. Nothing under `src/` names anything under `plugins/`.
+
 | | |
 |---|---|
 | `src/sekreto.ex` | the facade, the name helpers, `parsedotenv`, `redact` |
-| `src/providers.ex` | the provider kinds, `ProviderSpec` and `checkaddr` |
-| `src/http.ex` | the HTTP/1.1 client, and the TLS binding |
-| `src/sigv4.ex` | AWS request signing |
+| `src/providers.ex` | the four built-in kinds, `providerplugin`, `ProviderSpec` and `checkaddr` |
 | `src/json.ex` | the JSON value model, reader and writer |
 | `src/provider.ex` | the provider shape, and the cell a provider keeps state in |
+| `plugins/<kind>.ex` | one plugin kind each: `hashicorp`, `boru`, `gcpsecrets`, `azuresecrets`, `onepassword`, `doppler`, `infisical`, `secretspec` — and `aws`, which holds both AWS stores because they share a signer |
+| `plugins/plugins.ex` | `Sekreto.Plugins.all/0`, the full set |
+| `plugins/http.ex` | the HTTP/1.1 client, the TLS binding, and the URL functions |
+| `plugins/httpjson.ex` | one JSON round-trip, and token renewal |
+| `plugins/sigv4.ex` | AWS request signing |
+| `plugins/proc.ex` | the child process the two CLI-backed kinds run |
 | `test/sekreto_test.exs` | the conformance suite |
+| `test/plugins_test.exs` | the plugin seam, which the conformance suite cannot see |
 | `tool/escript.exs` | packs the compiled modules into the escript |
+| `tool/checkcore.exs` | compiles `src/` alone, and reads the beams back |
 | `cli/cli.ex` | the app that needs a secret |
 
 ## Use
 
 ```elixir
 secrets =
-  Sekreto.new([
-    %Sekreto.ProviderSpec{kind: "env"},
-    %Sekreto.ProviderSpec{kind: "dotenv", file: ".env"},
-    %Sekreto.ProviderSpec{kind: "hashicorp", addr: vaultaddr, token: vaulttoken}
-  ])
+  Sekreto.new(
+    [
+      %Sekreto.ProviderSpec{kind: "env"},
+      %Sekreto.ProviderSpec{kind: "dotenv", file: ".env"},
+      %Sekreto.ProviderSpec{
+        kind: "hashicorp",
+        addr: vaultaddr,
+        token: vaulttoken
+      }
+    ],
+    plugins: [Sekreto.Plugins.Hashicorp.hashicorp()]
+  )
 
 token = Sekreto.get(secrets, "api.token")                  # the chain answers
 same = Sekreto.getfrom(secrets, "hashicorp", "api.token")  # one named store
@@ -60,7 +86,38 @@ same = Sekreto.getfrom(secrets, "hashicorp", "api.token")  # one named store
 `ProviderSpec` is a struct, so a chain reads as configuration and every
 field has a name. `Sekreto.new/2` takes live providers instead, or a mix
 of the two: anything that is a map with a one-argument `lookup` is a
-provider, so a caller's own three-line map counts.
+provider, so a caller's own three-line map counts. It also accepts one
+options list, which is how every other port spells it and what
+[DOCS.md](../DOCS.md) documents — `Sekreto.new(plugins: …, providers: …)`.
+
+`plugins` is the set of kinds beyond the four built-ins this chain may
+name. A kind that was not passed in cannot be built, and naming one says
+so:
+
+    sekreto: unknown provider kind: doppler (available: dotenv, env, file,
+    hashicorp, memory) - doppler is a sekreto plugin, not built in: pass
+    it in the plugins option
+
+`Sekreto.Plugins.all/0` is every shipped kind at once, for the CLI, the
+conformance suite, and an app whose chain is decided at run time. Reaching
+it reaches every network client, AWS request signing, and the TLS binding
+under them, which is the cost the split exists to remove — so an app names
+the kinds it configures.
+
+A custom kind is one call:
+
+```elixir
+mystore =
+  Sekreto.providerplugin("mystore", fn spec ->
+    %{lookup: fn name -> ... end, describe: fn -> "mystore:" <> spec.addr end}
+  end)
+```
+
+Each store built from a spec is an instance on `secrets.host`, the
+voxgig/plugin host, addressed `kind` or `kind$store`; `secrets.catalog`
+holds the definitions this chain can build. Nothing is contacted by
+construction, and `Sekreto.close/1` deactivates and unloads every instance
+in reverse.
 
 ## Testing
 
@@ -79,6 +136,30 @@ this port takes typed specs, ordered pair lists and `nil` for a miss, so
 absent, null and value stay distinct across the boundary. The chain is
 built inside each subject rather than beside it, because four corpus
 entries expect a refusal the constructor raises.
+
+`make test` runs a second suite, `plugins_test.exs`, for what the first
+cannot see. The conformance suite hands every plugin to every chain it
+builds, so it can never notice a kind that was not passed in, nor a
+consumer that passed the wrong ones — a CLI passing one plugin instead of
+ten leaves all fourteen groups green and fails nine integration checks.
+Seventeen tests pin the seam: the full set, that every kind builds, the
+CLI's own call, the refusals, the numbered tags, the `sekreto_error`
+bridge, the boundary itself — and the one pair of opposite answers to a
+single call, `Integer.to_string(n, 16)`, whose result `src/json.ex` folds to lower case
+and `plugins/http.ex` must not. Flipping either passes all fourteen
+conformance groups and all nineteen integration checks, so a comment in
+each file was all that held them apart; now the whole control range and
+every byte are pinned.
+
+`make check-core` is the boundary, proved twice. `src/` is compiled ALONE,
+with only voxgig/plugin on the code path: a core module that so much as
+named `Sekreto.Plugins.Hashicorp` would fail there, because `elixirc`
+warns on a call into a module that is not available and this port compiles
+with `--warnings-as-errors`. Then every beam it produced is read back
+through its `imports` chunk — the exact `{module, function, arity}` of
+every remote call the compiler emitted, which is this runtime's link map —
+and refused if it names a plugin module, a socket, a hash function, or a
+child process.
 
 That suite proves this port computes the same answers as the others. What
 proves it can actually *fetch* a secret is the integration run, from the
@@ -148,6 +229,13 @@ build/sekreto-cli http://127.0.0.1:8099/whoami --source hashicorp
 - **A name is scanned byte by byte**, not matched against
   `^[a-z0-9_]+$`. In four of the regex flavours these ports use, `$` also
   matches before a final newline — and `api.token\n` is a spec case.
+- **Loading is explicit, and the BEAM makes it cheap.** A module is loaded
+  the first time something calls into it, so `Sekreto.Plugins.Hashicorp`
+  never brings the other nine with it, and even the full set loads no HTTP
+  client until a lookup makes one. That laziness is the runtime's, not this
+  port's — what this port decides is which kinds a chain may name, and that
+  is the list handed to the constructor. There is no registry, and nothing
+  is loaded by name.
 - **Provider state lives in a process.** Nothing on the BEAM is mutable,
   so a memoised `.env`, a logged-in token and a resolved 1Password vault
   id are held in a `Sekreto.Cell` — an Agent, linked to whoever built the

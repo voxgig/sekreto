@@ -20,6 +20,10 @@
 #include <stdio.h>
 
 #include "sekreto.h"
+/* `sek_fetch` is on the PLUGIN side, with the socket and the TLS
+ * handshake it is made of: a chain of the four built-in kinds links none
+ * of it. This probe is a consumer of the transport, so it says so. */
+#include "sekretoplugins.h"
 
 int main(int argc, char **argv) {
   sek_pool *pool = sek_pool_new();

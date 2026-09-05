@@ -7,7 +7,7 @@
 
 package.path = 'src/?.lua;' .. package.path
 
-local net = require('sekreto.net')
+local net = require('sekreto.plugins.net')
 
 local host = arg[1]
 local port = tonumber(arg[2])

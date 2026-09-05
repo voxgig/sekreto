@@ -38,8 +38,18 @@ trap cleanup EXIT
 cd "$HERE/.." || exit 1
 
 make build >/dev/null || exit 1
-gcc -std=c99 -Wall -Wextra -Werror -O2 -I src -o build/tlsprobe \
-  test/tlsprobe.c build/libsekreto.a -lssl -lcrypto || exit 1
+
+# The probe links the PLUGINS archive as well as the core, because
+# `sek_fetch` moved there with the socket it is made of. `make tlscheck`
+# passes the compiler and the include path it built with, so the probe is
+# built exactly the way the library was and finds voxgig/plugin wherever
+# the Makefile found it.
+CC=${SEKRETO_CC:-gcc}
+CFLAGS=${SEKRETO_CFLAGS:--std=c99 -Wall -Wextra -Werror -O2 -I src -I plugins}
+# shellcheck disable=SC2086
+$CC $CFLAGS -o build/tlsprobe test/tlsprobe.c \
+  build/libsekretoplugins.a build/libsekreto.a build/libvoxgigplugin.a \
+  -lssl -lcrypto || exit 1
 PROBE=$(pwd)/build/tlsprobe
 
 # --- a private CA, and two leaf certificates it signs ------------------

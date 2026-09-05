@@ -19,6 +19,13 @@ import Dispatch
 import Foundation
 import Sekreto
 
+// THE CLI PASSES THE FULL SET. It is the one consumer that genuinely
+// wants all ten kinds - `--source` names any of them at run time - so it
+// imports the whole plugins module and hands `allplugins` to the
+// constructor. An app that knows its chain imports the kinds it configures
+// instead (docs/design/plugin-providers.md).
+import SekretoPlugins
+
 #if canImport(FoundationNetworking)
   import FoundationNetworking
 #endif
@@ -230,7 +237,7 @@ func run(_ args: [String]) -> Int32 {
   let secrets: Sekreto
 
   do {
-    secrets = try makesekreto(chainfor(source))
+    secrets = try makesekreto(chainfor(source), plugins: allplugins)
   } catch {
     // Nothing has been resolved yet, so there is nothing to redact.
     FileHandle.standardError.write(Data("sekreto-cli: \(error)\n".utf8))

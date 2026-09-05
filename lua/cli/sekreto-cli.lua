@@ -20,11 +20,26 @@
 -- environment wiped, so the library is found from this script's own path
 -- and from nothing else.
 local root = (arg[0] or ''):match('^(.*)/cli/[^/]+$') or '.'
-package.path = root .. '/src/?.lua;' .. package.path
+package.path = root .. '/src/?.lua;' .. root .. '/test/?.lua;' .. package.path
+
+-- voxgig/plugin: already on the path, or a sibling checkout (see
+-- test/pluginhome.lua). The library requires it by name and searches no
+-- path of its own.
+require('pluginhome').pluginpath()
 
 local sekreto = require('sekreto')
-local http = require('sekreto.http')
-local json = require('sekreto.json')
+
+-- THE FULL SET, passed to Sekreto. The CLI is asked for any provider kind
+-- on the command line, so it is the one consumer that legitimately wants
+-- all ten plugins; an app passes the one or two it configures.
+local allplugins = require('sekreto.plugins').allplugins
+
+-- The HTTP client and the JSON reader this CLI uses for the API call
+-- ITSELF - not for a secret. Both live under plugins/ because lua has
+-- neither in its standard library and a core that carried them would
+-- carry a socket.
+local httpjson = require('sekreto.plugins.httpjson')
+local json = require('sekreto.plugins.json')
 
 local LANG = 'lua'
 
@@ -207,7 +222,7 @@ local function run()
   local secrets
 
   local ok, token = pcall(function()
-    secrets = sekreto.sekreto(chainfor(source))
+    secrets = sekreto.sekreto({ plugins = allplugins, providers = chainfor(source) })
     if '' == store then
       return secrets:get('api.token')
     end
@@ -223,7 +238,7 @@ local function run()
     return 2
   end
 
-  local res, why = http.request('GET', url, {
+  local res, why = httpjson.request('GET', url, {
     { 'Authorization', 'Bearer ' .. token },
     { 'X-Sekreto-Lang', LANG },
   })

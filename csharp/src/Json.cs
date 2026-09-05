@@ -26,7 +26,7 @@ namespace Voxgig.Sekreto
         /// - which a null answer from Parse cannot say, since JSON `null`
         /// parses to the same thing.
         /// </summary>
-        internal static bool TryParse(string text, out object value)
+        public static bool TryParse(string text, out object value)
         {
             value = null;
 

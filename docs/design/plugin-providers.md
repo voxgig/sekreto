@@ -38,6 +38,31 @@ socket, a signature or a subprocess is a plugin. Crypto is the sharpest
 instance: `sigv4` moved into the aws plugin, and the core of no port
 imports a hash function.
 
+**And NOTHING BUT AWS may import the signer.** Keeping the core clean is
+only half of it. Five ports — swift, dart, elixir, cpp and haskell — each
+found the same thing independently, which makes it a property of the
+design rather than five accidents: `uriescape` and the strict base64
+decoder started life beside `sigv4`, because that is where the AWS
+signing needed them, and `azuresecrets`, `onepassword`, `doppler` and
+`infisical` all need to escape a query parameter or decode a payload. So
+four plugins that sign nothing were pulling in SHA-256 and HMAC, and a
+consumer whose only store is doppler linked a hash function it never
+calls. No rule was broken; the leanness the split exists for was simply
+gone.
+
+Percent-encoding and base64 belong with the TRANSPORT — `httpjson`, or
+whatever the port calls it — not with the signer. The doc used to say
+only that `sigv4` moves with aws, which is why five agents each had to
+rediscover the rest.
+
+Test it as an EQUALITY, not a subset. haskell's first version asked
+whether a hashicorp-only build contained any forbidden module and passed
+while `Sigv4` and `Crypto` were linked into it; only asking whether the
+build was EXACTLY the expected set found the leak. The same error turned
+up again in that port's core check, and in ocaml's, and in lean's — an
+intersection answers "is anything bad here", never "is anything here that
+should not be".
+
 **The same set in every port.** Four built-ins and ten plugins, the same
 names, the same `kind` strings, the same store names, whatever the
 language. The spec already pins the behaviour; this document pins where
@@ -194,9 +219,21 @@ split confusing to use.
   `file`, and the hashicorp cases fail before a socket; the conformance
   suites hand every plugin to every chain they build. What the suites
   cannot see — that the core reaches no plugin, that an unloaded kind is
-  refused, that the full set holds every kind — is pinned per port by
+  refused, and that the CONSUMER's list is right — is pinned per port by
   `lazyload.test.ts` + `plugins.test.ts`, `plugin_test.go` +
   `plugins/plugins_test.go`, and `test_plugins.py`.
+
+  This paragraph used to claim the suites could not see **the full set
+  holding every kind** either. They can. Measured in dart by dropping each
+  of the ten kinds from `allplugins` in turn: every one failed conformance
+  — `hashicorp` three groups, `boru`, `awssecrets`, `onepassword` and
+  `doppler` two, the rest one — because `sources` and `stores` name all
+  ten. The seam test for the full set is still worth keeping; it fails
+  faster and names the kind. It is just not covering a blind spot.
+
+  The consumer's list genuinely is a blind spot, and it is the one that
+  bites: a CLI that passes one plugin instead of ten leaves all fourteen
+  conformance groups green and fails nine integration checks.
 
 ## Propagation order
 

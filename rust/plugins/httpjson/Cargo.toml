@@ -1,0 +1,29 @@
+# The shared HTTP-JSON client every vault plugin talks through - and WHERE
+# THE TLS EXCEPTION LIVES.
+#
+# AGENTS.md rule 3 permits one narrow exception to the no-dependencies
+# rule, cryptographic transport, and this is the crate that takes it. The
+# sekreto core links none of this; a chain of built-in kinds compiles no
+# TLS at all. That is the whole point of the split.
+#
+# Two direct, TWELVE in the closure: rustls brings once_cell, ring,
+# rustls-pki-types, rustls-webpki, subtle and zeroize, and ring in turn
+# brings cfg-if, getrandom and untrusted, with getrandom bringing libc.
+# `cargo tree -p voxgig_sekreto_httpjson --edges normal` prints the current
+# set. Worth knowing before adding anything else here - the audit surface
+# is the closure, not the two lines below.
+[package]
+name = "voxgig_sekreto_httpjson"
+version = "0.1.0"
+edition = "2021"
+description = "sekreto: the bounded HTTP/JSON client the vault plugins share"
+license = "MIT"
+
+[dependencies]
+voxgig_sekreto = { path = "../.." }
+rustls = { version = "0.23", default-features = false, features = ["std", "ring", "tls12"] }
+webpki-roots = "0.26"
+
+[lib]
+name = "voxgig_sekreto_httpjson"
+path = "src/lib.rs"

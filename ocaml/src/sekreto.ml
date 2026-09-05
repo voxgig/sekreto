@@ -11,269 +11,113 @@
    `api.token` and never learns whether it came from the environment, a
    .env file, HashiCorp Vault or a boru vault.
 
+   THE CHAIN IS A voxgig/plugin HOST. Each spec'd provider is an instance
+   on it, addressed by name and tag - `hashicorp` for a store named after
+   its kind, `hashicorp$prod` otherwise - so `Sekreto.host` reads like the
+   chain. Only four kinds are built in: `env`, `memory`, `dotenv` and
+   `file`, the ones that read at most a local file. Every kind that opens a
+   socket, signs a request or spawns a process lives under `plugins/`, and
+   a chain may name one only if the calling project handed it to
+   `~plugins`. That is what keeps a chain of built-ins free of TLS, of AWS
+   request signing and of seven HTTP vault clients.
+
    A port of typescript/src/Sekreto.ts, which is canonical. *)
 
-(* Anything sekreto refuses to do: a bad name, a missing secret, a provider
-   that could not be reached. The message is the whole contract - no code,
-   no fields, no cause. *)
-exception Sekreto_error of string
+module V = Value
+open Secret
 
-(* The conformance runner reads a subject's failure with
-   `Printexc.to_string`, and so does any OCaml host that catches this.
-   Without a printer the message would be reported as
-   `Sekreto.Sekreto_error("...")`, and the corpus pins refusal messages
-   byte for byte. *)
-let () = Printexc.register_printer (function Sekreto_error m -> Some m | _ -> None)
+(* ---- the core surface, under its canonical names ---------------------
 
-let fail message = raise (Sekreto_error message)
+   `Secret` and `Provider` are separate modules only because OCaml compiles
+   a module before anything that uses it: the facade needs the four
+   built-in kinds, which need the name functions and the error. A caller
+   writes `Sekreto.envkey` and never has to know. *)
 
-(* A source of secrets.
+exception Sekreto_error = Secret.Sekreto_error
 
-   A record of two functions rather than a class or a module type: the
-   provider set is open, a provider carries its own state in its closures,
-   and a caller can hand in one of its own with no ceremony. *)
-type provider = {
-  (* The value, or None if this provider does not have it. *)
+type provider = Secret.provider = {
   lookup : string -> string option;
-  (* A short description, shown by `sources`. *)
   describe : unit -> string;
 }
 
-(* ---- pure name functions -------------------------------------------- *)
+type vaultref = Secret.vaultref = { path : string; field : string }
 
-(* Drop a suffix if it is there. `.` and `_` both appear in names, so this
-   is spelled out rather than reached for through a pattern. *)
-let dropsuffix (text : string) (suffix : string) : string =
-  let tlen = String.length text and slen = String.length suffix in
-  if tlen >= slen && String.sub text (tlen - slen) slen = suffix then
-    String.sub text 0 (tlen - slen)
-  else text
+let fail = Secret.fail
+let dropsuffix = Secret.dropsuffix
+let segments = Secret.segments
+let validsegment = Secret.validsegment
+let validname = Secret.validname
+let checkname = Secret.checkname
+let upper = Secret.upper
+let envkey = Secret.envkey
+let vaultref = Secret.vaultref
+let flatname = Secret.flatname
+let awsparam = Secret.awsparam
+let unescape = Secret.unescape
+let trim = Secret.trim
+let assocset = Secret.assocset
+let parsedotenv = Secret.parsedotenv
+let replaceall = Secret.replaceall
+let redact = Secret.redact
+let storename = Secret.storename
+let findsub = Secret.findsub
+let splitfirst = Secret.splitfirst
 
-(* Split on the literal dot, KEEPING trailing empties, so that `a.` is two
-   segments and not one. *)
-let segments (name : string) : string list = String.split_on_char '.' name
+(* A plugin error carries a parseable message and no printer of its own, so
+   a host that catches one - the CLI, the conformance runner - would read
+   `Types.Plugin_error(_)` instead of the diagnostic. Registered here
+   because this is the module every consumer already links. *)
+let () =
+  Printexc.register_printer (function
+    | Types.Plugin_error err -> Some err.Types.message
+    | _ -> None)
 
-(* A segment is one or more of [a-z0-9_], scanned rather than matched.
+(* ---- refusals that name the fix -------------------------------------- *)
 
-   The obvious `^[a-z0-9_]+$` is not the check it looks like: in several
-   regex dialects `$` also matches before a final newline, and four ports
-   accepted `api.token\n` because of it. The corpus pins that case, and
-   `api\n.token` and `api.token\r` with it. A character scan cannot have
-   the bug. *)
-let validsegment (part : string) : bool =
-  "" <> part
-  && String.for_all (fun ch -> ('a' <= ch && ch <= 'z') || ('0' <= ch && ch <= '9') || '_' = ch) part
+(* The message for a kind the catalog does not hold.
 
-(* Is this a well-formed secret name? Never raises. *)
-let validname (name : string) : bool =
-  "" <> name && List.for_all validsegment (segments name)
-
-(* The name, or a Sekreto_error. Every entry point checks its name here. *)
-let checkname (name : string) : string =
-  if not (validname name) then fail ("sekreto: invalid name: " ^ name);
-  name
-
-(* ASCII uppercasing, deliberately locale-invariant: a Turkish locale turns
-   `i` into a dotted capital on several platforms, and `api.token` would
-   stop being `API_TOKEN`. *)
-let upper (text : string) : string = String.uppercase_ascii text
-
-(* The environment-variable key for a name: `api.token` -> `API_TOKEN`.
-
-   The prefix is NOT uppercased - it is given exactly as it will appear. *)
-let envkey ?(prefix = "") (name : string) : string =
-  prefix ^ upper (String.concat "_" (segments (checkname name)))
-
-(* Where a name lives in a KV vault. *)
-type vaultref = { path : string; field : string }
-
-(* `api.token` -> `api` / `token`.
-
-   A single-segment name has no path of its own, so it becomes a secret of
-   that name with the conventional field `value`. *)
-let vaultref (name : string) : vaultref =
-  let parts = segments (checkname name) in
-  match parts with
-  | [ only ] -> { path = only; field = "value" }
-  | _ ->
-    let count = List.length parts in
-    let head = List.filteri (fun index _ -> index < count - 1) parts in
-    { path = String.concat "/" head; field = List.nth parts (count - 1) }
-
-(* A name flattened to one segment: `api.token` -> `api_token` (GCP Secret
-   Manager, `_`) or `api-token` (Azure Key Vault, `-`).
-
-   Those stores have no path hierarchy and reject dots in ids, so the dots
-   become the store's conventional separator. With `-` as the separator,
-   underscores flatten too: Azure Key Vault's alphabet is letters, digits
-   and hyphens only, and a valid sekreto name like `with_underscore` must
-   still be representable there. *)
-let flatname (name : string) (sep : string) : string =
-  let flat = String.concat sep (segments (checkname name)) in
-  if "-" = sep then String.concat "-" (String.split_on_char '_' flat) else flat
-
-(* The AWS SSM Parameter Store name for a name: dots become the path
-   hierarchy, rooted at `/` (or at a prefix): `db.pass.main` ->
-   `/db/pass/main`, or `/app/db/pass/main` under prefix `/app`. *)
-let awsparam ?(prefix = "") (name : string) : string =
-  let checked = checkname name in
-  let base = if "" <> prefix && not (String.starts_with ~prefix:"/" prefix) then "/" ^ prefix else prefix in
-  let base = dropsuffix base "/" in
-  base ^ "/" ^ String.concat "/" (segments checked)
-
-(* Newline, carriage return, tab, backslash and double quote are the five
-   escapes a double-quoted .env value may carry. ANY OTHER escape is
-   preserved as backslash plus character, and a trailing backslash is
-   literal - a scan, not a chain of replacements. *)
-let unescape (text : string) : string =
-  let out = Buffer.create (String.length text) in
-  let index = ref 0 in
-  let len = String.length text in
-
-  while !index < len do
-    if '\\' = text.[!index] && !index + 1 < len then begin
-      let next = text.[!index + 1] in
-      index := !index + 2;
-      match next with
-      | 'n' -> Buffer.add_char out '\n'
-      | 'r' -> Buffer.add_char out '\r'
-      | 't' -> Buffer.add_char out '\t'
-      | '\\' -> Buffer.add_char out '\\'
-      | '"' -> Buffer.add_char out '"'
-      | other ->
-        Buffer.add_char out '\\';
-        Buffer.add_char out other
-    end
-    else begin
-      Buffer.add_char out text.[!index];
-      incr index
-    end
-  done;
-
-  Buffer.contents out
-
-let istrimmable = function ' ' | '\t' | '\n' | '\r' | '\012' -> true | _ -> false
-
-let trim (text : string) : string =
-  let len = String.length text in
-  let start = ref 0 and stop = ref len in
-  while !start < !stop && istrimmable text.[!start] do incr start done;
-  while !stop > !start && istrimmable text.[!stop - 1] do decr stop done;
-  String.sub text !start (!stop - !start)
-
-(* Set a key in an insertion-ordered association list; a later duplicate
-   overwrites in place. *)
-let assocset (entries : (string * string) list) (key : string) (value : string) :
-    (string * string) list =
-  if List.mem_assoc key entries then
-    List.map (fun (k, v) -> if k = key then (k, value) else (k, v)) entries
-  else entries @ [ (key, value) ]
-
-(* Parse `.env` text into raw keys and values, in the order they appear.
-
-   There is no `.env` standard, so this function is the specification.
-   Deliberately small: `KEY=value`, an optional `export`, `#` comments on
-   their own line, and single- or double-quoted values (double quotes also
-   unescape). A line with no `=`, or with an empty key, is skipped in
-   silence rather than aborting the lines after it. *)
-let parsedotenv (text : string) : (string * string) list =
-  let out = ref [] in
-
-  List.iter
-    (fun rawline ->
-      let line = trim (dropsuffix rawline "\r") in
-
-      if "" <> line && '#' <> line.[0] then begin
-        let entry =
-          if String.starts_with ~prefix:"export " line then
-            trim (String.sub line 7 (String.length line - 7))
-          else line
-        in
-
-        match String.index_opt entry '=' with
-        | Some eq when 0 < eq ->
-          let key = trim (String.sub entry 0 eq) in
-          let value = trim (String.sub entry (eq + 1) (String.length entry - eq - 1)) in
-          let vlen = String.length value in
-
-          let value =
-            if 2 <= vlen && '"' = value.[0] && '"' = value.[vlen - 1] then
-              unescape (String.sub value 1 (vlen - 2))
-            else if 2 <= vlen && '\'' = value.[0] && '\'' = value.[vlen - 1] then
-              String.sub value 1 (vlen - 2)
-            else value
-          in
-
-          out := assocset !out key value
-        (* No `=` at all, or an empty key: skipped, and the rest of the file
-           is still read. *)
-        | _ -> ()
-      end)
-    (String.split_on_char '\n' text);
-
-  !out
-
-(* Every occurrence of `needle` in `text` replaced by `into`, literally.
-
-   Not a pattern substitution: a secret containing pattern metacharacters
-   must not be interpreted as one. *)
-let replaceall (text : string) (needle : string) (into : string) : string =
-  if "" = needle then text
-  else begin
-    let out = Buffer.create (String.length text) in
-    let nlen = String.length needle and tlen = String.length text in
-    let index = ref 0 in
-
-    while !index < tlen do
-      if !index + nlen <= tlen && String.sub text !index nlen = needle then begin
-        Buffer.add_string out into;
-        index := !index + nlen
-      end
-      else begin
-        Buffer.add_char out text.[!index];
-        incr index
-      end
-    done;
-
-    Buffer.contents out
-  end
-
-(* Replace known secret values in text with `[redacted]`.
-
-   Only values of four characters or more are replaced: shorter ones are too
-   likely to appear in ordinary text, and redacting them would make logs
-   unreadable without making them safer.
-
-   Longest first, always, so that a value which is a prefix of another
-   cannot redact the shorter half and leave the rest on the page. The
-   corpus pins both arrival orders of the same pair, so the case cannot pass
-   by luck. The sort is over a COPY: `values` is the caller's, and it is the
-   live `seen` list when this is called through a Sekreto. *)
-let redact (text : string) (values : string list) : string =
-  let usable = List.filter (fun value -> 4 <= String.length value) values in
-  let ordered =
-    List.stable_sort (fun l r -> compare (String.length r) (String.length l)) usable
+   A kind sekreto has never heard of is a typo; a kind that exists as a
+   plugin but was not passed in is the split working as designed and
+   telling you what to pass. Collapsing the two was the first thing that
+   made the split confusing to use. *)
+let unknownkind (kind : string) (catalog : Defs.catalog) : string =
+  let available =
+    String.concat ", " (List.map V.as_str (V.items (Catalog.names catalog)))
   in
-  List.fold_left (fun out value -> replaceall out value "[redacted]") text ordered
+  "sekreto: unknown provider kind: " ^ kind ^ " (available: " ^ available ^ ")"
+  ^
+  if List.mem kind Provider.pluginkinds then
+    " - " ^ kind ^ " is a sekreto plugin, not built in: pass it in the plugins option"
+  else ""
 
-(* The store name a provider answers to when nothing says otherwise.
-
-   `describe()` opens with the provider's kind - `hashicorp:...`,
-   `dotenv:...`, plain `env` - so the kind is the natural default, and a
-   custom provider gets a sensible name without implementing anything
-   extra. *)
-let storename (provider : provider) : string =
-  let text = provider.describe () in
-  match String.index_opt text ':' with
-  | None -> text
-  | Some at -> String.sub text 0 at
+(* A Sekreto_error that crossed the plugin boundary comes back out as
+   itself, byte for byte. Anything else is not sekreto's to rewrite: it
+   surfaces as the host reports it, naming the instance. *)
+let unwrap (err : exn) : exn =
+  match err with
+  | Types.Plugin_error report
+    when Provider.error_code = report.Types.code
+         && V.is_str (V.get report.Types.details "cause") ->
+    Sekreto_error (V.as_str (V.get report.Types.details "cause"))
+  | other -> other
 
 (* ---- the facade ------------------------------------------------------ *)
 
-type entry = { store : string; eprovider : provider }
+(* One provider in the chain, under the store name it answers to, and the
+   ref of the plugin instance that built it - `""` for a live provider
+   handed in directly, which no instance backs. *)
+type entry = { store : string; eref : string; eprovider : provider }
+
 type cached = { cstore : string; cname : string; cvalue : string }
 
 type t = {
+  (* The voxgig/plugin host every spec'd provider is an instance of. Read
+     it for introspection - `Host.list` names each instance and its status
+     - and nothing on it advances the chain. *)
+  thost : Defs.host;
+  (* The definitions this Sekreto can build: the built-ins, then whatever
+     `~plugins` handed in. *)
+  tcatalog : Defs.catalog;
   mutable entries : entry list;
   (* A list, not a map: the store a value came from stays attached, and
      redaction order does not vary between runs. *)
@@ -287,18 +131,106 @@ type t = {
   docache : bool;
 }
 
-(* Build a chain. `names` is positional; an entry left empty falls back to
-   the provider's kind. Construction contacts nothing - the first network
-   call is the first lookup. *)
-let make ?(names = []) ?(cache = true) (providers : provider list) : t =
-  let entries =
-    List.mapi
-      (fun index provider ->
-        let named = match List.nth_opt names index with Some n -> n | None -> "" in
-        { store = (if "" <> named then named else storename provider); eprovider = provider })
-      providers
+let host (self : t) : Defs.host = self.thost
+let catalog (self : t) : Defs.catalog = self.tcatalog
+
+(* Built-ins first, then the plugins, into one catalog: a plugin that names
+   a built-in kind replaces it, which is how a host substitutes an
+   implementation and never an accident, because the four names are
+   documented. *)
+let makecatalog (plugins : Defs.definition list) : Defs.catalog =
+  let catalog = Catalog.makecatalog () in
+  List.iter (Catalog.add catalog) (Provider.builtins () @ plugins);
+  catalog
+
+let empty (plugins : Defs.definition list) (cache : bool) : t =
+  let catalog = makecatalog plugins in
+  {
+    thost = Host.makehost { Defs.nohostoptions with ocatalog = Some catalog };
+    tcatalog = catalog;
+    entries = [];
+    cache = [];
+    seen = [];
+    docache = cache;
+  }
+
+(* One chain entry, as a plugin instance.
+
+   The instance is `kind` for a store named after its kind and `kind$store`
+   otherwise, so the host reads like the chain. A store name already taken
+   gets a numbered tag from the host instead, because two providers MAY
+   share a store name - a directed read walks both - and an instance ref
+   may not. *)
+let declare (self : t) (spec : Provider.spec) : entry =
+  let kind = spec.Provider.kind in
+
+  if not (Catalog.has self.tcatalog kind) then fail (unknownkind kind self.tcatalog);
+
+  let store = if "" = spec.Provider.name then kind else spec.Provider.name in
+
+  if not (Ref.checktag (V.vstr store)) then fail ("sekreto: invalid store name: " ^ store);
+
+  let wanted = if store = kind then kind else Ref.formatref (V.vstr kind) (V.vstr store) in
+  let iref =
+    if None = Host.instance self.thost wanted then wanted else Host.autotag self.thost kind
   in
-  { entries; cache = []; seen = []; docache = cache }
+
+  (* `load` runs the definition's `define`, which builds the provider from
+     the spec; `activate` takes the instance live. Nothing is contacted by
+     either: a provider opens nothing until its first lookup. *)
+  (try
+     ignore (Host.load self.thost iref { Defs.nospec with soptions = Some (Provider.optionsof spec) });
+     ignore (Host.activate self.thost iref)
+   with err -> raise (unwrap err));
+
+  let handle =
+    match Host.exports self.thost (iref ^ "/" ^ Provider.provider_export) with
+    | Some held when V.is_num held -> int_of_float (V.as_num held)
+    | _ -> 0
+  in
+
+  match Provider.providerof handle with
+  | Some made -> { store; eref = iref; eprovider = made }
+  (* A definition that loads, activates and exports no provider is not a
+     provider plugin at all, and saying so by name is more use than a
+     missing-export error from the host. *)
+  | None -> fail ("sekreto: plugin " ^ kind ^ " exported no provider")
+
+(* Build a chain from live providers. `names` is positional; an entry left
+   empty falls back to the provider's kind. No plugin instance backs any of
+   them, so the host stays empty. Construction contacts nothing - the first
+   network call is the first lookup. *)
+let make ?(names = []) ?(cache = true) (providers : provider list) : t =
+  let self = empty [] cache in
+  self.entries <-
+    List.mapi
+      (fun index made ->
+        let named = match List.nth_opt names index with Some n -> n | None -> "" in
+        { store = (if "" <> named then named else storename made); eref = ""; eprovider = made })
+      providers;
+  self
+
+(* Build a chain from declarative provider specs - the same shape the
+   shared spec and an app's config file use.
+
+   `~plugins` is the whole loading mechanism: static, explicit, and a list
+   handed to a constructor rather than a side effect of importing. A kind
+   that is not built in and was not passed here cannot be built, and the
+   refusal says so. *)
+let sekreto ?(cache = true) ?(plugins = []) (specs : Provider.spec list) : t =
+  let self = empty plugins cache in
+
+  match List.map (declare self) specs with
+  | entries ->
+    self.entries <- entries;
+    self
+  | exception err ->
+    (* Whatever was declared before the refusal is torn down, so a chain
+       that never came into being leaves no live instance and no stashed
+       provider behind. Each definition's `close` hands its own handle
+       back, so nothing here has to know which were taken. *)
+    (try Host.close self.thost with _ -> ());
+    raise err
 
 (* The single path both readers share. The name is validated FIRST, before
    the cache and before the first provider is asked. *)
@@ -384,10 +316,13 @@ let redacttext (self : t) (text : string) : string = redact text (List.rev self.
    redaction history is not touched. *)
 let refresh (self : t) : unit = self.cache <- []
 
-(* Tear the chain down. Afterwards `stores` and `sources` are empty, `get`
-   raises and `tryget` misses - and redaction still knows every value ever
-   resolved, which is the whole point of keeping `seen` separately. *)
+(* Tear the chain down: every plugin instance is deactivated and unloaded,
+   in reverse, releasing whatever a provider acquired at activation.
+   Afterwards `stores` and `sources` are empty, `get` raises and `tryget`
+   misses - and redaction still knows every value ever resolved, which is
+   the whole point of keeping `seen` separately. *)
 let close (self : t) : unit =
+  Host.close self.thost;
   self.entries <- [];
   self.cache <- []
 

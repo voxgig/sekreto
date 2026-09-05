@@ -29,9 +29,10 @@ failure is reported, not just the first.
 
 import json
 import re
+import subprocess
 import sys
 import tomllib
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -290,11 +291,32 @@ def _aslist(value):
 PORTS = {
     'go':         dict(lib=[('go/go.mod', read_go_mod)],
                        harness=['go/testutil/go.mod']),
-    'rust':       dict(lib=[('rust/Cargo.toml', read_cargo)],
+    # ELEVEN MANIFESTS, NOT ONE. Adopting the plugin architecture gave rust
+    # a crate per plugin, and a consumer takes those crates DIRECTLY -- so
+    # each is a manifest a consumer resolves, and reading only the core's
+    # would leave ten of them unchecked.
+    'rust':       dict(lib=[('rust/Cargo.toml', read_cargo),
+                            ('rust/plugins/all/Cargo.toml', read_cargo),
+                            ('rust/plugins/aws/Cargo.toml', read_cargo),
+                            ('rust/plugins/azuresecrets/Cargo.toml', read_cargo),
+                            ('rust/plugins/boru/Cargo.toml', read_cargo),
+                            ('rust/plugins/doppler/Cargo.toml', read_cargo),
+                            ('rust/plugins/gcpsecrets/Cargo.toml', read_cargo),
+                            ('rust/plugins/hashicorp/Cargo.toml', read_cargo),
+                            ('rust/plugins/httpjson/Cargo.toml', read_cargo),
+                            ('rust/plugins/infisical/Cargo.toml', read_cargo),
+                            ('rust/plugins/onepassword/Cargo.toml', read_cargo),
+                            ('rust/plugins/secretspec/Cargo.toml', read_cargo)],
                        harness=['rust/corpus/Cargo.toml']),
+    # The PLUGINS assembly ships and so is checked. csharp/trim is not
+    # shipped -- it is the consumer check-trim publishes to prove a
+    # consumer naming one plugin carries one plugin -- so it is named as a
+    # harness rather than left silently unlisted.
     'csharp':     dict(lib=[('csharp/src/Sekreto.csproj', read_csproj),
+                            ('csharp/plugins/SekretoPlugins.csproj', read_csproj),
                             ('csharp/cli/SekretoCli.csproj', read_csproj)],
-                       harness=['csharp/test/SekretoTest.csproj']),
+                       harness=['csharp/test/SekretoTest.csproj',
+                                'csharp/trim/TrimConsumer.csproj']),
     'clojure':    dict(lib=[('clojure/deps.edn', read_deps_edn)]),
     'dart':       dict(lib=[('dart/pubspec.yaml', read_pubspec)]),
     'typescript': dict(lib=[('typescript/package.json', read_package_json)]),
@@ -358,56 +380,86 @@ PORTS = {
 # import in a normal package, and the require line only appeared later, at
 # someone's `go mod tidy`.
 SOURCES = {
+    # `outside` NAMES THE TRACKED TREES THIS PORT DELIBERATELY DOES NOT SCAN,
+    # and it is not documentation - see the coverage check in main(). Every
+    # tracked file under a port whose extension the globs name must be
+    # matched by a glob, or covered by `outside` or `skip`, or the run fails.
+    # That check exists because the older shape could only report a glob that
+    # matched NOTHING; a glob that matched the wrong SUBSET was invisible, and
+    # a port that grew a new tree kept printing "all clean" over source no one
+    # had read. Measured when it was added: typescript/plugins (12 files) and
+    # zig/plugins (12) had been unscanned since those ports adopted, in the
+    # canonical port among them, and five CLI trees besides.
     'go':         dict(globs=['go/**/*.go'], skip=['go/testutil/'],
+                       outside=[], pattern=SOURCE),
+    'rust':       dict(globs=['rust/src/**/*.rs', 'rust/plugins/**/*.rs'],
+                       skip=[], outside=['rust/tests/', 'rust/corpus/'],
                        pattern=SOURCE),
-    'rust':       dict(globs=['rust/src/**/*.rs'], skip=[], pattern=SOURCE),
-    'csharp':     dict(globs=['csharp/src/**/*.cs', 'csharp/cli/**/*.cs'],
-                       skip=[], pattern=SOURCE),
-    'java':       dict(globs=['java/src/**/*.java'], skip=[], pattern=SOURCE),
-    'perl':       dict(globs=['perl/lib/**/*.pm'], skip=[], pattern=SOURCE),
-    'php':        dict(globs=['php/src/**/*.php'], skip=[], pattern=SOURCE),
+    'csharp':     dict(globs=['csharp/src/**/*.cs', 'csharp/cli/**/*.cs',
+                              'csharp/plugins/**/*.cs'],
+                       skip=[], outside=['csharp/test/', 'csharp/trim/'],
+                       pattern=SOURCE),
+    'java':       dict(globs=['java/src/**/*.java', 'java/cli/**/*.java',
+                              'java/plugins/**/*.java'],
+                       skip=[], outside=['java/test/'], pattern=SOURCE),
+    'perl':       dict(globs=['perl/lib/**/*.pm', 'perl/plugins/**/*.pm'],
+                       skip=[], outside=['perl/t/'], pattern=SOURCE),
+    'php':        dict(globs=['php/src/**/*.php', 'php/cli/**/*.php',
+                              'php/plugins/**/*.php'],
+                       skip=[], outside=['php/test/'], pattern=SOURCE),
     'python':     dict(globs=['python/**/*.py'],
-                       skip=['python/test', 'python/tests'], pattern=SOURCE),
-    'ruby':       dict(globs=['ruby/lib/**/*.rb'], skip=[], pattern=SOURCE),
+                       skip=['python/test', 'python/tests'], outside=[],
+                       pattern=SOURCE),
+    # ruby's plugins live under lib/, so lib/**/*.rb already covers them.
+    'ruby':       dict(globs=['ruby/lib/**/*.rb', 'ruby/cli/**/*.rb'],
+                       skip=[], outside=['ruby/test/'], pattern=SOURCE),
     # The harness trees - zig/test, kotlin/test - are where omni legitimately
-    # appears, and they are excluded here exactly as go/testutil and
-    # rust/corpus are by living outside the globs.
-    'zig':        dict(globs=['zig/src/**/*.zig', 'zig/cli/**/*.zig'],
-                       skip=[], pattern=SOURCE),
-    'kotlin':     dict(globs=['kotlin/src/**/*.kt', 'kotlin/cli/**/*.kt'],
-                       skip=[], pattern=SOURCE),
-    'scala':      dict(globs=['scala/src/**/*.scala', 'scala/cli/**/*.scala'],
-                       skip=[], pattern=SOURCE),
-    # clojure/test is where omni legitimately appears, and it is excluded by
-    # living outside the globs - as go/testutil and rust/corpus are. Note
-    # that a `;;` comment is NOT skipped by the comment rule below, which
-    # only knows the markers of the languages that were here first: a
-    # clojure source file must not name omni even in prose.
-    'clojure':    dict(globs=['clojure/src/**/*.clj', 'clojure/cli/**/*.clj'],
-                       skip=[], pattern=SOURCE),
-    'dart':       dict(globs=['dart/src/**/*.dart', 'dart/cli/**/*.dart'],
-                       skip=[], pattern=SOURCE),
-    'swift':      dict(globs=['swift/src/**/*.swift', 'swift/cli/**/*.swift'],
-                       skip=[], pattern=SOURCE),
-    # elixir/tool is build machinery, not shipped source, and sits outside
-    # the globs exactly as go/testutil and rust/corpus do.
-    'elixir':     dict(globs=['elixir/src/**/*.ex', 'elixir/cli/**/*.ex'],
-                       skip=[], pattern=SOURCE),
+    # appears, and they are named in `outside` rather than left to fall
+    # through a glob that does not reach them.
+    'zig':        dict(globs=['zig/src/**/*.zig', 'zig/cli/**/*.zig',
+                              'zig/plugins/**/*.zig'],
+                       skip=[], outside=['zig/test/'], pattern=SOURCE),
+    'kotlin':     dict(globs=['kotlin/src/**/*.kt', 'kotlin/cli/**/*.kt',
+                              'kotlin/plugins/**/*.kt'],
+                       skip=[], outside=['kotlin/test/'], pattern=SOURCE),
+    'scala':      dict(globs=['scala/src/**/*.scala', 'scala/cli/**/*.scala',
+                              'scala/plugins/**/*.scala'],
+                       skip=[], outside=['scala/test/'], pattern=SOURCE),
+    # clojure/test is where omni legitimately appears. Note that a `;;`
+    # comment is NOT skipped by the comment rule below, which only knows the
+    # markers of the languages that were here first: a clojure source file
+    # must not name omni even in prose.
+    'clojure':    dict(globs=['clojure/src/**/*.clj', 'clojure/cli/**/*.clj',
+                              'clojure/plugins/**/*.clj'],
+                       skip=[], outside=['clojure/test/'], pattern=SOURCE),
+    'dart':       dict(globs=['dart/src/**/*.dart', 'dart/cli/**/*.dart',
+                              'dart/plugins/**/*.dart'],
+                       skip=[], outside=['dart/test/'], pattern=SOURCE),
+    'swift':      dict(globs=['swift/src/**/*.swift', 'swift/cli/**/*.swift',
+                              'swift/plugins/**/*.swift'],
+                       skip=[], outside=['swift/test/'], pattern=SOURCE),
+    # elixir/tool is build machinery, not shipped source.
+    'elixir':     dict(globs=['elixir/src/**/*.ex', 'elixir/cli/**/*.ex',
+                              'elixir/plugins/**/*.ex'],
+                       skip=[], outside=['elixir/test/', 'elixir/tool/'],
+                       pattern=SOURCE),
     # Headers are shipped source too: a cpp port carries much of itself in
     # .hpp, and scanning only .cpp would leave most of it unread.
     'cpp':        dict(globs=['cpp/src/**/*.cpp', 'cpp/src/**/*.hpp',
-                              'cpp/cli/**/*.cpp', 'cpp/cli/**/*.hpp'],
-                       skip=[], pattern=SOURCE),
+                              'cpp/cli/**/*.cpp', 'cpp/cli/**/*.hpp',
+                              'cpp/plugins/**/*.cpp', 'cpp/plugins/**/*.hpp'],
+                       skip=[], outside=['cpp/test/'], pattern=SOURCE),
     # Headers again, for the same reason as cpp: .h is shipped source.
     'c':          dict(globs=['c/src/**/*.c', 'c/src/**/*.h',
-                              'c/cli/**/*.c', 'c/cli/**/*.h'],
-                       skip=[], pattern=SOURCE),
+                              'c/cli/**/*.c', 'c/cli/**/*.h',
+                              'c/plugins/**/*.c', 'c/plugins/**/*.h'],
+                       skip=[], outside=['c/test/'], pattern=SOURCE),
     # lua/native is shipped source too: the OpenSSL binding is a C module
     # the library requires at runtime, so it is as much a part of what a
     # consumer gets as the .lua files are.
     'lua':        dict(globs=['lua/src/**/*.lua', 'lua/cli/**/*.lua',
                               'lua/native/**/*.c', 'lua/native/**/*.h'],
-                       skip=[], pattern=SOURCE),
+                       skip=[], outside=['lua/test/'], pattern=SOURCE),
     # The .c stubs are the OpenSSL binding and ship with the library, so
     # they are scanned alongside the .ml -- same reasoning as lua/native.
     # Note for anyone editing this port: the COMMENT rule below does not
@@ -418,26 +470,42 @@ SOURCES = {
     # a guard so a port passes is the move this whole tool exists to stop.
     'ocaml':      dict(globs=['ocaml/src/**/*.ml', 'ocaml/src/**/*.mli',
                               'ocaml/src/**/*.c', 'ocaml/src/**/*.h',
-                              'ocaml/cli/**/*.ml'],
-                       skip=[], pattern=SOURCE),
+                              'ocaml/cli/**/*.ml',
+                              'ocaml/plugins/**/*.ml', 'ocaml/plugins/**/*.mli',
+                              'ocaml/plugins/**/*.c', 'ocaml/plugins/**/*.h'],
+                       skip=[], outside=['ocaml/test/'], pattern=SOURCE),
     # lean/ffi is the libcurl binding and ships with the library, so it is
     # scanned like lua/native and ocaml's stubs. A further note for editors
     # of this port: the COMMENT rule knows Lean's `--` but NOT its block
     # form `/-`, so a `/-` comment naming omni would be reported.
     'lean':       dict(globs=['lean/src/**/*.lean', 'lean/cli/**/*.lean',
+                              'lean/plugins/**/*.lean',
                               'lean/ffi/**/*.c', 'lean/ffi/**/*.h'],
-                       skip=[], pattern=SOURCE),
+                       skip=[], outside=['lean/test/'], pattern=SOURCE),
     # .hsc and .c are included in case the FFI grows either; today the
     # binding is plain `foreign import ccall` in .hs, needing no stub file.
     'haskell':    dict(globs=['haskell/src/**/*.hs', 'haskell/src/**/*.hsc',
                               'haskell/src/**/*.c', 'haskell/src/**/*.h',
-                              'haskell/cli/**/*.hs'],
-                       skip=[], pattern=SOURCE),
+                              'haskell/cli/**/*.hs',
+                              'haskell/plugins/**/*.hs', 'haskell/plugins/**/*.hsc',
+                              'haskell/plugins/**/*.c', 'haskell/plugins/**/*.h'],
+                       skip=[], outside=['haskell/test/'], pattern=SOURCE),
     # No skip in either Node port: omni comes from npm as a devDependency,
     # so the checkout resolver that used to live in typescript/src is gone
     # and nothing under src/ has any business naming omni.
-    'typescript': dict(globs=['typescript/src/**/*.ts'], skip=[], pattern=SOURCE),
-    'javascript': dict(globs=['javascript/src/**/*.js'], skip=[], pattern=SOURCE),
+    'typescript': dict(globs=['typescript/src/**/*.ts', 'typescript/cli/**/*.ts',
+                              'typescript/plugins/**/*.ts'],
+                       skip=[], outside=['typescript/test/'], pattern=SOURCE),
+    # ADOPTED PORTS SHIP A plugins/ TREE, AND IT IS SHIPPED SOURCE. The
+    # ten network kinds moved out of the core into it, so a glob naming
+    # only src/ scans the half that opens no socket and reports the port
+    # covered. Measured when javascript adopted: 9 files scanned, 12 in
+    # plugins/ unread. The coverage check in main() now enforces this, so a
+    # port that adopts and forgets fails here rather than passing quietly.
+    'javascript': dict(globs=['javascript/src/**/*.js',
+                              'javascript/cli/**/*.js',
+                              'javascript/plugins/**/*.js'],
+                       skip=[], outside=['javascript/test/'], pattern=SOURCE),
 }
 
 
@@ -488,6 +556,73 @@ def scan_sources(port):
                 if rx.search(line):
                     hits.append(f'{rel}:{n}: {line.strip()[:70]}')
     return hits, seen
+
+
+def tracked_files():
+    """Every file git tracks, as repo-relative posix paths.
+
+    git rather than a walk of the filesystem: build output is gitignored, so
+    asking git is what separates shipped source from a `target/` or a
+    `.dart_tool/` without this file having to carry a list of every build
+    directory twenty-three toolchains produce.
+
+    `--others --exclude-standard` puts UNTRACKED files in too, which is the
+    difference between catching a new tree and catching it a commit late. A
+    port's new `plugins/` folder is untracked right up until it is staged, so
+    a tracked-only listing would report the port clean at exactly the moment
+    someone runs this to decide whether it is safe to commit.
+    """
+    out = subprocess.run(
+        ['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
+        cwd=ROOT, capture_output=True, text=True)
+    if 0 != out.returncode:
+        return None
+    return [f for f in out.stdout.split('\0') if f]
+
+
+def glob_extensions(globs):
+    """The file extensions a port's globs name.
+
+    Derived rather than listed: the globs already say what source looks like
+    in this language, so the coverage check cannot drift from them.
+    """
+    exts = set()
+    for glob in globs:
+        tail = glob.rsplit('/', 1)[-1]
+        if '.' in tail:
+            exts.add('.' + tail.rsplit('.', 1)[1])
+    return exts
+
+
+def uncovered_sources(port, tracked):
+    """Tracked source files under `port` that no glob reaches.
+
+    A glob matching nothing is already a failure. This is the other half: a
+    glob matching the WRONG SUBSET. A port that grows a tree - `plugins/`,
+    when it adopts the plugin architecture - keeps passing while the new tree
+    goes unread, because nothing here ever asked what it did NOT look at.
+    """
+    spec = SOURCES[port]
+    exts = glob_extensions(spec['globs'])
+    covered = set()
+    for glob in spec['globs']:
+        for path in ROOT.glob(glob):
+            covered.add(path.relative_to(ROOT).as_posix())
+    allowed = tuple(spec['skip']) + tuple(spec['outside'])
+    out = []
+    for rel in tracked:
+        if rel.split('/', 1)[0] != port:
+            continue
+        if PurePosixPath(rel).suffix not in exts:
+            continue
+        if rel in covered or rel.startswith(allowed):
+            continue
+        # A file git still tracks but that is gone from the working tree is
+        # a rename in flight, not a coverage hole.
+        if not (ROOT / rel).exists():
+            continue
+        out.append(rel)
+    return sorted(out)
 
 
 def discover_ports():
@@ -581,6 +716,42 @@ def main():
                          'nothing; fix the glob')
         for hit in hits:
             fails.append(f'{port}: shipped source names omni: {hit}')
+
+    # A GLOB MATCHING THE WRONG SUBSET IS THE OTHER HALF OF A DEAD GLOB, and
+    # until this check the tool could only see the first. Every tracked source
+    # file under a port must be reached by a glob, or declared in `outside` or
+    # `skip`. Silence is not coverage: the dead-glob check above asks whether
+    # a glob read SOMETHING, never whether it read EVERYTHING, so a port that
+    # grew a tree passed while the tree went unread. That is not conjecture -
+    # adding this found typescript/plugins (12 files) and zig/plugins (12)
+    # unscanned since those ports adopted, plus five shipped CLI trees, all of
+    # it reported "all clean" for as long as it had been there.
+    tracked = tracked_files()
+    if tracked is None:
+        fails.append('coverage: `git ls-files` failed, so which shipped source '
+                     'goes unscanned could not be determined - run this in a '
+                     'git checkout')
+    else:
+        for port in sorted(SOURCES):
+            missed = uncovered_sources(port, tracked)
+            if missed:
+                shown = ', '.join(missed[:6])
+                more = f' (+{len(missed) - 6} more)' if 6 < len(missed) else ''
+                fails.append(
+                    f'{port}: {len(missed)} tracked source file(s) match no '
+                    f'glob and are not declared outside: {shown}{more} - '
+                    'widen the globs, or name the tree in `outside` if it is '
+                    'genuinely not shipped')
+
+    # AN `outside` ENTRY MUST STILL MATCH SOMETHING, for the same reason a
+    # dead skip must: a prefix left behind by a rename excludes nothing while
+    # reading as though it does, and the next tree to appear at that path
+    # would be waved through by a line nobody rechecked.
+    for port in sorted(SOURCES):
+        for prefix in SOURCES[port]['outside']:
+            if not sorted(ROOT.glob(prefix + '*')):
+                fails.append(f'{port}: `outside` names {prefix!r} and nothing '
+                             'matches it - a dead exclusion; remove it')
 
     # A SKIP MUST BE JUSTIFIED BY SOMETHING THIS FILE CHECKS, and derived
     # rather than hard-coded, so it stays true per repo.

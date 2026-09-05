@@ -8,6 +8,10 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../src/Sekreto.csproj" />
+    <!-- The conformance suite hands every plugin to every chain it builds,
+         which is exactly why it can never see a missing one; the seam
+         tests in Plugins.cs are what pin that half. -->
+    <ProjectReference Include="../plugins/SekretoPlugins.csproj" />
     <!-- voxgig/omni lives outside this repo; the Makefile passes its path. -->
     <ProjectReference Include="$(OmniPath)" Condition="'$(OmniPath)' != ''" />
   </ItemGroup>

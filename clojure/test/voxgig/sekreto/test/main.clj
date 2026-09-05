@@ -1,6 +1,6 @@
 ;; RUN: make test
-;; RUN-SOME: clojure -Sdeps '{:aliases {:omni {:extra-paths ["'$OMNI'/clojure/src"]}}}' \
-;;             -M:test:omni -m voxgig.sekreto.test.main envkey
+;; RUN-SOME: java -cp "$(clojure -Spath):$PLUGIN/clojure/src:$OMNI/clojure/src:test" \
+;;             clojure.main -m voxgig.sekreto.test.main envkey
 ;;
 ;; The sekreto conformance suite. Every port runs these same groups, from
 ;; the same spec/sekreto.json, through its own voxgig/omni runner.
@@ -20,7 +20,9 @@
   (:require [voxgig.omni.runner :as runner]
             [voxgig.omni.util :as u]
             [voxgig.sekreto :as sekreto]
-            [voxgig.sekreto.json :as json])
+            [voxgig.sekreto.json :as json]
+            [voxgig.sekreto.plugins :as plugins]
+            [voxgig.sekreto.plugins.sigv4 :as sigv4])
   (:import [java.io File])
   (:gen-class))
 
@@ -91,11 +93,14 @@
       (u/ismap auth) (assoc :auth (keyed auth AUTHKEYS)))))
 
 (defn chainof
-  "Build a Sekreto from the spec's declarative chain description. The cache
-  is off: each entry is its own chain, and a cached read would answer for
-  the next one."
+  "Build a Sekreto from the spec's declarative chain description. Every
+  plugin is passed to every chain - which is exactly why this suite cannot
+  see the plugin seam, and why voxgig.sekreto.test.plugins exists. The
+  cache is off: each entry is its own chain, and a cached read would answer
+  for the next one."
   [entry]
-  (sekreto/sekreto (mapv specof (get entry "chain" [])) {:cache false}))
+  (sekreto/sekreto (mapv specof (get entry "chain" []))
+                   {:plugins plugins/ALL :cache false}))
 
 (defn namearg
   "The name a group's entry asks about."
@@ -147,7 +152,7 @@
 (defn SIGV4 [args]
   (let [entry (first args)
         headers (get entry "headers")]
-    (sekreto/sigv4 {:method (or (asstr entry "method") "")
+    (sigv4/sigv4 {:method (or (asstr entry "method") "")
                     :url (or (asstr entry "url") "")
                     :service (or (asstr entry "service") "")
                     :region (or (asstr entry "region") "")

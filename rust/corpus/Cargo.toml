@@ -16,8 +16,19 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+# THE CONFORMANCE SUITE LOADS EVERY PLUGIN, deliberately. The spec is the
+# contract for the whole library and exercises all fourteen provider kinds,
+# so this suite hands the full set to every Sekreto it builds. That is the
+# split working, not a leak of it: a CONSUMER passes the kinds it
+# configures and links nothing else, while the suite that proves all
+# fourteen behave has to have all fourteen. What the suite therefore CANNOT
+# see - that the core reaches no plugin, that an unloaded kind is refused,
+# that the full set holds every kind - is pinned by ../tests/plugin.rs and
+# ../plugins/all/tests/plugins.rs instead.
 [dependencies]
 voxgig_sekreto = { path = ".." }
+voxgig_sekreto_plugins = { path = "../plugins/all" }
+voxgig_sekreto_aws = { path = "../plugins/aws" }
 
 # omni, by its release tag (omni DOCS.md 8.3): a git dependency Cargo
 # fetches itself, so no checkout, link or $OMNI_HOME is needed. The tag is

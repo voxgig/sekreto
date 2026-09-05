@@ -6,8 +6,21 @@
 // line of its own code.
 //
 // A port of typescript/src/Sekreto.ts, which is canonical.
+//
+// THE CORE IMPORTS NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR
+// SIGNS A REQUEST. The four built-in kinds - env, memory, dotenv, file -
+// read at most a local file; every other kind is a voxgig/plugin
+// definition in the SekretoPlugins module under plugins/, and a chain may
+// name one only if the calling project handed it in through `plugins`.
+// That is what keeps an SDK whose chain is `[dotenv, env]` from carrying
+// AWS request signing and seven HTTP vault clients. The boundary is the
+// swift module: `swiftc -module-name Sekreto src/*.swift` never sees
+// plugins/, and the plugins import this module rather than the other way
+// round. See docs/design/plugin-providers.md.
 
 import Foundation
+
+import VoxgigPlugin
 
 /// A secret name: dot-separated lowercase segments, e.g. `api.token`.
 public typealias Name = String
@@ -308,6 +321,35 @@ public func storename(_ provider: Provider) -> String {
   return text
 }
 
+/// The message for a kind the catalog does not hold.
+///
+/// A kind sekreto has never heard of is a typo; a kind that exists as a
+/// plugin but was not passed in is the split working as designed and
+/// telling you what to pass. Collapsing the two was the first thing that
+/// made the split confusing to use.
+func unknownkind(_ kind: String, _ catalog: Catalog) -> String {
+  let known = KINDS.plugin.contains(kind)
+
+  return "sekreto: unknown provider kind: " + kind
+    + " (available: " + catalog.names().joined(separator: ", ") + ")"
+    + (known
+      ? " - " + kind + " is a sekreto plugin, not built in: pass it in the plugins option"
+      : "")
+}
+
+/// A SekretoError that crossed the plugin boundary comes back out as
+/// itself, byte for byte. Anything else is not sekreto's to rewrite and
+/// surfaces as the host reports it, naming the instance.
+func unwrap(_ err: Error) -> Error {
+  if let raised = err as? PluginError, ERROR_CODE == raised.code,
+    let cause = raised.details["cause"]?.asString
+  {
+    return SekretoError(cause)
+  }
+
+  return err
+}
+
 /// The secrets facade: a chain of providers plus a cache.
 ///
 /// Two ways to read. `get` is transparent - it walks the chain and takes
@@ -316,13 +358,30 @@ public func storename(_ provider: Provider) -> String {
 /// asked. Use the first for ordinary configuration, the second when
 /// *which* store holds a secret is part of what you mean.
 ///
-/// `names` gives the store names, positionally; an entry left nil or empty
-/// falls back to the provider's kind.
+/// A spec'd entry is a voxgig/plugin instance on `host`; a provider handed
+/// in already built is not, and joins the chain as it is. `names` gives
+/// the store names for that second form, positionally; an entry left nil
+/// or empty falls back to the provider's kind.
 public final class Sekreto: CustomStringConvertible {
 
-  /// One provider in the chain, under the store name it answers to.
+  /// The voxgig/plugin host every spec'd provider is an instance of. Read
+  /// it for introspection - `list()` names each store's ref and status -
+  /// and nothing on it advances the chain.
+  ///
+  /// Qualified: Foundation ships a `Host` of its own, and an unqualified
+  /// one here is ambiguous rather than wrong-and-quiet.
+  public let host: VoxgigPlugin.Host
+
+  /// The definitions this Sekreto can build: the built-ins, plus whatever
+  /// `plugins` handed in.
+  public let catalog: Catalog
+
+  /// One provider in the chain, under the store name it answers to, and
+  /// the ref of the plugin instance that built it - "" for a provider
+  /// handed in already built, which no instance backs.
   private struct Entry {
     let store: String
+    let ref: String
     let provider: Provider
   }
 
@@ -348,17 +407,113 @@ public final class Sekreto: CustomStringConvertible {
 
   private let docache: Bool
 
+  /// A chain of declarative specs, built through the plugin host.
+  ///
+  /// `plugins` is the load-bearing argument: this Sekreto can build the
+  /// four built-in kinds and EXACTLY the definitions handed in here.
+  /// Loading is explicit, never a side effect of importing - a list given
+  /// to an initialiser cannot be erased by a compiler, and the set of
+  /// stores an app can reach is not something to discover at run time.
+  ///
+  /// Eager and in chain order, so a chain that cannot be built says so at
+  /// once. Construction contacts nothing: the first network call is the
+  /// first lookup.
   public init(
-    providers: [Provider] = [],
+    specs: [ProviderSpec] = [],
+    plugins: [Definition] = [],
+    cache docache: Bool = true
+  ) throws {
+    self.docache = docache
+
+    // Built-ins first, then the plugins, into one catalog: a plugin that
+    // names a built-in kind replaces it, which is how a host substitutes
+    // an implementation and never an accident, because the four names are
+    // documented.
+    do {
+      self.catalog = try makeCatalog(BUILTINS + plugins)
+    } catch {
+      throw unwrap(error)
+    }
+
+    self.host = makeHost(HostOptions(catalog: self.catalog))
+
+    for spec in specs {
+      entries.append(try declare(spec))
+    }
+  }
+
+  /// A chain of providers already built. They join as they are, under the
+  /// store name each answers to, backed by no plugin instance - so `host`
+  /// is empty and `close()` has nothing of theirs to tear down.
+  public init(
+    providers: [Provider],
     names: [String?] = [],
     cache docache: Bool = true
   ) {
     self.docache = docache
 
+    // The built-ins, as in every other Sekreto: this chain cannot use them
+    // - it holds providers, not specs - but `catalog` reads the same either
+    // way. `makeCatalog` refuses only a malformed definition name, and
+    // these four are literals, so the fallback is unreachable and there is
+    // nothing here worth making this initialiser throw for.
+    self.catalog = (try? makeCatalog(BUILTINS)) ?? Catalog()
+    self.host = makeHost(HostOptions(catalog: self.catalog))
+
     for (index, provider) in providers.enumerated() {
       var store = index < names.count ? (names[index] ?? "") : ""
       if store.isEmpty { store = storename(provider) }
-      entries.append(Entry(store: store, provider: provider))
+      entries.append(Entry(store: store, ref: "", provider: provider))
+    }
+  }
+
+  /// One chain entry, as a plugin instance.
+  ///
+  /// The instance is `kind` for a store named after its kind and
+  /// `kind$store` otherwise - `hashicorp$prod` - so `host.list()` reads
+  /// like the chain. A store name that is already taken gets a numbered
+  /// tag from the host instead (`tag: "?"` is the host's own request for
+  /// the lowest unused one), because two providers MAY share a store name
+  /// - a directed read walks both, and the spec pins it - and an instance
+  /// ref may not.
+  private func declare(_ spec: ProviderSpec) throws -> Entry {
+    if !catalog.has(spec.kind) {
+      throw SekretoError(unknownkind(spec.kind, catalog))
+    }
+
+    let store = first(spec.name, spec.kind)
+
+    if !Refs.checkTag(.str(store)) {
+      throw SekretoError("sekreto: invalid store name: \(store)")
+    }
+
+    do {
+      let wanted =
+        store == spec.kind ? spec.kind : try Refs.formatRef(.str(spec.kind), .str(store))
+
+      var declaration: [String: Value] = ["options": optionsof(spec)]
+
+      if nil != (try host.instance(.str(wanted))) {
+        declaration["definition"] = .str(spec.kind)
+        declaration["tag"] = .str("?")
+      }
+
+      // `load` runs the definition's `define`, which builds the provider
+      // from the spec; `activate` takes the instance live. Nothing is
+      // contacted by either: a provider opens nothing until its first
+      // lookup.
+      let loaded = try host.load(.str(wanted), .map(declaration))
+      try host.activate(.str(loaded.ref))
+
+      let exported = try host.exports(loaded.ref + "/" + PROVIDER_EXPORT)
+
+      guard case .opaque(let held) = exported, let provider = held as? Provider else {
+        throw SekretoError("sekreto: plugin \(spec.kind) exported no provider")
+      }
+
+      return Entry(store: store, ref: loaded.ref, provider: provider)
+    } catch {
+      throw unwrap(error)
     }
   }
 
@@ -479,10 +634,15 @@ public final class Sekreto: CustomStringConvertible {
     cache.removeAll()
   }
 
-  /// Tear the chain down. Afterwards there are no stores and nothing
-  /// resolves - but redaction still knows every value ever resolved, so a
-  /// log written after shutdown is no less safe than one written before.
-  public func close() {
+  /// Tear the chain down: every plugin instance is deactivated and
+  /// unloaded, in reverse, releasing whatever a provider acquired at
+  /// activation.
+  ///
+  /// Afterwards there are no stores and nothing resolves - but redaction
+  /// still knows every value ever resolved, so a log written after
+  /// shutdown is no less safe than one written before.
+  public func close() throws {
+    try host.close()
     entries.removeAll()
     cache.removeAll()
   }
@@ -511,15 +671,21 @@ func sekretoredact(_ text: String, _ values: [String]) -> String {
 /// Make a Sekreto from declarative provider specs - the same shape the
 /// shared spec and an app's config file use.
 ///
-/// Eager and in chain order, so a chain that cannot be built says so at
-/// once. Construction contacts nothing: the first network call is the
-/// first lookup.
-public func makesekreto(_ specs: [ProviderSpec], cache: Bool = true) throws -> Sekreto {
-  var providers: [Provider] = []
-
-  for spec in specs {
-    providers.append(try makeprovider(spec))
-  }
-
-  return Sekreto(providers: providers, names: specs.map { $0.name }, cache: cache)
+/// `plugins` names the kinds beyond the four built-ins that `specs` may
+/// use, as voxgig/plugin definitions. The calling project imports the
+/// plugins it needs and passes them here; a kind it did not pass is
+/// unknown to this Sekreto, and saying so is the point:
+///
+///     import SekretoPlugins
+///     let secrets = try makesekreto(chain, plugins: [hashicorp])
+///
+/// `SekretoPlugins.allplugins` is the whole set, for a caller that wants
+/// every kind - the CLI, the conformance suite, an app whose chain is
+/// decided at run time.
+public func makesekreto(
+  _ specs: [ProviderSpec],
+  plugins: [Definition] = [],
+  cache: Bool = true
+) throws -> Sekreto {
+  return try Sekreto(specs: specs, plugins: plugins, cache: cache)
 }

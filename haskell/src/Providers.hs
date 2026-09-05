@@ -1,4 +1,6 @@
--- | The providers a 'Sekreto' chains together.
+-- | What a provider is, what its declarative form looks like, how a
+-- provider kind becomes a voxgig/plugin definition - and the four
+-- BUILT-IN kinds.
 --
 -- A provider answers one question: "do you have this secret?" It returns
 -- the value, or 'Nothing' to mean "ask the next one". Nothing else about a
@@ -9,60 +11,64 @@
 -- Two failure shapes, and they are never interchangeable. A store that
 -- does not hold the secret is a MISS ('Nothing') - the chain carries on. A
 -- store that could not answer - bad credentials, unreachable host, missing
--- configuration - is an ERROR: falling through there would quietly reach
+-- configuration - is an ERROR: falling through there would silently reach
 -- for a weaker store.
 --
--- A port of typescript/src/Providers.ts, which is canonical.
+-- THIS MODULE OPENS NO SOCKET, SPEAKS NO TLS AND SPAWNS NO CHILD. What
+-- makes a kind built in is that it reads at most a local file; every kind
+-- that opens a socket, signs a request or spawns a process is a
+-- voxgig/plugin definition in its own module under @plugins/@, which is
+-- not on the include path this module is compiled with.
+--
+-- A port of typescript/src/provider/support.ts and
+-- typescript/src/provider/builtin.ts, which are canonical.
 
 module Providers
   ( AuthSpec (..),
     ProviderSpec (..),
+    builtinkinds,
+    builtins,
     checkaddr,
+    chomp,
     emptyauth,
     emptyspec,
-    makeprovider,
-    renewtime,
+    errorcode,
+    fail',
+    first,
+    optionsof,
+    pluginkinds,
+    providerexport,
+    providerplugin,
+    readsecret,
     safeaddr,
-    sekreto,
+    specof,
+    takeprovider,
+    trim,
+    trimslash,
   )
 where
 
-import Bytes (unbase64, utf8decode)
-import Control.Exception (IOException, throwIO, try)
+import Bytes (utf8decode)
+import Control.Exception (IOException, evaluate, throwIO, try)
 import Control.Monad (when)
 import qualified Data.ByteString as B
 import Data.Char (isSpace, toLower)
-import Data.IORef (IORef, newIORef, readIORef, writeIORef)
-import Data.List (isInfixOf, isPrefixOf, isSuffixOf)
-import Data.Maybe (fromMaybe, isJust, isNothing)
-import Data.Time.Clock (getCurrentTime)
-import Data.Time.Clock.POSIX (getPOSIXTime)
-import Data.Time.Format (defaultTimeLocale, formatTime)
-import Http (Response (..), nakedurl)
-import qualified Http
-import Json (Json (..))
-import qualified Json
-import Provider (Name, Provider (..), SekretoError (..), forced)
-import Sekreto
-  ( Sekreto,
-    VaultRef (..),
-    awsparam,
-    checkname,
-    envkey,
-    flatname,
-    makechain,
-    parsedotenv,
-    vaultref,
-  )
-import Sigv4 (Signing (..), emptysigning, sigv4, uriescape)
+import Data.IORef (IORef, atomicModifyIORef', newIORef, readIORef, writeIORef)
+import Data.List (isPrefixOf, isSuffixOf)
+import Defs (Definition (..), Inst (..))
+import Host (instExport)
+import Names (envkey, parsedotenv)
+import Provider (Provider (..), SekretoError (..), forced)
 import System.Directory (doesDirectoryExist)
-import System.Environment (getEnvironment, lookupEnv)
-import System.Exit (ExitCode (..))
+import System.Environment (lookupEnv)
 import System.FilePath (takeDirectory, (</>))
 import System.IO.Error (isDoesNotExistError)
-import System.Process (CreateProcess (..), proc, readCreateProcessWithExitCode)
+import System.IO.Unsafe (unsafePerformIO)
+import Types (details2, raise)
+import Value (Value (..), asNum, asStr, isMap, isNum, vget, vhas, vkeys, vset)
 
 -- ------------------------------------------------------------ the specs
+
 
 -- | Logging in to a vault instead of being handed a token. @method@ is
 -- @kubernetes@ or @approle@; @mount@ defaults to the method name.
@@ -262,9 +268,6 @@ first candidates = case filter (not . null) candidates of
   (found : _) -> found
   [] -> ""
 
-fromenv :: String -> IO String
-fromenv name = fromMaybe "" <$> lookupEnv name
-
 fail' :: String -> IO a
 fail' message = throwIO (SekretoError message)
 
@@ -278,35 +281,6 @@ dropsuffix suffix body
 
 trimslash :: String -> String
 trimslash = dropsuffix "/"
-
--- | Milliseconds since the epoch: the clock the renewal deadline uses.
-nowms :: IO Integer
-nowms = round . (1000 *) <$> getPOSIXTime
-
--- | A deadline that never arrives: a configured token never expires, and
--- neither does a login whose expiry was absent or zero. Integer is
--- unbounded, so this is a chosen far future rather than a maxBound.
-never :: Integer
-never = 10 ^ (18 :: Int)
-
--- | When a logged-in token must be renewed, from its expiry in seconds -
--- a JSON number, or a string, as Azure IMDS sends it: now + max(seconds -
--- 60, 1). A missing or zero expiry means never renew.
-renewtime :: Maybe Json -> IO Integer
-renewtime expires =
-  case seconds of
-    value
-      | isNaN value || 0 >= value -> pure never
-      | otherwise -> do
-          at <- nowms
-          pure (at + round (1000 * max (value - 60) 1))
-  where
-    seconds = case expires of
-      Just (JNum value) -> value
-      Just (JStr value) -> case reads value :: [(Double, String)] of
-        [(parsed, "")] -> parsed
-        _ -> 0
-      _ -> 0
 
 -- | An address with any userinfo replaced by @[redacted]@, for messages.
 --
@@ -399,67 +373,6 @@ checkaddr addr = do
     when (not (elem host ["localhost", "127.0.0.1", "::1", "[::1]"])) $
       fail'
         ("sekreto: refusing to send a token in plaintext to " ++ safeaddr addr ++ " (use https)")
-
--- | One JSON round-trip's result: the status, and the parsed body.
-data Answer = Answer {ansstatus :: Int, ansbody :: Maybe Json}
-
--- | One JSON round-trip. Network failure is always an error - an
--- unreachable store is a store that could not answer.
-fetchjson :: String -> String -> [(String, String)] -> Maybe String -> IO Answer
-fetchjson method url headers body = do
-  res <- Http.request method url headers body
-
-  let parsed = Json.parse (resbody res)
-
-  -- A success status promised JSON; a body that does not parse means the
-  -- store could not answer coherently, and treating it as a miss would
-  -- fall through to a weaker store. Error statuses may carry any body -
-  -- they are decided on status alone.
-  when (200 == resstatus res && isNothing parsed) $
-    fail' ("sekreto: malformed response from " ++ nakedurl url)
-
-  pure (Answer (resstatus res) parsed)
-
--- | What a finished child process left behind.
-data Ran = Ran {ranout :: String, ranwhy :: String, ranstatus :: Int}
-
--- | Run a child to completion and collect both its streams.
---
--- @readCreateProcessWithExitCode@ closes the child's stdin - so a CLI
--- that reads it, one prompting for a passphrase when its environment
--- variable is absent, sees EOF and gives up instead of waiting forever -
--- and drains stdout and stderr CONCURRENTLY. Reading stdout to EOF and
--- only then reading stderr deadlocks the moment the child writes more
--- than one pipe buffer (64 KiB on Linux) to stderr, and nothing here sets
--- a timeout, so that hang would be permanent. secretspec's diagnostics
--- are box-drawn and reach that size easily.
---
--- Arguments are passed as a list, never through a shell, and no secret
--- ever goes on a command line where the process table would publish it.
-runcmd :: String -> [String] -> [(String, String)] -> IO Ran
-runcmd command args extraenv = do
-  base <- getEnvironment
-
-  let shaped =
-        (proc command args)
-          { env = if null extraenv then Nothing else Just (foldl setvar base extraenv)
-          }
-
-  outcome <- try (readCreateProcessWithExitCode shaped "")
-
-  case outcome :: Either IOException (ExitCode, String, String) of
-    Left err -> fail' ("sekreto: cannot run " ++ command ++ ": " ++ show err)
-    Right (code, out, why) ->
-      pure
-        Ran
-          { ranout = out,
-            ranwhy = trim why,
-            ranstatus = case code of
-              ExitSuccess -> 0
-              ExitFailure status -> status
-          }
-  where
-    setvar entries (key, value) = (key, value) : filter ((key /=) . fst) entries
 
 -- | Read a whole file. Absence - of the file, or of a directory on the
 -- way to it - is a MISS, because it means "no secrets here"; anything
@@ -571,889 +484,269 @@ chomp body
   | "\n" `isSuffixOf` body = take (length body - 1) body
   | otherwise = body
 
--- ----------------------------------------------------------- hashicorp
+-- ------------------------------------- providers as plugin definitions
 
--- | HashiCorp Vault.
+-- | The export key under which a provider definition publishes the
+-- provider it built. 'Sekreto.sekreto' reads @\<ref>/provider@ off the
+-- host.
+providerexport :: String
+providerexport = "provider"
+
+-- | The voxgig/plugin error code a 'SekretoError' travels under when a
+-- definition's @define@ refuses.
 --
--- KV v2 (the default): @api.token@ reads @{addr}/v1/{mount}/data/api@ and
--- takes the @token@ field of @data.data@. KV v1 reads
--- @{addr}/v1/{mount}/api@ and takes the field of @data@. A 404 means "not
--- here" - a miss - so a vault can sit in a chain with fallbacks.
+-- plugin wraps a code-less error raised by a callback as
+-- @plugin_define_failed@ and keeps one that already carries a code. A
+-- provider that refuses its own configuration - @kv: 3@, a missing
+-- project - raises a 'SekretoError', and that message is pinned by the
+-- spec byte for byte, so it must come back out of the host exactly as it
+-- went in. 'providerplugin' puts this code on; 'Sekreto.sekreto' takes it
+-- off. Nowhere else catches and rewraps.
+errorcode :: String
+errorcode = "sekreto_error"
+
+-- | THE PROVIDER SLOT TABLE, and the one place this port diverges from
+-- the canonical.
 --
--- A Vault Enterprise namespace rides the X-Vault-Namespace header, on
--- logins as well as reads.
+-- plugin's value model carries JSON - null, booleans, numbers, strings,
+-- lists and maps - and a 'Provider' is a record of two functions, so
+-- there is no @Opaque@ case to hand one through. A definition's @define@
+-- therefore exports the SLOT NUMBER of the provider it built, and
+-- 'Sekreto.sekreto' reads it back. plugin's own zig port carries its
+-- error slot the same way, for the same reason.
 --
--- Instead of being handed a token, the provider can log in: Kubernetes
--- auth (the pod's service-account JWT, from its conventional path) or
--- AppRole. A failed login is an error, never a miss - it means this store
--- could not answer at all.
-hashicorpprovider :: ProviderSpec -> IO Provider
-hashicorpprovider spec = do
-  -- A version typo like kv: 3 must not quietly behave as v2 and turn its
-  -- 404s into misses; there is nothing safe to assume it meant.
-  when (1 /= kv && 2 /= kv) $
-    fail' ("sekreto: hashicorp: unsupported kv version: " ++ show kv)
+-- It is NOT a registry of kinds, and importing a module puts nothing in
+-- it. A slot is filled by @define@, which runs only when a constructor
+-- was handed the definition and a chain named that kind, and it is
+-- emptied the moment the chain has the provider - so between two
+-- constructions the table is empty. Two constructions running at once
+-- share the counter and no more; this port claims no thread safety
+-- across them, as zig's does not.
+{-# NOINLINE slots #-}
+slots :: IORef (Integer, [(Integer, Provider)])
+slots = unsafePerformIO (newIORef (1, []))
 
-  livetoken <- newIORef (if null (spectoken spec) then Nothing else Just (spectoken spec))
-  renewat <- newIORef never
-
-  let baseheaders =
-        [("X-Vault-Namespace", specvaultnamespace spec) | not (null (specvaultnamespace spec))]
-
-      login = do
-        use <- case specauth spec of
-          Nothing -> fail' "sekreto: hashicorp: no token and no auth method"
-          Just found -> pure found
-
-        let authmountname = first [authmount use, authmethod use]
-            url = trimslash addr ++ "/v1/auth/" ++ authmountname ++ "/login"
-
-        body <- case authmethod use of
-          "kubernetes" -> do
-            jwt <-
-              if not (null (authjwt use))
-                then pure (authjwt use)
-                else do
-                  let file =
-                        first
-                          [ authjwtfile use,
-                            "/var/run/secrets/kubernetes.io/serviceaccount/token"
-                          ]
-                  outcome <- try (B.readFile file)
-                  case outcome :: Either IOException B.ByteString of
-                    Left _ -> fail' ("sekreto: hashicorp: cannot read jwt file " ++ file)
-                    Right raw -> pure (trim (utf8decode raw))
-
-            pure (JObj [("role", JStr (authrole use)), ("jwt", JStr jwt)])
-          "approle" ->
-            pure
-              ( JObj
-                  [ ("role_id", JStr (authroleid use)),
-                    ("secret_id", JStr (authsecretid use))
-                  ]
-              )
-          other -> fail' ("sekreto: hashicorp: unknown auth method: " ++ other)
-
-        res <- fetchjson "POST" url baseheaders (Just (Json.stringify body))
-
-        let got = Json.text (Json.dig (ansbody res) ["auth", "client_token"])
-
-        when (200 /= ansstatus res || maybe True null got) $
-          fail' ("sekreto: hashicorp login failed: " ++ show (ansstatus res) ++ ": " ++ url)
-
-        renewtime (Json.dig (ansbody res) ["auth", "lease_duration"]) >>= writeIORef renewat
-
-        pure (fromMaybe "" got)
-
-  pure
-    Provider
-      { lookupsecret = \name -> do
-          checkaddr addr
-
-          token <- currenttoken livetoken renewat login
-
-          ref <- vaultrefof name
-
-          let base = trimslash addr ++ "/v1/" ++ mount
-              url =
-                if 1 == kv
-                  then base ++ "/" ++ refpath ref
-                  else base ++ "/data/" ++ refpath ref
-
-          res <- fetchjson "GET" url (baseheaders ++ [("X-Vault-Token", token)]) Nothing
-
-          if 404 == ansstatus res
-            then pure Nothing
-            else
-              if 200 /= ansstatus res
-                then fail' ("sekreto: hashicorp error: " ++ show (ansstatus res) ++ ": " ++ url)
-                else do
-                  let holder =
-                        if 1 == kv
-                          then Json.dig (ansbody res) ["data"]
-                          else Json.dig (ansbody res) ["data", "data"]
-                  pure (Json.text (Json.dig holder [reffield ref])),
-        describe = "hashicorp:" ++ addr ++ "/" ++ mount
-      }
+-- | Hold a provider, answering the slot it went into.
+holdprovider :: Provider -> IO Integer
+holdprovider provider = atomicModifyIORef' slots step
   where
-    addr = specaddr spec
-    mount = first [specmount spec, "secret"]
-    kv = fromMaybe 2 (speckv spec)
+    step (next, held) = ((next + 1, (next, provider) : held), next)
 
--- | The working token: a configured token is kept forever, a logged-in
--- token is renewed shortly before its lease runs out - a long-running
--- process must not keep presenting a token the vault already expired.
-currenttoken :: IORef (Maybe String) -> IORef Integer -> IO String -> IO String
-currenttoken livetoken renewat login = do
-  held <- readIORef livetoken
-  at <- nowms
-  due <- readIORef renewat
+-- | The provider a @define@ exported, TAKEN out of the table: a chain
+-- reads its provider once. Answers 'Nothing' for a definition that
+-- exported something else, or nothing at all.
+takeprovider :: Value -> IO (Maybe Provider)
+takeprovider exported
+  | not (isNum exported) = pure Nothing
+  | otherwise = atomicModifyIORef' slots step
+  where
+    slot = round (asNum exported) :: Integer
+    step (next, held) = ((next, filter ((slot /=) . fst) held), lookup slot held)
 
-  case held of
-    Just token | at < due -> pure token
-    _ -> do
-      fresh <- login
-      writeIORef livetoken (Just fresh)
-      pure fresh
-
--- | The name's vault location, forced here so that an invalid name is
--- refused before any request is built.
-vaultrefof :: Name -> IO VaultRef
-vaultrefof name = do
-  let ref = vaultref name
-  _ <- forced (refpath ref)
-  _ <- forced (reffield ref)
-  pure ref
-
--- ---------------------------------------------------------------- boru
-
--- | A boru vault (https://github.com/boru-lang/boru).
+-- | A provider kind, as a voxgig/plugin definition.
 --
--- Two ways in, both boru's own.
+-- This is the whole bridge between the two libraries. The definition's
+-- name is the @kind@ a 'ProviderSpec' names; its @define@ reads the spec
+-- back off the instance's options, builds the provider with @make@, and
+-- exports it. Nothing runs at activate: a provider opens nothing until
+-- its first lookup, so there is nothing to capture - a provider that does
+-- hold a resource acquires it there and lets the instance scope unwind
+-- it.
 --
--- With no @addr@, the CLI: @boru vault get --reveal \<alias>@ prints the
--- secret on stdout and nothing else. The passphrase is read by boru
--- itself from @BORU_VAULT_PASSPHRASE@; sekreto never accepts it as config
--- and never puts it on a command line, where it would show up in the
--- process table.
+-- Every built-in and every plugin is made this way, so a custom provider
+-- kind is one call:
 --
--- With an @addr@, boru's wire protocol: @boru vault serve@ publishes a
--- read-only, HashiCorp-shaped provision API, authenticated by a
--- capability token from @boru vault grant@. A sekreto name is already a
--- valid boru alias, and boru aliases keep their dots, so @api.token@ is
--- the single path segment @api.token@ - not the @api@/@token@ split a
--- HashiCorp KV gets. The value is the @value@ field. A 404 is a miss;
--- anything else the server refuses is an error.
-boruprovider :: ProviderSpec -> Provider
-boruprovider spec =
-  Provider
-    { lookupsecret = \name -> do
-        _ <- forced (checkname name)
-
-        if not (null addr)
-          then wirelookup name
-          else do
-            let alias = if null namespace then name else namespace ++ ":" ++ name
-
-            ran <-
-              runcmd
-                command
-                ["vault", "get", "--reveal", alias]
-                [("BORU_HOME", spechome spec) | not (null (spechome spec))]
-
-            if 0 == ranstatus ran
-              then -- boru prints the value and one newline, and nothing else.
-                pure (Just (chomp (ranout ran)))
-              else -- "no alias named" is boru saying it does not hold this
-              -- secret, which is a miss: the chain carries on. A locked
-              -- vault or a wrong passphrase is not a miss - treating it as
-              -- one would fall through to a weaker store without saying so.
-
-                if borumiss (ranwhy ran)
-                  then pure Nothing
-                  else
-                    fail'
-                      ( "sekreto: boru vault error: "
-                          ++ ( if null (ranwhy ran)
-                                 then "exit " ++ show (ranstatus ran)
-                                 else ranwhy ran
-                             )
-                      ),
-      describe =
-        if not (null addr)
-          then "boru:" ++ addr
-          else "boru" ++ (if null namespace then "" else ":" ++ namespace)
+-- > providerplugin "mystore" (\spec -> pure (mystore (specaddr spec)))
+providerplugin :: String -> (ProviderSpec -> IO Provider) -> Definition
+providerplugin kind make =
+  Definition
+    { dName = kind,
+      dShape = VNull,
+      dDefine = Just define,
+      dActivate = Nothing,
+      dDeactivate = Nothing,
+      -- An instance torn down before its chain read the slot - a define
+      -- that succeeded and an activate that did not - gives it back
+      -- here, so an abandoned host leaves nothing behind.
+      dClose = Just release,
+      dReconfigure = Nothing
     }
   where
-    command = first [speccommand spec, "boru"]
-    namespace = specnamespace spec
-    addr = trimslash (specaddr spec)
-    mount = first [specmount spec, "secret"]
+    define inst = do
+      options <- readIORef (iOptions inst)
 
-    wirelookup name = do
-      checkaddr addr
+      -- `try` on 'SekretoError' alone: anything else a `make` raises is
+      -- not sekreto's to rewrite, and travels out as the host reports it.
+      built <- try (make (specof options) >>= evaluate)
 
-      -- The dotted name stays one path segment: boru aliases keep dots.
-      let alias = if null namespace then name else namespace ++ "/" ++ name
-          url = addr ++ "/v1/" ++ mount ++ "/data/" ++ alias
+      case built of
+        Right provider -> do
+          slot <- holdprovider provider
+          instExport inst providerexport (VNum (fromIntegral slot))
+        Left (SekretoError message) ->
+          raise errorcode message (details2 "ref" (VStr (iRef inst)) "cause" (VStr message))
 
-      res <- fetchjson "GET" url [("X-Vault-Token", spectoken spec)] Nothing
+    release inst = do
+      exported <- readIORef (iExports inst)
+      _ <- takeprovider (vget exported providerexport)
+      pure ()
 
-      if 404 == ansstatus res
-        then pure Nothing
-        else
-          if 200 /= ansstatus res
-            then fail' ("sekreto: boru serve error: " ++ show (ansstatus res) ++ ": " ++ url)
-            else pure (Json.text (Json.dig (ansbody res) ["data", "data", "value"]))
-
--- | Does this boru failure mean "no such secret" rather than "I could not
--- answer"? Matched on boru's own wording for a missing alias.
-borumiss :: String -> Bool
-borumiss why = isInfixOf "no alias named" why
-
--- ---------------------------------------------------------- secretspec
-
--- | SecretSpec (https://secretspec.dev).
---
--- SecretSpec is a declaration - a @secretspec.toml@ naming the secrets a
--- project needs - plus a chain of its own backends to satisfy them from.
--- That makes it the same shape as sekreto one level down, and the reason
--- to support it is the reason sekreto exists: a project that has already
--- declared its secrets there should not have to declare them again here.
---
--- A reason is required, not optional: SecretSpec records every read in an
--- audit log and refuses to read at all without one.
-secretspecprovider :: ProviderSpec -> Provider
-secretspecprovider spec =
-  Provider
-    { lookupsecret = \name -> do
-        key <- forced (envkey name (specprefix spec))
-
-        let args =
-              [w | not (null (specfile spec)), w <- ["--file", specfile spec]]
-                ++ ["get", key]
-                ++ [w | not (null (specbackend spec)), w <- ["--provider", specbackend spec]]
-                ++ [w | not (null (specprofile spec)), w <- ["--profile", specprofile spec]]
-                ++ ["--reason", first [specreason spec, "sekreto"]]
-
-        ran <- runcmd command args []
-
-        if 0 == ranstatus ran
-          then pure (Just (chomp (ranout ran)))
-          else
-            if secretspecmiss (ranwhy ran) key
-              then pure Nothing
-              else
-                fail'
-                  ( "sekreto: secretspec error: "
-                      ++ ( if null (ranwhy ran)
-                             then "exit " ++ show (ranstatus ran)
-                             else ranwhy ran
-                         )
-                  ),
-      describe = "secretspec" ++ (if null (specbackend spec) then "" else ":" ++ specbackend spec)
+-- | A 'ProviderSpec' read back off a plugin instance's options map - the
+-- shape 'optionsof' produced, and the shape a config document would.
+specof :: Value -> ProviderSpec
+specof options =
+  emptyspec
+    { speckind = text "kind",
+      specname = text "name",
+      specprefix = text "prefix",
+      specfile = text "file",
+      specvalues = [(key, asStr (vget held key)) | key <- vkeys held],
+      specdir = text "dir",
+      specaddr = text "addr",
+      spectoken = text "token",
+      specmount = text "mount",
+      speckv = if vhas options "kv" then Just (round (asNum (vget options "kv"))) else Nothing,
+      specvaultnamespace = text "vaultnamespace",
+      specauth = if isMap auth then Just (authof auth) else Nothing,
+      speccommand = text "command",
+      specprofile = text "profile",
+      specbackend = text "backend",
+      specreason = text "reason",
+      specnamespace = text "namespace",
+      spechome = text "home",
+      specregion = text "region",
+      speckeyid = text "keyid",
+      specsecret = text "secret",
+      specsession = text "session",
+      specproject = text "project",
+      specvault = text "vault",
+      spectenant = text "tenant",
+      specclientid = text "clientid",
+      specclientsecret = text "clientsecret",
+      specloginaddr = text "loginaddr",
+      specimdsaddr = text "imdsaddr",
+      specmetadataaddr = text "metadataaddr",
+      specapiversion = text "apiversion",
+      specconfig = text "config",
+      specenvironment = text "environment",
+      specpath = text "path"
     }
   where
-    command = first [speccommand spec, "secretspec"]
+    text key = asStr (vget options key)
+    held = vget options "values"
+    auth = vget options "auth"
 
--- | Does this SecretSpec failure mean "no such secret" rather than "I
--- could not answer"?
---
--- SecretSpec says @Secret 'API_TOKEN' not found@ for both a name it does
--- not declare and one declared with no value, and both are misses.
---
--- MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
--- @Provider backend 'keyring' not found@, which is a store that could not
--- answer at all - and reading that as a miss is the worst failure this
--- library has, because the chain then falls through to a weaker store
--- without saying so. The key is required to appear, so the two cannot be
--- confused.
-secretspecmiss :: String -> String -> Bool
-secretspecmiss why key = isInfixOf ("Secret '" ++ key ++ "' not found") why
-
--- ----------------------------------------------------------------- aws
-
--- | The @YYYYMMDDTHHMMSSZ@ timestamp SigV4 wants, for now.
-awsnow :: IO String
-awsnow = formatTime defaultTimeLocale "%Y%m%dT%H%M%SZ" <$> getCurrentTime
-
--- | Region and credentials, from config first and the standard AWS_*
--- environment variables second - those are AWS's own convention, and a
--- pod or CI job that has them set should just work. Missing either is an
--- error: an AWS store with no credentials could not answer.
-awsauth :: ProviderSpec -> IO (String, String, String, String)
-awsauth spec = do
-  region <- first <$> sequence [pure (specregion spec), fromenv "AWS_REGION", fromenv "AWS_DEFAULT_REGION"]
-  keyid <- first <$> sequence [pure (speckeyid spec), fromenv "AWS_ACCESS_KEY_ID"]
-  secret <- first <$> sequence [pure (specsecret spec), fromenv "AWS_SECRET_ACCESS_KEY"]
-  session <- first <$> sequence [pure (specsession spec), fromenv "AWS_SESSION_TOKEN"]
-
-  when (null region) $ fail' "sekreto: aws: no region (set region or AWS_REGION)"
-
-  when (null keyid || null secret) $
-    fail'
-      "sekreto: aws: no credentials (set keyid/secret or AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY)"
-
-  pure (region, keyid, secret, session)
-
--- | One signed call to an AWS JSON-1.1 API.
-awscall :: ProviderSpec -> String -> String -> String -> IO Answer
-awscall spec service target payload = do
-  (region, keyid, secret, session) <- awsauth spec
-
-  -- The China partition lives under its own suffix; every other
-  -- commercial region is plain amazonaws.com.
-  let suffix = if "cn-" `isPrefixOf` region then ".amazonaws.com.cn" else ".amazonaws.com"
-      useaddr = first [specaddr spec, "https://" ++ service ++ "." ++ region ++ suffix]
-
-  checkaddr useaddr
-
-  let url = trimslash useaddr ++ "/"
-      extras =
-        [ ("content-type", "application/x-amz-json-1.1"),
-          ("x-amz-target", target)
-        ]
-
-  datetime <- awsnow
-
-  let signed =
-        sigv4
-          emptysigning
-            { signmethod = "POST",
-              signurl = url,
-              signservice = service,
-              signregion = region,
-              signkeyid = keyid,
-              signsecret = secret,
-              signdatetime = datetime,
-              signheaders = extras,
-              signbody = payload,
-              signsession = session
-            }
-
-  fetchjson "POST" url (extras ++ signed) (Just payload)
-
--- | Does this AWS error body name one of the not-found types? Those are a
--- miss; every other failure is a store that could not answer.
-awsmiss :: Maybe Json -> String -> Bool
-awsmiss body wanted = case Json.asstr (Json.dig body ["__type"]) of
-  Just errtype -> isInfixOf wanted errtype
-  Nothing -> False
-
--- | AWS Secrets Manager.
---
--- @api.token@ reads the secret named @api@ (the vaultref path, so
--- @db.pass.main@ reads @db/pass@) and takes the @token@ field of its JSON
--- SecretString - the AWS idiom of one JSON map per secret. A SecretString
--- that is not JSON is the value itself, under the conventional field
--- @value@.
-awssecretsprovider :: ProviderSpec -> Provider
-awssecretsprovider spec =
-  Provider
-    { lookupsecret = \name -> do
-        ref <- vaultrefof name
-
-        res <-
-          awscall
-            spec
-            "secretsmanager"
-            "secretsmanager.GetSecretValue"
-            (Json.stringify (JObj [("SecretId", JStr (refpath ref))]))
-
-        if 400 == ansstatus res && awsmiss (ansbody res) "ResourceNotFoundException"
-          then pure Nothing
-          else
-            if 200 /= ansstatus res
-              then fail' ("sekreto: aws secretsmanager error: " ++ show (ansstatus res))
-              else case Json.asstr (Json.dig (ansbody res) ["SecretString"]) of
-                Just text -> case Json.parse text of
-                  Just (JObj fields) -> pure (Json.text (lookup (reffield ref) fields))
-                  -- A plain-string secret is the whole value; it has no
-                  -- named fields.
-                  _ -> pure (if "value" == reffield ref then Just text else Nothing)
-                Nothing -> do
-                  -- A binary secret has no fields to address; only the
-                  -- conventional `value` field can mean "the bytes".
-                  let binary = Json.asstr (Json.dig (ansbody res) ["SecretBinary"])
-
-                  if isJust binary && "value" == reffield ref
-                    then case unbase64 (fromMaybe "" binary) of
-                      Just raw -> pure (Just (utf8decode raw))
-                      Nothing -> fail' "sekreto: aws secretsmanager: undecodable secret"
-                    else pure Nothing,
-      -- Config only, never the environment: describe() feeds the spec's
-      -- sources group, which must answer the same everywhere.
-      describe = "awssecrets:" ++ specregion spec
+authof :: Value -> AuthSpec
+authof entry =
+  emptyauth
+    { authmethod = text "method",
+      authmount = text "mount",
+      authrole = text "role",
+      authjwt = text "jwt",
+      authjwtfile = text "jwtfile",
+      authroleid = text "roleid",
+      authsecretid = text "secretid"
     }
+  where
+    text key = asStr (vget entry key)
 
--- | AWS SSM Parameter Store.
+-- | A 'ProviderSpec' as a plugin instance's options map.
 --
--- @db.pass.main@ reads the parameter @/db/pass/main@ (under an optional
--- prefix path), decrypted. Parameter Store carries flat strings, so there
--- is no field indirection.
-awsparamsprovider :: ProviderSpec -> Provider
-awsparamsprovider spec =
-  Provider
-    { lookupsecret = \name -> do
-        parameter <- forced (awsparam name (specprefix spec))
+-- Only the keys actually set are written, so @hostList@ and a declaration
+-- document read like the configuration someone wrote rather than like the
+-- record.
+optionsof :: ProviderSpec -> Value
+optionsof spec = foldl set (VMap []) fields
+  where
+    set out (key, value) = case value of VNull -> out; _ -> vset out key value
 
-        let payload =
-              Json.stringify
-                (JObj [("Name", JStr parameter), ("WithDecryption", JBool True)])
+    fields =
+      [ ("kind", text (speckind spec)),
+        ("name", text (specname spec)),
+        ("prefix", text (specprefix spec)),
+        ("file", text (specfile spec)),
+        ("values", if null (specvalues spec) then VNull else VMap [(key, VStr value) | (key, value) <- specvalues spec]),
+        ("dir", text (specdir spec)),
+        ("addr", text (specaddr spec)),
+        ("token", text (spectoken spec)),
+        ("mount", text (specmount spec)),
+        ("kv", maybe VNull (VNum . fromIntegral) (speckv spec)),
+        ("vaultnamespace", text (specvaultnamespace spec)),
+        ("auth", maybe VNull authoptions (specauth spec)),
+        ("command", text (speccommand spec)),
+        ("profile", text (specprofile spec)),
+        ("backend", text (specbackend spec)),
+        ("reason", text (specreason spec)),
+        ("namespace", text (specnamespace spec)),
+        ("home", text (spechome spec)),
+        ("region", text (specregion spec)),
+        ("keyid", text (speckeyid spec)),
+        ("secret", text (specsecret spec)),
+        ("session", text (specsession spec)),
+        ("project", text (specproject spec)),
+        ("vault", text (specvault spec)),
+        ("tenant", text (spectenant spec)),
+        ("clientid", text (specclientid spec)),
+        ("clientsecret", text (specclientsecret spec)),
+        ("loginaddr", text (specloginaddr spec)),
+        ("imdsaddr", text (specimdsaddr spec)),
+        ("metadataaddr", text (specmetadataaddr spec)),
+        ("apiversion", text (specapiversion spec)),
+        ("config", text (specconfig spec)),
+        ("environment", text (specenvironment spec)),
+        ("path", text (specpath spec))
+      ]
 
-        res <- awscall spec "ssm" "AmazonSSM.GetParameter" payload
+    text value = if null value then VNull else VStr value
 
-        if 400 == ansstatus res && awsmiss (ansbody res) "ParameterNotFound"
-          then pure Nothing
-          else
-            if 200 /= ansstatus res
-              then fail' ("sekreto: aws ssm error: " ++ show (ansstatus res))
-              else pure (Json.text (Json.dig (ansbody res) ["Parameter", "Value"])),
-      describe = "awsparams:" ++ specregion spec ++ specprefix spec
-    }
+authoptions :: AuthSpec -> Value
+authoptions use = foldl set (VMap []) fields
+  where
+    set out (key, value) = case value of VNull -> out; _ -> vset out key value
 
--- ----------------------------------------------------------------- gcp
+    fields =
+      [ ("method", text (authmethod use)),
+        ("mount", text (authmount use)),
+        ("role", text (authrole use)),
+        ("jwt", text (authjwt use)),
+        ("jwtfile", text (authjwtfile use)),
+        ("roleid", text (authroleid use)),
+        ("secretid", text (authsecretid use))
+      ]
 
--- | GCP Secret Manager.
+    text value = if null value then VNull else VStr value
+
+-- | The four built-in provider kinds, as definitions, in a fresh list:
+-- @env@, @memory@, @dotenv@ and @file@ - the same four in every port.
+-- 'Sekreto.sekreto' puts them in every catalog ahead of the plugins it is
+-- handed.
+builtins :: [Definition]
+builtins =
+  [ providerplugin "env" (\spec -> pure (envprovider (specprefix spec))),
+    providerplugin "memory" (\spec -> pure (memoryprovider (specvalues spec) (specprefix spec))),
+    providerplugin "dotenv" (\spec -> dotenvprovider (first [specfile spec, ".env"]) (specprefix spec)),
+    providerplugin "file" (\spec -> pure (fileprovider (specdir spec) (specprefix spec)))
+  ]
+
+-- | The four kinds built into this module.
+builtinkinds :: [String]
+builtinkinds = ["env", "memory", "dotenv", "file"]
+
+-- | Every kind that ships as a plugin, so that an unknown kind can be
+-- told from a plugin that was not passed in.
 --
--- @api.token@ reads secret @api_token@ (dots flattened to @_@; Secret
--- Manager ids have no hierarchy and reject dots), latest version. The
--- token comes from config, then @GOOGLE_OAUTH_ACCESS_TOKEN@, then the
--- GCE/GKE metadata server - so on Google's own platform no credential
--- configuration is needed at all.
---
--- The metadata call itself is plain http to a link-local host by platform
--- design, and no credential rides on it, so `checkaddr` guards the Secret
--- Manager address instead.
-gcpprovider :: ProviderSpec -> IO Provider
-gcpprovider spec = do
-  livetoken <- newIORef Nothing
-  renewat <- newIORef never
-
-  let metadataaddr = do
-        given <- pure (specmetadataaddr spec)
-        if not (null given)
-          then pure given
-          else do
-            host <- fromenv "GCE_METADATA_HOST"
-            pure (if null host then "http://metadata.google.internal" else "http://" ++ host)
-
-      login = do
-        configured <- first <$> sequence [pure (spectoken spec), fromenv "GOOGLE_OAUTH_ACCESS_TOKEN"]
-
-        if not (null configured)
-          then pure configured
-          else do
-            base <- metadataaddr
-            let url =
-                  trimslash base
-                    ++ "/computeMetadata/v1/instance/service-accounts/default/token"
-
-            res <- fetchjson "GET" url [("Metadata-Flavor", "Google")] Nothing
-
-            let got = Json.text (Json.dig (ansbody res) ["access_token"])
-
-            when (200 /= ansstatus res || maybe True null got) $
-              fail' "sekreto: gcp: no token and metadata server did not answer"
-
-            renewtime (Json.dig (ansbody res) ["expires_in"]) >>= writeIORef renewat
-
-            pure (fromMaybe "" got)
-
-  pure
-    Provider
-      { lookupsecret = \name -> do
-          when (null (specproject spec)) $ fail' "sekreto: gcp: no project"
-
-          let useaddr = first [specaddr spec, "https://secretmanager.googleapis.com"]
-          checkaddr useaddr
-
-          token <- currenttoken livetoken renewat login
-
-          flat <- forced (flatname name "_")
-
-          let url =
-                trimslash useaddr
-                  ++ "/v1/projects/"
-                  ++ specproject spec
-                  ++ "/secrets/"
-                  ++ flat
-                  ++ "/versions/latest:access"
-
-          res <- fetchjson "GET" url [("authorization", "Bearer " ++ token)] Nothing
-
-          if 404 == ansstatus res
-            then pure Nothing
-            else
-              if 200 /= ansstatus res
-                then fail' ("sekreto: gcp error: " ++ show (ansstatus res) ++ ": " ++ url)
-                else case Json.asstr (Json.dig (ansbody res) ["payload", "data"]) of
-                  Nothing -> pure Nothing
-                  Just payload -> case unbase64 payload of
-                    Just raw -> pure (Just (utf8decode raw))
-                    Nothing -> fail' "sekreto: gcp: undecodable secret",
-        describe = "gcpsecrets:" ++ specproject spec
-      }
-
--- --------------------------------------------------------------- azure
-
--- | The Key Vault audience an Azure token is minted for.
-azureresource :: String
-azureresource = "https://vault.azure.net"
-
--- | Azure Key Vault.
---
--- @api.token@ reads secret @api-token@ (dots flattened to @-@; Key Vault
--- names allow nothing else), current version. The token comes from
--- config, then a client-credentials login when tenant/clientid/
--- clientsecret are given, then the IMDS managed-identity endpoint.
---
--- As with GCP, the IMDS call is plain http to a link-local host by
--- platform design and carries no credential; the login and vault
--- addresses are `checkaddr`-guarded.
-azureprovider :: ProviderSpec -> IO Provider
-azureprovider spec = do
-  livetoken <- newIORef Nothing
-  renewat <- newIORef never
-
-  let login
-        | not (null (spectoken spec)) = pure (spectoken spec)
-        | not (null (spectenant spec))
-            && not (null (specclientid spec))
-            && not (null (specclientsecret spec)) = do
-            let useloginaddr = first [specloginaddr spec, "https://login.microsoftonline.com"]
-            checkaddr useloginaddr
-
-            let url = trimslash useloginaddr ++ "/" ++ spectenant spec ++ "/oauth2/v2.0/token"
-                form =
-                  "grant_type=client_credentials&client_id="
-                    ++ uriescape (specclientid spec)
-                    ++ "&client_secret="
-                    ++ uriescape (specclientsecret spec)
-                    ++ "&scope="
-                    ++ uriescape (azureresource ++ "/.default")
-
-            res <-
-              fetchjson
-                "POST"
-                url
-                [("content-type", "application/x-www-form-urlencoded")]
-                (Just form)
-
-            let got = Json.text (Json.dig (ansbody res) ["access_token"])
-
-            when (200 /= ansstatus res || maybe True null got) $
-              fail' ("sekreto: azure login failed: " ++ show (ansstatus res))
-
-            renewtime (Json.dig (ansbody res) ["expires_in"]) >>= writeIORef renewat
-            pure (fromMaybe "" got)
-        | otherwise = do
-            let imds =
-                  trimslash (first [specimdsaddr spec, "http://169.254.169.254"])
-                    ++ "/metadata/identity/oauth2/token?api-version=2018-02-01&resource="
-                    ++ uriescape azureresource
-
-            res <- fetchjson "GET" imds [("Metadata", "true")] Nothing
-
-            let got = Json.text (Json.dig (ansbody res) ["access_token"])
-
-            when (200 /= ansstatus res || maybe True null got) $
-              fail' "sekreto: azure: no token, no client credentials, and IMDS did not answer"
-
-            renewtime (Json.dig (ansbody res) ["expires_in"]) >>= writeIORef renewat
-            pure (fromMaybe "" got)
-
-  pure
-    Provider
-      { lookupsecret = \name -> do
-          when (null (specvault spec)) $ fail' "sekreto: azure: no vault"
-
-          -- Only an explicit scheme is a URL; a vault NAMED httpvault must
-          -- still become https://httpvault.vault.azure.net.
-          let usevault = specvault spec
-              vaulturl =
-                if "http://" `isPrefixOf` usevault || "https://" `isPrefixOf` usevault
-                  then usevault
-                  else "https://" ++ usevault ++ ".vault.azure.net"
-
-          checkaddr vaulturl
-
-          token <- currenttoken livetoken renewat login
-
-          flat <- forced (flatname name "-")
-
-          let url =
-                trimslash vaulturl
-                  ++ "/secrets/"
-                  ++ flat
-                  ++ "?api-version="
-                  ++ first [specapiversion spec, "7.4"]
-
-          res <- fetchjson "GET" url [("authorization", "Bearer " ++ token)] Nothing
-
-          if 404 == ansstatus res
-            then pure Nothing
-            else
-              if 200 /= ansstatus res
-                then
-                  fail'
-                    ("sekreto: azure error: " ++ show (ansstatus res) ++ ": " ++ nakedurl url)
-                else pure (Json.text (Json.dig (ansbody res) ["value"])),
-        describe = "azuresecrets:" ++ specvault spec
-      }
-
--- ----------------------------------------------------------- 1password
-
--- | 1Password, through a Connect server.
---
--- The item titled @api.token@ (titles keep their dots), in the named
--- vault. The value is the field with purpose PASSWORD, or the field
--- labelled @value@. A vault that cannot be found is an error - config
--- names it, so its absence is a broken store, not a missing secret.
-onepasswordprovider :: ProviderSpec -> IO Provider
-onepasswordprovider spec = do
-  vaultid <- newIORef Nothing
-
-  let auth = [("authorization", "Bearer " ++ spectoken spec)]
-
-      resolvevault useaddr = do
-        let want = specvault spec
-        when (null want) $ fail' "sekreto: onepassword: no vault"
-
-        res <- fetchjson "GET" (useaddr ++ "/v1/vaults") auth Nothing
-
-        entries <- case Json.asarr (ansbody res) of
-          Just found | 200 == ansstatus res -> pure found
-          _ -> fail' ("sekreto: onepassword error: " ++ show (ansstatus res) ++ ": listing vaults")
-
-        let matches entry =
-              Just want == Json.text (Json.dig (Just entry) ["id"])
-                || Just want == Json.text (Json.dig (Just entry) ["name"])
-
-        case filter matches entries of
-          (entry : _) -> pure (fromMaybe "" (Json.text (Json.dig (Just entry) ["id"])))
-          [] -> fail' ("sekreto: onepassword: no vault named " ++ want)
-
-  pure
-    Provider
-      { lookupsecret = \name -> do
-          _ <- forced (checkname name)
-
-          let useaddr = trimslash (specaddr spec)
-          when (null useaddr) $ fail' "sekreto: onepassword: no addr"
-          checkaddr useaddr
-
-          held <- readIORef vaultid
-          vid <- case held of
-            Just found -> pure found
-            Nothing -> do
-              found <- resolvevault useaddr
-              writeIORef vaultid (Just found)
-              pure found
-
-          let filterexp = uriescape ("title eq \"" ++ name ++ "\"")
-              findurl = useaddr ++ "/v1/vaults/" ++ vid ++ "/items?filter=" ++ filterexp
-
-          found <- fetchjson "GET" findurl auth Nothing
-
-          items <- case Json.asarr (ansbody found) of
-            Just entries | 200 == ansstatus found -> pure entries
-            _ ->
-              fail'
-                ("sekreto: onepassword error: " ++ show (ansstatus found) ++ ": finding " ++ name)
-
-          case items of
-            [] -> pure Nothing
-            (entry : _) -> do
-              let itemid = fromMaybe "" (Json.text (Json.dig (Just entry) ["id"]))
-                  readurl = useaddr ++ "/v1/vaults/" ++ vid ++ "/items/" ++ itemid
-
-              item <- fetchjson "GET" readurl auth Nothing
-
-              when (200 /= ansstatus item) $
-                fail'
-                  ( "sekreto: onepassword error: "
-                      ++ show (ansstatus item)
-                      ++ ": reading "
-                      ++ name
-                  )
-
-              let fields = fromMaybe [] (Json.asarr (Json.dig (ansbody item) ["fields"]))
-
-                  -- The FIRST field carrying this role, if any. Deliberately
-                  -- NOT "the first field carrying this role whose value is
-                  -- text": those are different, and conflating them is a
-                  -- wrong-secret bug rather than a cosmetic one.
-                  firstwith role wanted =
-                    case filter
-                      (\field -> Just wanted == Json.asstr (Json.dig (Just field) [role]))
-                      fields of
-                      (field : _) -> Just field
-                      [] -> Nothing
-
-                  valueof field = Json.text (Json.dig (Just field) ["value"])
-
-              -- Two passes, purpose first -- and the FIRST pass is TERMINAL.
-              -- Canonical returns from inside the loop
-              -- (kotlin/src/Providers.kt:1417 and the typescript plugin), so
-              -- a PASSWORD field whose value is null is a MISS and must not
-              -- fall through to the label pass. Returning Nothing from the
-              -- purpose lookup for both "no such field" and "field with a
-              -- null value" made it fall through, and the label pass then
-              -- answered with a DIFFERENT field's value: the caller got a
-              -- secret where canonical gives it nothing.
-              pure
-                ( case firstwith "purpose" "PASSWORD" of
-                    Just field -> valueof field
-                    Nothing -> maybe Nothing valueof (firstwith "label" "value")
-                ),
-        describe = "onepassword:" ++ specvault spec
-      }
-
--- ------------------------------------------------------------- doppler
-
--- | Doppler.
---
--- The whole config is downloaded once - Doppler's own bulk endpoint - and
--- answered from memory, like a remote .env: @api.token@ is the
--- @API_TOKEN@ entry. A service token is config-scoped, so project and
--- config are only needed with broader tokens.
---
--- A failed load caches nothing, so it retries.
-dopplerprovider :: ProviderSpec -> IO Provider
-dopplerprovider spec = do
-  loaded <- newIORef Nothing
-
-  let load = do
-        cached <- readIORef loaded
-        case cached of
-          Just values -> pure values
-          Nothing -> do
-            let useaddr = trimslash (first [specaddr spec, "https://api.doppler.com"])
-            checkaddr useaddr
-
-            let url =
-                  useaddr
-                    ++ "/v3/configs/config/secrets/download?format=json"
-                    ++ ( if null (specproject spec)
-                           then ""
-                           else "&project=" ++ uriescape (specproject spec)
-                       )
-                    ++ ( if null (specconfig spec)
-                           then ""
-                           else "&config=" ++ uriescape (specconfig spec)
-                       )
-
-            res <- fetchjson "GET" url [("authorization", "Bearer " ++ spectoken spec)] Nothing
-
-            entries <- case Json.asobj (ansbody res) of
-              Just found | 200 == ansstatus res -> pure found
-              _ -> fail' ("sekreto: doppler error: " ++ show (ansstatus res))
-
-            -- Entries with null values are skipped; the rest stringified.
-            let values = [(key, text) | (key, value) <- entries, Just text <- [Json.text (Just value)]]
-
-            writeIORef loaded (Just values)
-            pure values
-
-  pure
-    Provider
-      { lookupsecret = \name -> do
-          -- The prefix option is not consulted by this kind.
-          key <- forced (envkey name "")
-          values <- load
-          pure (lookup key values),
-        describe =
-          "doppler"
-            ++ ( if null (specproject spec)
-                   then ""
-                   else ":" ++ specproject spec ++ "/" ++ specconfig spec
-               )
-      }
-
--- ------------------------------------------------------------ infisical
-
--- | Infisical.
---
--- @api.token@ reads the secret keyed @API_TOKEN@ (Infisical's own
--- convention is environment-style keys) at a secret path in one
--- environment of a project. Auth is a token, or a universal-auth (machine
--- identity) login with clientid/clientsecret.
-infisicalprovider :: ProviderSpec -> IO Provider
-infisicalprovider spec = do
-  livetoken <- newIORef Nothing
-  renewat <- newIORef never
-
-  let login useaddr
-        | not (null (spectoken spec)) = pure (spectoken spec)
-        | otherwise = do
-            when (null (specclientid spec) || null (specclientsecret spec)) $
-              fail' "sekreto: infisical: no token and no client credentials"
-
-            let body =
-                  JObj
-                    [ ("clientId", JStr (specclientid spec)),
-                      ("clientSecret", JStr (specclientsecret spec))
-                    ]
-
-            res <-
-              fetchjson
-                "POST"
-                (useaddr ++ "/api/v1/auth/universal-auth/login")
-                [("content-type", "application/json")]
-                (Just (Json.stringify body))
-
-            let got = Json.text (Json.dig (ansbody res) ["accessToken"])
-
-            when (200 /= ansstatus res || maybe True null got) $
-              fail' ("sekreto: infisical login failed: " ++ show (ansstatus res))
-
-            -- camelCase, unlike everyone else's expires_in.
-            renewtime (Json.dig (ansbody res) ["expiresIn"]) >>= writeIORef renewat
-            pure (fromMaybe "" got)
-
-  pure
-    Provider
-      { lookupsecret = \name -> do
-          let useaddr = trimslash (first [specaddr spec, "https://app.infisical.com"])
-          checkaddr useaddr
-
-          when (null (specproject spec) || null (specenvironment spec)) $
-            fail' "sekreto: infisical: no project/environment"
-
-          token <- currenttoken livetoken renewat (login useaddr)
-
-          key <- forced (envkey name "")
-
-          let url =
-                useaddr
-                  ++ "/api/v3/secrets/raw/"
-                  ++ key
-                  ++ "?workspaceId="
-                  ++ uriescape (specproject spec)
-                  ++ "&environment="
-                  ++ uriescape (specenvironment spec)
-                  ++ "&secretPath="
-                  ++ uriescape (first [specpath spec, "/"])
-
-          res <- fetchjson "GET" url [("authorization", "Bearer " ++ token)] Nothing
-
-          if 404 == ansstatus res
-            then pure Nothing
-            else
-              if 200 /= ansstatus res
-                then fail' ("sekreto: infisical error: " ++ show (ansstatus res))
-                else pure (Json.text (Json.dig (ansbody res) ["secret", "secretValue"])),
-        describe = "infisical:" ++ specproject spec ++ "/" ++ specenvironment spec
-      }
-
--- ------------------------------------------------------------- factory
-
--- | Build a provider from its declarative form - the same shape the
--- shared spec and an app's config file use.
-makeprovider :: ProviderSpec -> IO Provider
-makeprovider spec = case speckind spec of
-  "env" -> pure (envprovider (specprefix spec))
-  "dotenv" -> dotenvprovider (first [specfile spec, ".env"]) (specprefix spec)
-  "memory" -> pure (memoryprovider (specvalues spec) (specprefix spec))
-  "file" -> pure (fileprovider (specdir spec) (specprefix spec))
-  "hashicorp" -> hashicorpprovider spec
-  "boru" -> pure (boruprovider spec)
-  "secretspec" -> pure (secretspecprovider spec)
-  "awssecrets" -> pure (awssecretsprovider spec)
-  "awsparams" -> pure (awsparamsprovider spec)
-  "gcpsecrets" -> gcpprovider spec
-  "azuresecrets" -> azureprovider spec
-  "onepassword" -> onepasswordprovider spec
-  "doppler" -> dopplerprovider spec
-  "infisical" -> infisicalprovider spec
-  other -> fail' ("sekreto: unknown provider kind: " ++ other)
-
--- | Make a chain from declarative provider specs.
---
--- Eager and in chain order, so a spec that cannot be built raises here
--- rather than at the first read. Construction still contacts nothing.
-sekreto :: [ProviderSpec] -> Bool -> IO Sekreto
-sekreto specs docache = do
-  providers <- mapM makeprovider specs
-  makechain providers (map (Just . specname) specs) docache
+-- This module names the KINDS, which are spec, and imports none of the
+-- modules that implement them - a list of ten strings reaches nothing.
+pluginkinds :: [String]
+pluginkinds =
+  [ "hashicorp",
+    "boru",
+    "awssecrets",
+    "awsparams",
+    "gcpsecrets",
+    "azuresecrets",
+    "onepassword",
+    "doppler",
+    "infisical",
+    "secretspec"
+  ]

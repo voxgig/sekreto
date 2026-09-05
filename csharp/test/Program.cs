@@ -13,6 +13,7 @@ using System.Collections.Generic;
 using System.IO;
 using Voxgig.Omni;
 using Voxgig.Sekreto;
+using Voxgig.Sekreto.Plugins;
 
 internal static class Program
 {
@@ -49,10 +50,18 @@ internal static class Program
     }
 
     // Build a Sekreto from the spec's declarative chain description.
+    //
+    // Every plugin, to every chain - which is precisely why this suite can
+    // never see a missing one. That half of the seam is pinned by the
+    // tests in Plugins.cs.
     private static Sekreto ChainOf(object value)
     {
-        object chain = Entry(value)["chain"];
-        return new Sekreto(Providers.MakeChain(chain), Providers.ChainNames(chain), false);
+        return new Sekreto(new SekretoOptions
+        {
+            Providers = Entry(value)["chain"] as List<object>,
+            Plugins = SekretoPlugins.All(),
+            Cache = false,
+        });
     }
 
     private static readonly Subject VALIDNAME = args => Names.ValidName(args[0]);
@@ -113,13 +122,8 @@ internal static class Program
         }
     }
 
-    private static int Main(string[] args)
+    private static int Conformance()
     {
-        if (0 < args.Length)
-        {
-            only = args[0];
-        }
-
         RunPack R = Runner.MakeRunner(SpecFile("sekreto.json")).Run("sekreto");
 
         TestCase("validname", () => R.RunSetFlags(R.Set("validname"), Flags.NoNull(), VALIDNAME));
@@ -140,5 +144,47 @@ internal static class Program
         Console.WriteLine("\n" + passcount + " passed, " + failcount + " failed");
 
         return 0 == failcount ? 0 : 1;
+    }
+
+    // The seam the conformance suite CANNOT see, because it hands every
+    // plugin to every chain it builds: test/Plugins.cs.
+    private static int Seams()
+    {
+        Console.WriteLine("--- plugin seam ---");
+
+        foreach (KeyValuePair<string, Action> seam in Seam.Cases())
+        {
+            TestCase(seam.Key, seam.Value);
+        }
+
+        Console.WriteLine("\n" + passcount + " passed, " + failcount + " failed");
+
+        return 0 == failcount ? 0 : 1;
+    }
+
+    private static int Main(string[] args)
+    {
+        if (0 < args.Length && "plugins" == args[0])
+        {
+            return Seams();
+        }
+
+        if (0 < args.Length)
+        {
+            only = args[0];
+        }
+
+        int conformance = Conformance();
+
+        if (null != only)
+        {
+            return conformance;
+        }
+
+        passcount = 0;
+        failcount = 0;
+        Console.WriteLine();
+
+        return 0 == conformance + Seams() ? 0 : 1;
     }
 }

@@ -12,8 +12,17 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::rc::Rc;
 
-use crate::providers::Provider;
+use voxgig_plugin::catalog::{make_catalog, Catalog, Definition};
+use voxgig_plugin::host::Host;
+use voxgig_plugin::refs::{check_tag, format_ref};
+use voxgig_plugin::types::PluginError;
+use voxgig_plugin::value::Value;
+
+use crate::providers::{
+    builtins, optionsof, Provider, ProviderSpec, ERROR_CODE, PLUGIN_KINDS, PROVIDER_EXPORT,
+};
 
 /// Anything sekreto refuses to do: a bad name, a missing secret, a provider
 /// that could not be reached.
@@ -262,10 +271,82 @@ pub fn storename(provider: &dyn Provider) -> String {
         .to_string()
 }
 
+/// What building a chain can refuse with.
+///
+/// Two shapes, and keeping them apart is the whole point. A `SekretoError`
+/// is sekreto's own refusal - an unknown kind, an invalid store name, a
+/// provider that would not accept its configuration - and the spec pins
+/// those messages byte for byte. Anything else a definition raised is the
+/// HOST's report of it, kept exactly as it came: the §12 code is that
+/// error's identity and not sekreto's to rewrite.
+#[derive(Clone, Debug)]
+pub enum ChainError {
+    Sekreto(SekretoError),
+    Plugin(PluginError),
+}
+
+impl ChainError {
+    /// The message, whichever half it came from.
+    pub fn message(&self) -> String {
+        match self {
+            ChainError::Sekreto(err) => err.message.clone(),
+            ChainError::Plugin(err) => err.message.clone(),
+        }
+    }
+}
+
+impl fmt::Display for ChainError {
+    fn fmt(&self, out: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(out, "{}", self.message())
+    }
+}
+
+impl std::error::Error for ChainError {}
+
+impl From<SekretoError> for ChainError {
+    fn from(err: SekretoError) -> Self {
+        ChainError::Sekreto(err)
+    }
+}
+
+/// A `PluginError` back as itself when it is a `SekretoError` that crossed
+/// the boundary, and as the host's report of anything else.
+///
+/// `providerplugin` puts the `sekreto_error` code on; this takes it off,
+/// byte for byte. Nowhere else catches and rewraps.
+impl From<PluginError> for ChainError {
+    fn from(err: PluginError) -> Self {
+        if ERROR_CODE == err.code {
+            if let Some(cause) = err.details.get("cause").as_str() {
+                return ChainError::Sekreto(SekretoError::new(cause));
+            }
+        }
+        ChainError::Plugin(err)
+    }
+}
+
+/// How a `Sekreto` is built.
+///
+/// `plugins` is the load-bearing one: a `Sekreto` can build the four
+/// built-in kinds and EXACTLY the plugin definitions handed in here.
+/// Loading is explicit, never a side effect of importing - a list given to
+/// a constructor cannot be erased by a compiler, and the set of stores an
+/// app can reach is not something to discover at run time.
+#[derive(Default)]
+pub struct Options {
+    /// The provider kinds this Sekreto may build, beyond the built-ins.
+    /// A plugin naming a built-in kind replaces it.
+    pub plugins: Vec<Definition>,
+    /// The chain, in resolution order.
+    pub providers: Vec<ProviderSpec>,
+    /// Ask the providers afresh every time.
+    pub nocache: bool,
+}
+
 /// One provider in the chain, under the store name it answers to.
 struct Entry {
     store: String,
-    provider: Box<dyn Provider>,
+    provider: Rc<dyn Provider>,
 }
 
 /// The secrets facade: a chain of providers plus a cache.
@@ -274,6 +355,12 @@ struct Entry {
 /// first hit, and the caller never learns which store answered. `getfrom` is
 /// directed - it names the store, and only that store is asked.
 pub struct Sekreto {
+    /// The voxgig/plugin host every spec'd provider is an instance of, and
+    /// the catalog of definitions it can build: the built-ins plus what
+    /// `Options::plugins` handed in.
+    host: Host,
+    catalog: Catalog,
+
     entries: Vec<Entry>,
     docache: bool,
     // A Vec, not a map: the store a value came from stays attached, and
@@ -287,38 +374,139 @@ pub struct Sekreto {
 }
 
 impl Sekreto {
-    /// A Sekreto over this chain, caching resolved values. Each provider
-    /// answers to its own kind as a store name.
-    pub fn new(providers: Vec<Box<dyn Provider>>) -> Self {
-        Sekreto::named(providers, &[], true)
-    }
+    /// A Sekreto over this chain.
+    pub fn new(options: Options) -> Result<Sekreto, ChainError> {
+        // Built-ins first, then the plugins, into one catalog: a plugin
+        // that names a built-in kind replaces it, which is how a host
+        // substitutes an implementation and never an accident, because the
+        // four names are documented.
+        let mut definitions = builtins();
+        definitions.extend(options.plugins);
+        let catalog = make_catalog(definitions)?;
 
-    /// A Sekreto that asks its providers afresh every time.
-    pub fn uncached(providers: Vec<Box<dyn Provider>>) -> Self {
-        Sekreto::named(providers, &[], false)
-    }
-
-    /// A Sekreto whose providers answer to the given store names, in the same
-    /// order. A name left empty falls back to the provider's kind.
-    pub fn named(providers: Vec<Box<dyn Provider>>, names: &[String], docache: bool) -> Self {
-        let entries = providers
-            .into_iter()
-            .enumerate()
-            .map(|(index, provider)| {
-                let store = match names.get(index) {
-                    Some(name) if !name.is_empty() => name.clone(),
-                    _ => storename(provider.as_ref()),
-                };
-                Entry { store, provider }
-            })
-            .collect();
-
-        Sekreto {
-            entries,
-            docache,
+        let mut sek = Sekreto {
+            host: Host::with_catalog(&Value::map(), catalog.clone()),
+            catalog,
+            entries: Vec::new(),
+            docache: !options.nocache,
             cache: Vec::new(),
             seen: Vec::new(),
+        };
+
+        for spec in &options.providers {
+            // A provider already built joins the chain as it is, backed by
+            // no instance: it is not a kind, so there is nothing to load.
+            if let Some(provider) = &spec.provider {
+                let store = if spec.name.is_empty() {
+                    storename(provider.as_ref())
+                } else {
+                    spec.name.clone()
+                };
+                sek.entries.push(Entry {
+                    store,
+                    provider: provider.clone(),
+                });
+                continue;
+            }
+
+            let entry = sek.declare(spec)?;
+            sek.entries.push(entry);
         }
+
+        Ok(sek)
+    }
+
+    /// One chain entry, as a plugin instance.
+    ///
+    /// The instance is `kind` for a store named after its kind and
+    /// `kind$store` otherwise - `hashicorp$prod` - so `host().list()` reads
+    /// like the chain. A store name that is already taken gets a numbered
+    /// tag from the host instead, because two providers MAY share a store
+    /// name (a directed read walks both) and an instance ref may not.
+    fn declare(&mut self, spec: &ProviderSpec) -> Result<Entry, ChainError> {
+        let kind = spec.kind.as_str();
+
+        if !self.catalog.has(kind) {
+            return Err(SekretoError::new(unknownkind(kind, &self.catalog)).into());
+        }
+
+        let store = if spec.name.is_empty() {
+            kind.to_string()
+        } else {
+            spec.name.clone()
+        };
+
+        if !check_tag(&Value::str(&store)) {
+            return Err(SekretoError::new(format!("sekreto: invalid store name: {}", store)).into());
+        }
+
+        let wanted = if store == kind {
+            kind.to_string()
+        } else {
+            format_ref(&Value::str(kind), &Value::str(&store))?
+        };
+
+        // A repeat keeps its STORE name and takes a numbered tag: `?` is
+        // the host's own request for the lowest unused one.
+        let mut declaration = Value::map();
+        declaration.set("options", optionsof(spec));
+        if self.host.instance(&Value::str(&wanted))?.is_some() {
+            declaration.set("definition", Value::str(kind));
+            declaration.set("tag", Value::str("?"));
+        }
+
+        // `load` runs the definition's `define`, which builds the provider
+        // from the spec; `activate` takes the instance live. Nothing is
+        // contacted by either: a provider opens nothing until its first
+        // lookup.
+        let loaded = self.host.load(&Value::str(&wanted), &declaration)?;
+        let eref = loaded.borrow().eref.clone();
+        self.host.activate(&Value::str(&eref))?;
+
+        let exported = self
+            .host
+            .exports(&format!("{}/{}", eref, PROVIDER_EXPORT))?;
+
+        let provider = match &exported {
+            Value::Opaque(held) => held.downcast_ref::<Rc<dyn Provider>>().cloned(),
+            _ => None,
+        };
+
+        match provider {
+            Some(provider) => Ok(Entry { store, provider }),
+            None => Err(SekretoError::new(format!(
+                "sekreto: plugin {} exported no provider",
+                kind
+            ))
+            .into()),
+        }
+    }
+
+    /// The voxgig/plugin host every spec'd provider is an instance of.
+    /// Read it for introspection - `list()` names each store's ref and
+    /// status - and nothing on it advances the chain.
+    pub fn host(&self) -> &Host {
+        &self.host
+    }
+
+    /// The definitions this Sekreto can build: the built-ins plus what
+    /// `Options::plugins` handed in.
+    pub fn catalog(&self) -> &Catalog {
+        &self.catalog
+    }
+
+    /// Tear the chain down: every plugin instance is deactivated and
+    /// unloaded, in reverse, releasing whatever a provider acquired at
+    /// activation. Afterwards there is nothing to read from - `get` reports
+    /// every secret unknown - and the cache is dropped, though `redact`
+    /// still knows every value that was ever resolved.
+    pub fn close(&mut self) -> Result<(), ChainError> {
+        let outcome = self.host.close();
+
+        self.entries.clear();
+        self.cache.clear();
+
+        outcome.map_err(ChainError::from)
     }
 
     /// The secret, or a SekretoError if no provider has it.
@@ -460,4 +648,27 @@ impl Sekreto {
     pub fn refresh(&mut self) {
         self.cache.clear();
     }
+}
+
+/// The message for a kind the catalog does not hold.
+///
+/// A kind sekreto has never heard of is a typo; a kind that exists as a
+/// plugin but was not passed in is the split working as designed, and
+/// telling you what to pass. Collapsing the two was the first thing that
+/// made the split confusing to use.
+fn unknownkind(kind: &str, catalog: &Catalog) -> String {
+    let message = format!(
+        "sekreto: unknown provider kind: {} (available: {})",
+        kind,
+        catalog.names().join(", ")
+    );
+
+    if PLUGIN_KINDS.contains(&kind) {
+        return format!(
+            "{} - {} is a sekreto plugin, not built in: pass it in the plugins option",
+            message, kind
+        );
+    }
+
+    message
 }

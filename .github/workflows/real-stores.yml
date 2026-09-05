@@ -66,6 +66,14 @@ jobs:
           repository: voxgig/omni
           path: .omni
 
+      # The library's one Voxgig dependency: an adopted port does not
+      # build without it, and this workflow builds every port.
+      - name: Check out voxgig/plugin
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          repository: voxgig/plugin
+          path: .plugin
+
       - name: Check out boru-lang/boru
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -245,6 +253,7 @@ jobs:
       - name: Build every port
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
+          PLUGIN_HOME: ${{ github.workspace }}/.plugin
         run: |
           for lang in $(make -s print-langs); do
             echo "======== $lang ========"
@@ -259,6 +268,7 @@ jobs:
       - name: Real stores
         env:
           OMNI_HOME: ${{ github.workspace }}/.omni
+          PLUGIN_HOME: ${{ github.workspace }}/.plugin
           BORU: ${{ steps.boru.outcome == 'success' && format('{0}/boru-bin', github.workspace) || '' }}
           # A port that did not build must fail the job, not be skipped.
           REQUIRE_ALL: '1'

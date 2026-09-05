@@ -6,17 +6,22 @@
 ;; test; neither is part of what a consumer takes, and the aliases below add
 ;; them back for the Makefile.
 ;;
-;; :deps is empty for the same reason it is empty in every other port: the
-;; library depends on nothing but its language's own runtime, which for
-;; Clojure the CLI tool supplies. There is no JSON library here, and no HTTP
-;; client - see src/voxgig/sekreto/json.clj and the java.net.http interop in
-;; src/voxgig/sekreto/providers.clj.
+;; `src` and `plugins` are BOTH the library, and the split between them is
+;; the boundary this port exists to keep: `src` is the chain, the four
+;; built-in kinds and the plugin bridge, and it requires nothing under
+;; `plugins`. The ten kinds that open a socket, sign a request or spawn a
+;; process live under `plugins`, one namespace each, and a chain may name
+;; one only if the calling project passed the definition in. `make
+;; check-core` builds `src` with `plugins` off the classpath entirely, which
+;; is what makes the rule a fact rather than a habit.
 ;;
-;; The conformance runner is a checkout, not a published artifact, so it is
-;; not named here either: the Makefile puts its source directory on the
-;; classpath with -Sdeps, the way the other JVM ports pass a path to their
-;; compiler. Nothing a consumer resolves can reach it.
-{:paths ["src"]
+;; :deps is empty because the library's one dependency is voxgig/plugin,
+;; which has no published Clojure artifact and no deps.edn of its own: the
+;; Makefile puts its source directory on the classpath, the way the other
+;; JVM port passes a path to its compiler. There is no JSON library here
+;; either, and no HTTP client - see src/voxgig/sekreto/json.clj and the
+;; java.net.http interop in plugins/voxgig/sekreto/plugins/httpjson.clj.
+{:paths ["src" "plugins"]
  :deps {}
  :aliases
  {;; The CLI, and the directory its AOT-compiled classes are written to:

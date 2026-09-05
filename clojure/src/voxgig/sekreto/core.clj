@@ -1,22 +1,20 @@
-;; sekreto: one interface for secrets, wherever they live.
+;; The names, the errors and the text helpers - the half of sekreto that
+;; does not know what a provider is.
 ;;
-;; A Sekreto is an ordered chain of providers. `get` asks each in turn and
-;; returns the first hit, so an app can be configured from environment
-;; variables in development and a vault in production without changing a
-;; line of its own code.
+;; `voxgig.sekreto.providers` builds the four built-in kinds out of these,
+;; and `voxgig.sekreto.chain` builds a chain out of those; `voxgig.sekreto`
+;; is the one namespace a consumer requires, and republishes all three.
 ;;
-;; This namespace is the facade and the name helpers - everything that does
-;; not know what a provider kind is. `voxgig.sekreto.providers` knows the
-;; kinds and depends on this; `voxgig.sekreto` is the one namespace a
-;; consumer requires, and republishes both.
+;; The split is not a matter of taste. The provider kinds need the name
+;; helpers, so the namespace that defines those cannot be the one that
+;; builds a chain out of kinds - a namespace cycle is a load error in
+;; Clojure, not a warning.
 ;;
 ;; A port of typescript/src/Sekreto.ts, which is canonical.
 
 (ns voxgig.sekreto.core
-  (:refer-clojure :exclude [get])
   (:require [clojure.string :as string]
-            [voxgig.sekreto.json :as json]
-            [voxgig.sekreto.provider :as provider])
+            [voxgig.sekreto.json :as json])
   (:import [java.util Locale]))
 
 (defn sekretoerror
@@ -177,139 +175,15 @@
                     (sort-by (fn [value] (- (count value)))))]
     (reduce (fn [out value] (string/replace out value "[redacted]")) body usable)))
 
-(defn storename
-  "The store name a provider answers to when nothing says otherwise.
-
-  `describe` opens with the provider's kind - `hashicorp:...`,
-  `dotenv:...`, plain `env` - so the kind is the natural default, and a
-  custom provider gets a sensible name without implementing anything extra."
-  [prov]
-  (apply str (take-while (fn [ch] (not= \: ch)) (provider/describe prov))))
-
-;; --------------------------------------------------------------- the chain
-
 (defn notempty
   "The string, when it is one and is not empty; nil otherwise. Config that
   arrives as an empty string means \"not set\" everywhere in this library."
   [value]
   (when (and (string? value) (not= "" value)) value))
 
-(defrecord Sekreto [entries docache cache seen])
-
-(defn make
-  "A Sekreto from live providers.
-
-  `:names` gives the store names, positionally; an entry left nil or empty
-  falls back to the provider's kind. `:cache` turns the read cache off,
-  which the spec's chain groups do so that each entry starts clean."
-  ([providers] (make providers nil))
-  ([providers {:keys [names cache] :or {cache true}}]
-   (let [named (vec names)]
-     (->Sekreto
-      (vec (map-indexed
-            (fn [index prov]
-              {:store (or (notempty (nth named index nil)) (storename prov))
-               :provider prov})
-            providers))
-      cache
-      ;; A vector, not a map: the store a value came from stays attached, and
-      ;; redaction order does not vary between runs.
-      (atom [])
-      ;; Every value ever resolved, for `redactall`. Kept independently of
-      ;; the read cache so that redaction still works when the cache is off -
-      ;; otherwise an uncached Sekreto would silently disable redaction and
-      ;; leak secrets to logs.
-      (atom [])))))
-
-(defn- resolvechain [secrets store name entries]
-  (checkname name)
-
-  (let [hit (when (:docache secrets)
-              (some (fn [entry] (when (and (= store (:store entry)) (= name (:name entry))) entry))
-                    @(:cache secrets)))]
-    (if (some? hit)
-      (:value hit)
-      (let [found (some (fn [entry] (provider/lookup (:provider entry) name)) entries)]
-        (when (some? found)
-          (when (:docache secrets)
-            (swap! (:cache secrets) conj {:store store :name name :value found}))
-          (swap! (:seen secrets) conj found))
-        found))))
-
-(defn tryget
-  "The secret, or nil if no provider has it. Named `tryget` because `try`
-  is a Clojure special form."
-  [secrets name]
-  (resolvechain secrets "" name (:entries secrets)))
-
-(defn get
-  "The secret, or a sekreto error if no provider has it."
-  [secrets name]
-  (let [found (tryget secrets name)]
-    (when (nil? found)
-      (throw (sekretoerror (str "sekreto: unknown secret: " name))))
-    found))
-
-(defn tryfrom
-  "The secret from one named store, or nil if that store does not have it.
-
-  Naming a store that is not in the chain is an error, not a miss: `tryget`
-  already means \"this store may not have it\", so it cannot also mean
-  \"this store may not exist\" without hiding a typo."
-  [secrets store name]
-  (let [matching (filterv (fn [entry] (= store (:store entry))) (:entries secrets))]
-    (when (empty? matching)
-      (throw (sekretoerror (str "sekreto: unknown store: " store))))
-    (resolvechain secrets store name matching)))
-
-(defn getfrom
-  "The secret from one named store, or a sekreto error if that store does
-  not have it."
-  [secrets store name]
-  (let [found (tryfrom secrets store name)]
-    (when (nil? found)
-      (throw (sekretoerror (str "sekreto: unknown secret: " store ":" name))))
-    found))
-
-(defn has
-  "Does any provider have this secret?"
-  [secrets name]
-  (some? (tryget secrets name)))
-
-(defn hasin
-  "Does this named store have this secret?"
-  [secrets store name]
-  (some? (tryfrom secrets store name)))
-
-(defn all
-  "Every named secret at once, in the order asked. Missing ones are an error."
-  [secrets names]
-  (json/omap (map (fn [name] [name (get secrets name)]) names)))
-
-(defn sources
-  "A description of each provider, in resolution order."
-  [secrets]
-  (mapv (fn [entry] (provider/describe (:provider entry))) (:entries secrets)))
-
-(defn stores
-  "The name of each store that can be named by `getfrom`, in resolution
-  order and without repeats."
-  [secrets]
-  (vec (distinct (map :store (:entries secrets)))))
-
-(defn redactall
-  "Replace every value THIS Sekreto has resolved with `[redacted]`.
-
-  Named `redactall` - as in the Perl port - because `redact` is already the
-  pure two-argument function above, and both take two arguments here.
-
-  Works whether or not caching is enabled: the redaction list is kept
-  independently of the read cache."
-  [secrets text]
-  (redact text @(:seen secrets)))
-
-(defn refresh
-  "Drop cached values, so the next `get` asks the providers again."
-  [secrets]
-  (reset! (:cache secrets) [])
-  nil)
+(defn getenv
+  "An environment variable, or nil. NOT emptied: a variable set to the empty
+  string is a value the env provider answers with, and only the callers that
+  treat empty as unset - `firstof` in the shared HTTP helpers - say so."
+  [name]
+  (System/getenv name))

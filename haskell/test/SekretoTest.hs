@@ -17,22 +17,26 @@
 
 module Main (main) where
 
+import AllPlugins (allplugins)
 import Control.Exception (SomeException, throwIO, try)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.Maybe (fromMaybe)
 import Omni
 import Provider (forceall, forced)
-import Providers (AuthSpec (..), ProviderSpec (..), emptyauth, emptyspec, sekreto)
+import Providers (AuthSpec (..), ProviderSpec (..), emptyauth, emptyspec)
 import Sekreto
-  ( Sekreto,
+  ( Options (..),
+    Sekreto,
     VaultRef (..),
     awsparam,
+    emptyoptions,
     envkey,
     flatname,
     get,
     getfrom,
     parsedotenv,
     redact,
+    sekreto,
     sources,
     stores,
     tryfrom,
@@ -146,7 +150,16 @@ authof entry
 --
 -- Caching is off on every chain the suite builds.
 chainof :: Json -> IO Sekreto
-chainof entry = sekreto (map specof (fromMaybe [] (aslist (jget entry "chain")))) False
+chainof entry =
+  sekreto
+    emptyoptions
+      { -- EVERY plugin, to every chain: which is exactly why this suite
+        -- can never notice a missing one, and why test/PluginTest.hs
+        -- exists beside it.
+        optplugins = allplugins,
+        optproviders = map specof (fromMaybe [] (aslist (jget entry "chain"))),
+        optcache = False
+      }
 
 -- | The name a group's entry asks about.
 namearg :: Json -> String

@@ -58,9 +58,17 @@ MANIFEST = [
     # cannot quietly turn this into a no-op either.
     ('typescript', 'typescript/package.json', '"dependencies": {',
      '"dependencies": {\n    "@voxgig/omni": "^0.1.1",'),
-    # An npm alias: same evasion, different spelling.
-    ('javascript', 'javascript/package.json', '"main": "src/index.js",',
-     '"dependencies": { "runner": "npm:@voxgig/omni@1.0.0" },\n  "main": "src/index.js",'),
+    # An npm alias: same evasion, different spelling -- and, like the
+    # typescript case above, injected INTO the real dependencies block.
+    # This case used to add a second one anchored on "main", which worked
+    # only while this port had no dependencies at all. Adopting the plugin
+    # architecture gave it @voxgig/plugin-js, and from that commit the
+    # duplicate block sat ahead of the real one where JSON's last key wins
+    # -- json.loads and npm both read past it, so the mutation tested
+    # nothing and the suite reported it clean. Exactly the failure the
+    # typescript comment predicts, met a second time.
+    ('javascript', 'javascript/package.json', '"dependencies": {',
+     '"dependencies": {\n    "runner": "npm:@voxgig/omni@1.0.0",'),
     ('python', 'python/pyproject.toml', '[project]',
      '[project]\ndependencies = ["voxgig-omni>=0.1"]'),
     # Dependencies declared dynamic with no resolvable source must FAIL.

@@ -22,9 +22,19 @@ use Voxgig\Sekreto\Sekreto;
 
 use function Voxgig\Sekreto\parsedotenv;
 use function Voxgig\Sekreto\redact;
-use function Voxgig\Sekreto\sigv4;
 
 require_once __DIR__ . '/../src/Sekreto.php';
+
+// The conformance suite hands EVERY plugin to every chain it builds, which
+// is exactly why it can never see a plugin that a consumer failed to pass
+// in - test/plugins.php pins that half. `sigv4` lives with the aws plugin:
+// it is the crypto edge, and only a program that names an AWS kind
+// requires it.
+require_once __DIR__ . '/../plugins/plugins.php';
+require_once __DIR__ . '/../plugins/aws.php';
+
+use function Voxgig\Sekreto\Plugins\allplugins;
+use function Voxgig\Sekreto\Plugins\sigv4;
 
 /** Find the shared spec directory by walking up from this file. */
 function specfile(string $name): string
@@ -69,7 +79,11 @@ require_once omnihome() . '/php/src/Runner.php';
  */
 function chainof(array $spec): Sekreto
 {
-    return new Sekreto(['providers' => $spec['chain'], 'cache' => false]);
+    return new Sekreto([
+        'plugins' => allplugins(),
+        'providers' => $spec['chain'],
+        'cache' => false,
+    ]);
 }
 
 $only = $argv[1] ?? null;

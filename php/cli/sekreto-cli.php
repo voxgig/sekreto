@@ -25,9 +25,18 @@ namespace Voxgig\Sekreto\Cli;
 
 use Voxgig\Sekreto\Sekreto;
 
-use function Voxgig\Sekreto\httpget;
-
+// The CLI's chain is chosen by a --source flag at run time, so it takes
+// the full set: ten requires, every network client and the two
+// child-process kinds. An app that knows its chain requires the one or two
+// kinds it configures instead. `httpget` is the plugins' shared HTTP
+// helper - the CLI calls the API with it, and it lives outside the core
+// for the same reason every socket does.
 require_once __DIR__ . '/../src/Sekreto.php';
+require_once __DIR__ . '/../plugins/plugins.php';
+require_once __DIR__ . '/../plugins/httpjson.php';
+
+use function Voxgig\Sekreto\Plugins\allplugins;
+use function Voxgig\Sekreto\Plugins\httpget;
 
 const LANG = 'php';
 
@@ -173,7 +182,7 @@ function main(array $argv): int
     $storeflag = array_search('--store', $args, true);
     $store = false === $storeflag ? '' : ($args[$storeflag + 1] ?? '');
 
-    $secrets = new Sekreto(['providers' => chainfor($source)]);
+    $secrets = new Sekreto(['plugins' => allplugins(), 'providers' => chainfor($source)]);
 
     try {
         $token = '' === $store

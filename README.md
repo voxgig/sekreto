@@ -100,25 +100,25 @@ clients are loaded differs.
 | [typescript](typescript/) *(canonical)* | yes | `typescript/plugins/` | `@voxgig/plugin` |
 | [go](go/) | yes | `go/plugins/<kind>/` | `github.com/voxgig/plugin/go` |
 | [python](python/) | yes | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git) |
-| [javascript](javascript/) | switch — pending | | exists |
-| [ruby](ruby/) | switch — pending | | exists |
-| [php](php/) | switch — pending | | exists |
-| [perl](perl/) | switch — pending | | exists |
-| [rust](rust/) | switch — pending | | exists |
-| [java](java/) | switch — pending | | exists |
-| [csharp](csharp/) | switch — pending | | exists |
-| [kotlin](kotlin/) | switch — pending | | exists |
-| [scala](scala/) | switch — pending | | exists |
-| [clojure](clojure/) | switch — pending | | exists |
-| [swift](swift/) | switch — pending | | exists |
-| [dart](dart/) | switch — pending | | exists |
-| [elixir](elixir/) | switch — pending | | exists |
-| [cpp](cpp/) | switch — pending | | exists |
-| [c](c/) | switch — pending | | exists |
-| [lua](lua/) | switch — pending | | exists |
-| [ocaml](ocaml/) | switch — pending | | exists |
-| [haskell](haskell/) | switch — pending | | exists |
-| [lean](lean/) | switch — pending | | exists |
+| [javascript](javascript/) | yes | `javascript/plugins/` | npm `@voxgig/plugin-js` |
+| [ruby](ruby/) | yes | `ruby/lib/voxgig_sekreto/plugins/` | a checkout, found or fetched by `make deps` |
+| [php](php/) | yes | `php/plugins/` | a checkout, found or fetched by `make deps` |
+| [perl](perl/) | yes | `perl/plugins/` | a checkout, found or fetched by `make deps` |
+| [rust](rust/) | yes | `rust/plugins/` (a crate each) | a checkout, linked by `make deps` |
+| [java](java/) | yes | `java/plugins/` | a checkout, found or fetched by `make deps` |
+| [csharp](csharp/) | yes | `csharp/plugins/` (its own assembly) | a checkout, found or fetched by `make deps` |
+| [kotlin](kotlin/) | yes | `kotlin/plugins/` | a checkout, found or fetched by `make deps` |
+| [scala](scala/) | yes | `scala/plugins/` | a checkout, found or fetched by `make deps` |
+| [clojure](clojure/) | yes | `clojure/plugins/` | a checkout, found by `make deps`; classpaths written by the Makefile (plugin's clojure port ships no `deps.edn`) |
+| [swift](swift/) | yes | `swift/plugins/` (its own module) | a checkout, found or fetched by `make deps` |
+| [dart](dart/) | yes | `dart/plugins/` | a checkout, found or fetched by `make deps` (plugin's dart port is not on pub, so nothing declares it) |
+| [elixir](elixir/) | yes | `elixir/plugins/` | a checkout, found or fetched by `make deps` |
+| [cpp](cpp/) | yes | `cpp/plugins/` (its own archive) | a checkout, compiled into this port's `build/` |
+| [c](c/) | yes | `c/plugins/` (one object per kind) | a checkout, compiled into this port's `build/` |
+| [lua](lua/) | yes | `lua/src/sekreto/plugins/` | a checkout, found or fetched by `make deps` |
+| [ocaml](ocaml/) | yes | `ocaml/plugins/` | a checkout, compiled into this port's `build/` |
+| [haskell](haskell/) | yes | `haskell/plugins/` | a checkout, compiled into this port's `build/` |
+| [lean](lean/) | yes | `lean/plugins/` (`SekretoPlugins.*`) | a checkout, compiled into this port's `build/` |
 | [zig](zig/) | yes | `zig/plugins/` | plugin's zig port as a named module — a checkout, found or fetched by `make deps` |
 
 **typescript** — one import per plugin, or the full set from

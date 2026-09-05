@@ -18,6 +18,7 @@
 import Foundation
 import Omni
 import Sekreto
+import SekretoPlugins
 
 typealias J = Omni.Json
 
@@ -69,7 +70,10 @@ func textmap(_ values: Ordered<String>) -> J {
 }
 
 /// One provider spec, out of the spec's declarative chain description.
-func specof(_ entry: J) -> ProviderSpec {
+///
+/// Named `chainspec` rather than `specof`: the library has a `specof` of
+/// its own, which reads a spec back off a plugin instance's options.
+func chainspec(_ entry: J) -> ProviderSpec {
   var values: Ordered<String>? = nil
 
   if let source = entry.get("values").asmap {
@@ -140,8 +144,8 @@ func specof(_ entry: J) -> ProviderSpec {
 /// construction failure inside the subject reaches omni as a subject
 /// error.
 func chainof(_ entry: J) throws -> Sekreto {
-  let chain = (entry.get("chain").aslist ?? []).map(specof)
-  return try makesekreto(chain, cache: false)
+  let chain = (entry.get("chain").aslist ?? []).map(chainspec)
+  return try makesekreto(chain, plugins: allplugins, cache: false)
 }
 
 /// The name a group's entry asks about.

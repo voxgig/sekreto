@@ -8,17 +8,39 @@ package Voxgig::Sekreto;
 # line of its own code.
 #
 # A port of typescript/src/Sekreto.ts, which is canonical.
+#
+# THE CORE LOADS NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR SIGNS
+# A REQUEST. The four built-in kinds - env, memory, dotenv, file - read at
+# most a local file; every other kind is a voxgig/plugin definition under
+# `plugins/`, and a chain may name one only if the calling project handed it
+# in through `plugins`:
+#
+#     use Voxgig::Sekreto ();
+#     use Voxgig::Sekreto::Plugins::Hashicorp qw(hashicorp);
+#
+#     my $secrets = Voxgig::Sekreto->new({
+#         plugins   => [ hashicorp() ],
+#         providers => [ { kind => 'env' }, { kind => 'hashicorp', addr => $addr } ],
+#     });
+#
+# or, for every kind at once, `allplugins()` from Voxgig::Sekreto::Plugins.
+# See docs/design/plugin-providers.md.
 
 use strict;
 use warnings;
 
 use Exporter 'import';
 
-use Voxgig::Sekreto::Providers qw(makechain makeprovider);
-use Voxgig::Sekreto::Sigv4 qw(sigv4);
+use Scalar::Util ();
+
+use Voxgig::Plugin qw(check_tag format_ref make_catalog make_host);
+
+use Voxgig::Sekreto::Addr qw(checkaddr safeaddr);
+use Voxgig::Sekreto::Providers qw(providerplugin);
 
 our @EXPORT_OK = qw(
-  awsparam envkey flatname parsedotenv redact sekreto sigv4 validname vaultref
+  awsparam checkaddr envkey flatname parsedotenv providerplugin redact safeaddr
+  sekreto validname vaultref
 );
 
 our $VERSION = '0.1.0';
@@ -235,15 +257,15 @@ sub redact {
     return $out;
 }
 
-# The store name a provider answers to when its spec does not say.
+# The store name a provider handed in ALREADY BUILT answers to.
 #
 # `describe` opens with the provider's kind - `hashicorp:...`, `dotenv:...`,
 # plain `env` - so the kind is the natural default, and a custom provider
-# gets a sensible name without implementing anything extra.
+# gets a sensible name without implementing anything extra. A spec'd
+# provider never reaches here: its store is its `name` or its `kind`,
+# decided by `declare` before the provider exists.
 sub storename {
-    my ( $provider, $spec ) = @_;
-
-    return $spec->{name} if $spec && $spec->{name};
+    my ($provider) = @_;
 
     return ( split( /:/, $provider->describe(), 2 ) )[0];
 }
@@ -258,19 +280,28 @@ sub new {
 
     my $opts = $options || {};
 
-    my @entries;
-    for my $entry ( @{ $opts->{providers} || [] } ) {
-        if ( ref($entry) && 'HASH' eq ref($entry) ) {
-            my $provider = makeprovider($entry);
-            push @entries, [ storename( $provider, $entry ), $provider ];
-        }
-        else {
-            push @entries, [ storename($entry), $entry ];
-        }
-    }
+    # Built-ins first, then the plugins, into one catalog: a plugin that
+    # names a built-in kind replaces it, which is how a host substitutes an
+    # implementation and never an accident, because the four names are
+    # documented.
+    #
+    # `catalog` is the definitions this Sekreto can build; `host` is the
+    # voxgig/plugin host every spec'd provider is an instance of.
+    my $catalog = make_catalog(
+        [
+            @{ Voxgig::Sekreto::Providers::builtins() },
+            map { definition($_) } @{ $opts->{plugins} || [] }
+        ]
+    );
 
     my $self = {
-        entries => \@entries,
+        catalog => $catalog,
+        host    => make_host( { catalog => $catalog } ),
+
+        # (store, provider) pairs, in chain order. A provider handed in
+        # live is backed by no instance; a spec'd one is an instance of its
+        # kind on the host.
+        entries => [],
         docache => ( exists $opts->{cache} && !$opts->{cache} ) ? 0 : 1,
 
         # A list, not a hash: the store a value came from stays attached,
@@ -284,7 +315,142 @@ sub new {
         seen => [],
     };
 
-    return bless $self, $class;
+    bless $self, $class;
+
+    for my $entry ( @{ $opts->{providers} || [] } ) {
+        if ( 'HASH' eq ( ref($entry) || '' ) ) {
+            push @{ $self->{entries} }, $self->declare($entry);
+        }
+        else {
+            push @{ $self->{entries} }, [ storename($entry), $entry ];
+        }
+    }
+
+    return $self;
+}
+
+# The voxgig/plugin host every spec'd provider is an instance of, and the
+# catalog of definitions this Sekreto can build from. For introspection -
+# `$secrets->host->list` names each store's ref and status - and nothing on
+# either advances the chain.
+sub host    { return $_[0]->{host} }
+sub catalog { return $_[0]->{catalog} }
+
+# One chain entry, as a plugin instance.
+#
+# The instance is `kind` for a store named after its kind and `kind$store`
+# otherwise - `hashicorp$prod` - so `host->list` reads like the chain. A
+# store name that is already taken gets a numbered tag from the host
+# instead, because two providers MAY share a store name (a directed read
+# walks both) and an instance ref may not.
+sub declare {
+    my ( $self, $spec ) = @_;
+
+    my $kind = $spec->{kind};
+
+    fail( unknownkind( $kind, $self->{catalog} ) )
+      if !defined $kind || ref($kind) || !$self->{catalog}->has($kind);
+
+    my $store = $spec->{name} || $kind;
+
+    fail( 'sekreto: invalid store name: ' . ( ref($store) ? '' : $store ) )
+      if !check_tag($store);
+
+    my $ref = $store eq $kind ? $kind : format_ref( $kind, $store );
+    $ref = $self->{host}->autotag($kind) if defined $self->{host}->instance($ref);
+
+    # `load` runs the definition's `define`, which builds the provider from
+    # the spec; `activate` takes the instance live. Nothing is contacted by
+    # either: a provider opens nothing until its first lookup.
+    my $ok = eval {
+        $self->{host}->load( $ref, { options => $spec } );
+        $self->{host}->activate($ref);
+        1;
+    };
+    die unwrap($@) if !$ok;
+
+    return [
+        $store,
+        $self->{host}->exports(
+            $ref . '/' . Voxgig::Sekreto::Providers::PROVIDER_EXPORT()
+        )
+    ];
+}
+
+# A plugin entry, checked to be a definition before the catalog sees it.
+#
+# A definition is a hashref, and a plugin module hands one back from a sub
+# named after the kind. The two ways to get that wrong in perl are to pass
+# the module name and to pass the sub without calling it, so both are
+# refused here, naming the call that was meant - rather than failing deep
+# inside voxgig/plugin with a message about a definition name.
+sub definition {
+    my ($plugin) = @_;
+
+    return $plugin if 'HASH' eq ( ref($plugin) || '' );
+
+    if ( defined $plugin && !ref($plugin) && $plugin =~ /::/ ) {
+        my $kind = lc( ( split( /::/, $plugin ) )[-1] );
+        fail(   'sekreto: not a plugin definition: the module ' 
+              . $plugin
+              . ' - call the definition it holds: use '
+              . $plugin . ' qw('
+              . $kind . '); '
+              . $kind
+              . '()' );
+    }
+
+    fail( 'sekreto: not a plugin definition: a code reference'
+          . ' - a definition is what calling it returns' )
+      if 'CODE' eq ( ref($plugin) || '' );
+
+    fail( 'sekreto: not a plugin definition: '
+          . ( !defined $plugin ? '' : ref($plugin) ? ref($plugin) : $plugin ) );
+}
+
+# The message for a kind the catalog does not hold.
+#
+# A kind sekreto has never heard of is a typo; a kind that exists as a
+# plugin but was not passed in is the split working as designed and telling
+# you what to pass. Collapsing the two was the first thing that made the
+# split confusing to use.
+sub unknownkind {
+    my ( $kind, $catalog ) = @_;
+
+    my $shown = ( defined $kind && !ref($kind) ) ? $kind : '';
+
+    my $message =
+        'sekreto: unknown provider kind: ' 
+      . $shown
+      . ' (available: '
+      . join( ', ', @{ $catalog->names } ) . ')';
+
+    $message .= ' - ' 
+      . $shown
+      . ' is a sekreto plugin, not built in: pass it in the plugins option'
+      if grep { $_ eq $shown } @{ Voxgig::Sekreto::Providers::kinds()->{plugin} };
+
+    return $message;
+}
+
+# A SekretoError that crossed the plugin boundary comes back out as itself,
+# byte for byte. Anything else is not sekreto's to rewrite.
+sub unwrap {
+    my ($err) = @_;
+
+    return $err if !Scalar::Util::blessed($err) || !$err->can('code');
+
+    my $code = eval { $err->code };
+    return $err
+      if !defined $code || Voxgig::Sekreto::Providers::ERROR_CODE() ne $code;
+
+    my $details = $err->{details};
+    return $err
+      if 'HASH' ne ( ref($details) || '' )
+      || !defined $details->{cause}
+      || ref( $details->{cause} );
+
+    return Voxgig::Sekreto::SekretoError->new( $details->{cause} );
 }
 
 # The secret, or a SekretoError if no provider has it.
@@ -409,6 +575,21 @@ sub redactall {
 sub refresh {
     my ($self) = @_;
     $self->{cache} = [];
+    return;
+}
+
+# Tear the chain down: every plugin instance is deactivated and unloaded,
+# in reverse, releasing whatever a provider acquired at activation.
+# Afterwards there is nothing to read from - `get` reports every secret
+# unknown - and the cache is dropped, though `redactall` still knows every
+# value that was ever resolved.
+sub close {
+    my ($self) = @_;
+
+    $self->{host}->close;
+    $self->{entries} = [];
+    $self->{cache}   = [];
+
     return;
 }
 

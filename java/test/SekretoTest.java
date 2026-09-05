@@ -11,12 +11,12 @@
 import com.voxgig.omni.Runner;
 import com.voxgig.omni.Runner.RunPack;
 import com.voxgig.omni.Runner.Subject;
-import com.voxgig.sekreto.Provider;
-import com.voxgig.sekreto.Providers;
 import com.voxgig.sekreto.Sekreto;
-import com.voxgig.sekreto.Sigv4;
+// `sigv4` lives with the aws plugin - it is the crypto edge, and the core
+// of no port imports a hash function - so the suite reaches it there.
+import com.voxgig.sekreto.plugins.Plugins;
+import com.voxgig.sekreto.plugins.Sigv4;
 import java.io.File;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -43,12 +43,21 @@ public final class SekretoTest {
     throw new IllegalStateException("sekreto: spec not found: " + name);
   }
 
-  /** Build a Sekreto from the spec's declarative chain description. */
+  /**
+   * Build a Sekreto from the spec's declarative chain description.
+   *
+   * <p>Every plugin, to every chain: the suite exercises all fourteen
+   * kinds, so it hands the full set in. That is also exactly why it can
+   * never see a MISSING plugin - what the split costs a consumer is
+   * pinned by PluginsTest instead.
+   */
   @SuppressWarnings("unchecked")
   static Sekreto chainof(Object value) {
     Map<String, Object> entry = (Map<String, Object>) value;
-    Object chain = entry.get("chain");
-    return new Sekreto(Providers.makechain(chain), Providers.chainnames(chain), false);
+    return new Sekreto(new Sekreto.Options()
+        .plugins(Plugins.ALL)
+        .providers(entry.get("chain"))
+        .cache(false));
   }
 
   @SuppressWarnings("unchecked")

@@ -1,8 +1,21 @@
 # RUN: make test
-# RUN-SOME: elixir -pa build -pa $OMNI/elixir/build test/sekreto_test.exs envkey
+# RUN-SOME: elixir -pa build -pa $PLUGIN/elixir/build -pa $OMNI/elixir/build \
+#             test/sekreto_test.exs envkey
 #
 # The sekreto conformance suite. Every port runs these same groups, from
 # the same spec/sekreto.json, through its own voxgig/omni runner.
+#
+# THIS SUITE LOADS EVERY PLUGIN, deliberately. The spec is the contract for
+# the whole library and exercises all fourteen provider kinds, so every
+# Sekreto built here is handed the full set. That is the split working, not
+# a leak of it: a CONSUMER passes the kinds it configures and needs nothing
+# else, while the suite that proves all fourteen behave has to have all
+# fourteen. What this suite therefore cannot see - a consumer's list, a
+# kind that was not passed in, the core reaching a plugin - is pinned by
+# test/plugins_test.exs.
+#
+# `sigv4` lives with the aws plugin now: it is the crypto edge, and only
+# the two aws kinds use it (docs/design/plugin-providers.md).
 #
 # No third-party test framework: a failing omni check raises
 # Voxgig.Omni.OmniError, so any host framework (ExUnit) reports it as a
@@ -15,8 +28,9 @@
 # null and value is guessed.
 
 alias Sekreto.AuthSpec
+alias Sekreto.Plugins
+alias Sekreto.Plugins.Signing
 alias Sekreto.ProviderSpec
-alias Sekreto.Signing
 alias Voxgig.Omni.OmniError
 alias Voxgig.Omni.Runner
 alias Voxgig.Omni.Util, as: U
@@ -25,8 +39,8 @@ defmodule SekretoTest do
   @moduledoc "The sekreto conformance harness for the Elixir port."
 
   alias Sekreto.AuthSpec
+  alias Sekreto.Plugins
   alias Sekreto.ProviderSpec
-  alias Sekreto.Signing
   alias Voxgig.Omni.OmniError
   alias Voxgig.Omni.Util, as: U
 
@@ -145,7 +159,7 @@ defmodule SekretoTest do
         _other -> []
       end
 
-    Sekreto.new(chain, cache: false)
+    Sekreto.new(chain, plugins: Plugins.all(), cache: false)
   end
 
   @doc "The name a group's entry asks about."
@@ -239,7 +253,7 @@ sigv4 = fn args ->
     end
 
   Map.new(
-    Sekreto.Sigv4.sigv4(%Signing{
+    Sekreto.Plugins.Sigv4.sigv4(%Signing{
       method: SekretoTest.str(entry, "method"),
       url: SekretoTest.str(entry, "url"),
       service: SekretoTest.str(entry, "service"),

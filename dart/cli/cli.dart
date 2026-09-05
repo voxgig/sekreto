@@ -18,13 +18,27 @@
 // Compiled to a self-contained native binary, because the suite runs it
 // from an empty working directory with a wiped environment: nothing may be
 // resolved relative to where it is started.
+//
+// It passes `allplugins`, because a CLI whose `--source` is chosen at run
+// time needs every kind. An app that knows its chain imports the two or
+// three it configures instead.
 
 import 'dart:convert';
 import 'dart:io';
 
 import '../src/json.dart';
-import '../src/providers.dart';
 import '../src/sekreto.dart';
+import '../src/spec.dart';
+
+// THE FULL SET, IMPORTED AS A VALUE and passed to the constructor below.
+//
+// A CLI genuinely wants all ten kinds - `--source` picks one at run time -
+// so this is the caller the full set exists for. It is a LIST HANDED TO A
+// CONSTRUCTOR, not a side effect of importing: an earlier shape registered
+// kinds at import, this file's only reference to the set was a type, the
+// compiler erased it, and every kind but two failed in the integration
+// suite while `make test` stayed green. See docs/design/plugin-providers.md.
+import '../plugins/plugins.dart';
 
 const String LANG = 'dart';
 
@@ -211,7 +225,7 @@ Future<int> run(List<String> args) async {
   String token;
 
   try {
-    secrets = sekreto(chainfor(source));
+    secrets = sekreto(chainfor(source), plugins: allplugins);
     token = store.isEmpty
         ? await secrets.get('api.token')
         : await secrets.getfrom(store, 'api.token');

@@ -14,13 +14,20 @@
 # Each source's configuration arrives in the environment variables its own
 # ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed in
 # chainfor below.
+#
+# THE FULL SET, PASSED TO Sekreto. The CLI is asked for any provider kind
+# on the command line, so it is the one consumer that legitimately wants
+# all ten plugins; an app passes the one or two it configures. Nothing in
+# the conformance suite can see this call - it hands every plugin to every
+# chain it builds - so test/plugins_test.exs pins it.
 
 defmodule Sekreto.Cli do
   @moduledoc "The integration CLI: the app that needs a secret."
 
   alias Sekreto.AuthSpec
-  alias Sekreto.Http
   alias Sekreto.Json
+  alias Sekreto.Plugins
+  alias Sekreto.Plugins.Http
   alias Sekreto.ProviderSpec
 
   @lang "elixir"
@@ -203,7 +210,7 @@ defmodule Sekreto.Cli do
 
     secrets =
       try do
-        Sekreto.new(chainfor(source))
+        Sekreto.new(chainfor(source), plugins: Plugins.all())
       rescue
         err -> throw({:fail, fail(Exception.message(err), 2)})
       end

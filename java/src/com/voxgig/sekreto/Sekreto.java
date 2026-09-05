@@ -6,6 +6,20 @@
 // line of its own code.
 //
 // A port of typescript/src/Sekreto.ts, which is canonical.
+//
+// THE CORE IMPORTS NO PROVIDER THAT OPENS A SOCKET, SPAWNS A PROCESS OR
+// SIGNS A REQUEST. The four built-in kinds - env, memory, dotenv, file -
+// read at most a local file; every other kind is a voxgig/plugin
+// definition under plugins/, and a chain may name one only if the
+// calling project handed it in through Options.plugins. That is what
+// keeps an SDK whose chain is [dotenv, env] from carrying AWS request
+// signing and seven HTTP vault clients.
+//
+// The boundary here is javac's: plugins/ is a source root of its own and
+// is on neither the sourcepath nor the classpath of the core's compile,
+// so an import of a plugin from this package does not compile. `make
+// check-core` reads the compiled core back with jdeps and says so.
+// See docs/design/plugin-providers.md.
 
 package com.voxgig.sekreto;
 
@@ -15,6 +29,11 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Pattern;
+import voxgig.plugin.Catalog;
+import voxgig.plugin.Definition;
+import voxgig.plugin.Host;
+import voxgig.plugin.Plugin;
+import voxgig.plugin.PluginException;
 
 public final class Sekreto {
 
@@ -32,13 +51,19 @@ public final class Sekreto {
 
   private static final Pattern NAMEPART = Pattern.compile("^[a-z0-9_]+$");
 
-  /** One provider in the chain, under the store name it answers to. */
+  /**
+   * One provider in the chain, under the store name it answers to, and
+   * the ref of the plugin instance that built it - empty for a live
+   * provider handed in directly, which no instance backs.
+   */
   private static final class Entry {
     final String store;
+    final String ref;
     final Provider provider;
 
-    Entry(String store, Provider provider) {
+    Entry(String store, String ref, Provider provider) {
       this.store = store;
+      this.ref = ref;
       this.provider = provider;
     }
   }
@@ -56,8 +81,69 @@ public final class Sekreto {
     }
   }
 
+  /**
+   * How a Sekreto is configured. Fluent because java has no object
+   * literal, and every field is optional:
+   *
+   * <pre>
+   *   new Sekreto(new Sekreto.Options()
+   *       .plugins(List.of(Hashicorp.PLUGIN))
+   *       .providers(List.of(
+   *           Map.of("kind", "env"),
+   *           Map.of("kind", "hashicorp", "name", "prod", "addr", addr))));
+   * </pre>
+   */
+  public static final class Options {
+    private final List<Object> providers = new ArrayList<>();
+    private final List<Definition> plugins = new ArrayList<>();
+    private boolean cache = true;
+
+    /**
+     * The provider chain, in resolution order. An entry is a live
+     * Provider, or the declarative spec of one - a map with a `kind`.
+     */
+    @SuppressWarnings("unchecked")
+    public Options providers(Object specs) {
+      if (specs instanceof List) {
+        providers.addAll((List<Object>) specs);
+      } else if (null != specs) {
+        providers.add(specs);
+      }
+      return this;
+    }
+
+    /**
+     * The provider kinds beyond the built-ins that `providers` may name,
+     * as voxgig/plugin definitions. Static and explicit: the calling
+     * project imports the plugins it needs and passes them here, and a
+     * kind it did not pass is unknown to this Sekreto.
+     */
+    public Options plugins(List<Definition> defs) {
+      if (null != defs) {
+        plugins.addAll(defs);
+      }
+      return this;
+    }
+
+    /** Cache resolved values (default: true). */
+    public Options cache(boolean on) {
+      this.cache = on;
+      return this;
+    }
+  }
+
   private final List<Entry> entries = new ArrayList<>();
   private final boolean docache;
+
+  /**
+   * The voxgig/plugin host every spec'd provider is an instance of. Read
+   * it for introspection - `host().list()` names each store's ref and
+   * status - and nothing on it advances the chain.
+   */
+  private final Host host;
+
+  /** The definitions this Sekreto can build: the built-ins plus plugins. */
+  private final Catalog catalog;
 
   // A list, not a map: the store a value came from stays attached, and
   // redaction order does not vary between runs.
@@ -69,36 +155,159 @@ public final class Sekreto {
   // to logs.
   private final List<String> seen = new ArrayList<>();
 
-  public Sekreto(List<Provider> useproviders) {
-    this(useproviders, true);
+  /** A Sekreto with no providers: every secret is unknown. */
+  public Sekreto() {
+    this(new Options());
   }
 
-  public Sekreto(List<Provider> useproviders, boolean usecache) {
-    this(useproviders, null, usecache);
-  }
+  public Sekreto(Options options) {
+    Options opts = null == options ? new Options() : options;
 
-  /**
-   * A Sekreto whose providers answer to the given store names, in the same
-   * order. A name left null or empty falls back to the provider's kind.
-   */
-  public Sekreto(List<Provider> useproviders, List<String> names, boolean usecache) {
-    if (null != useproviders) {
-      for (int index = 0; index < useproviders.size(); index++) {
-        Provider provider = useproviders.get(index);
+    // Built-ins first, then the plugins, into one catalog: a plugin that
+    // names a built-in kind replaces it, which is how a host substitutes
+    // an implementation and never an accident, because the four names
+    // are documented.
+    List<Definition> defs = new ArrayList<>(Builtins.BUILTINS);
+    for (Definition def : opts.plugins) {
+      if (null == def) {
+        throw new SekretoError(
+            "sekreto: not a plugin definition: null"
+                + " - a plugin is what Support.providerplugin(kind, make) returns");
+      }
+      defs.add(def);
+    }
 
-        String store = storename(provider);
-        if (null != names && index < names.size()) {
-          String given = names.get(index);
-          if (null != given && !given.isEmpty()) {
-            store = given;
-          }
-        }
+    this.catalog = Plugin.makeCatalog(defs);
+    this.host = Plugin.makeHost(null);
+    this.host.catalog(this.catalog);
 
-        entries.add(new Entry(store, provider));
+    for (Object entry : opts.providers) {
+      if (entry instanceof Provider) {
+        Provider provider = (Provider) entry;
+        entries.add(new Entry(storename(provider), "", provider));
+      } else if (entry instanceof Map) {
+        entries.add(declare(Support.map(entry)));
+      } else {
+        // REFUSED, NOT SKIPPED. Without this branch the loop dropped an
+        // entry that was neither, silently: the chain came up one store
+        // short and nothing said why, which is worse than the scala port's
+        // raw MatchError because there is no error at all to read. Wording
+        // is kotlin's, byte for byte.
+        throw new SekretoError(
+            "sekreto: not a provider or a provider spec: "
+                + (null == entry ? "" : entry));
       }
     }
 
-    this.docache = usecache;
+    this.docache = opts.cache;
+  }
+
+  /**
+   * One chain entry, as a plugin instance.
+   *
+   * <p>The instance is `kind` for a store named after its kind and
+   * `kind$store` otherwise - `hashicorp$prod` - so `host().list()` reads
+   * like the chain. A store name that is already taken gets a numbered
+   * tag from the host instead, because two providers MAY share a store
+   * name (a directed read walks both) and an instance ref may not.
+   */
+  private Entry declare(Map<String, Object> spec) {
+    String kind = Support.text(null == spec ? null : spec.get("kind"));
+
+    if (null == kind || !catalog.has(kind)) {
+      throw new SekretoError(unknownkind(kind));
+    }
+
+    String named = Support.text(spec.get("name"));
+    String store = null == named || named.isEmpty() ? kind : named;
+
+    if (!Plugin.checkTag(store)) {
+      throw new SekretoError("sekreto: invalid store name: " + store);
+    }
+
+    String ref = store.equals(kind) ? kind : Plugin.formatRef(kind, store);
+
+    Map<String, Object> declared = new LinkedHashMap<>();
+    declared.put("options", spec);
+    if (null != host.instance(ref)) {
+      // The host assigns the lowest unused integer tag; the STORE name is
+      // untouched, so a directed read still walks both.
+      declared.put("tag", "?");
+    }
+
+    voxgig.plugin.Entry inst;
+    try {
+      // `load` runs the definition's `define`, which builds the provider
+      // from the spec; `activate` takes the instance live. Nothing is
+      // contacted by either: a provider opens nothing until its first
+      // lookup.
+      inst = host.load(ref, declared);
+      host.activate(inst.ref);
+    } catch (RuntimeException err) {
+      throw unwrap(err);
+    }
+
+    Object exported = host.exports(inst.ref + "/" + Support.PROVIDER_EXPORT);
+
+    if (!(exported instanceof Provider)) {
+      throw new SekretoError(
+          "sekreto: not a provider plugin: " + kind
+              + " - it exported no provider: build it with"
+              + " Support.providerplugin(kind, make)");
+    }
+
+    return new Entry(store, inst.ref, (Provider) exported);
+  }
+
+  /**
+   * The message for a kind the catalog does not hold.
+   *
+   * <p>A kind sekreto has never heard of is a typo; a kind that exists as
+   * a plugin but was not passed in is the split working as designed and
+   * telling you what to pass. Collapsing the two was the first thing that
+   * made the split confusing to use.
+   */
+  private String unknownkind(String kind) {
+    boolean known = Builtins.PLUGIN_KINDS.contains(kind);
+
+    return "sekreto: unknown provider kind: " + (null == kind ? "" : kind)
+        + " (available: " + String.join(", ", catalog.names()) + ")"
+        + (known
+            ? " - " + kind + " is a sekreto plugin, not built in: pass it in the plugins option"
+            : "");
+  }
+
+  /**
+   * A SekretoError that crossed the plugin boundary comes back out as
+   * itself, byte for byte. Anything else is not sekreto's to rewrite and
+   * surfaces as the host reports it, naming the instance.
+   */
+  private static RuntimeException unwrap(RuntimeException err) {
+    if (err instanceof PluginException) {
+      PluginException failed = (PluginException) err;
+      Map<String, Object> details = Support.map(failed.details);
+      Object cause = null == details ? null : details.get("cause");
+
+      if (Support.ERROR_CODE.equals(failed.code) && cause instanceof String) {
+        return new SekretoError((String) cause);
+      }
+    }
+
+    return err;
+  }
+
+  /**
+   * The voxgig/plugin host this chain is made of. Introspection only:
+   * `host().list()` reads like the chain - the kind, or kind$store for a
+   * named store - and nothing on it advances the chain.
+   */
+  public Host host() {
+    return host;
+  }
+
+  /** The definitions this Sekreto can build: the built-ins plus plugins. */
+  public Catalog catalog() {
+    return catalog;
   }
 
   /**
@@ -127,7 +336,7 @@ public final class Sekreto {
     return true;
   }
 
-  static String checkname(Object name) {
+  public static String checkname(Object name) {
     if (!validname(name)) {
       throw new SekretoError("sekreto: invalid name: " + (null == name ? "" : name));
     }
@@ -468,6 +677,19 @@ public final class Sekreto {
 
   /** Drop cached values, so the next `get` asks the providers again. */
   public void refresh() {
+    cache.clear();
+  }
+
+  /**
+   * Tear the chain down: every plugin instance is deactivated and
+   * unloaded, in reverse, releasing whatever a provider acquired at
+   * activation. Afterwards there is nothing to read from - `get` reports
+   * every secret unknown - and the cache is dropped, though `redact`
+   * still knows every value that was ever resolved.
+   */
+  public void close() {
+    host.close();
+    entries.clear();
     cache.clear();
   }
 }

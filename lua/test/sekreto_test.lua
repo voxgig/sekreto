@@ -38,32 +38,62 @@ end
 --- voxgig/omni is a sibling checkout, not a published artifact, and it
 --- may sit anywhere. The same five-path search every port's Makefile
 --- performs, repeated here so that a single group can be run by hand.
+---
+--- $OMNI_HOME is APPENDED rather than written into a literal list, for
+--- the same reason test/pluginhome.lua appends $PLUGIN_HOME: `os.getenv`
+--- answers nil when the variable is unset, a nil leaves a hole in a table
+--- constructor, and `ipairs` stops dead at the first hole. Written the
+--- other way the whole search was skipped whenever OMNI_HOME was unset -
+--- which is exactly the "run one group by hand" case this function exists
+--- for, since the Makefile always sets it.
 local function omniroot()
-  local candidates = {
-    os.getenv('OMNI_HOME'), '../../omni', '../../../omni',
-    '/workspace/omni', '/home/user/omni',
-  }
+  local candidates = {}
+
+  local given = os.getenv('OMNI_HOME')
+  if nil ~= given and '' ~= given then
+    candidates[#candidates + 1] = given
+  end
+
+  candidates[#candidates + 1] = '../../omni'
+  candidates[#candidates + 1] = '../../../omni'
+  candidates[#candidates + 1] = '/workspace/omni'
+  candidates[#candidates + 1] = '/home/user/omni'
 
   for _, dir in ipairs(candidates) do
-    if nil ~= dir and '' ~= dir then
-      local handle = io.open(dir .. '/spec/fib.json', 'r')
-      if nil ~= handle then
-        handle:close()
-        return dir
-      end
+    local handle = io.open(dir .. '/spec/fib.json', 'r')
+    if nil ~= handle then
+      handle:close()
+      return dir
     end
   end
 
   error('sekreto: voxgig/omni not found - set OMNI_HOME', 0)
 end
 
-package.path = 'src/?.lua;' .. omniroot() .. '/lua/src/?.lua;' .. package.path
+package.path = 'src/?.lua;test/?.lua;' .. omniroot() .. '/lua/src/?.lua;' ..
+  package.path
+
+-- voxgig/plugin: already on the path, or a sibling checkout.
+require('pluginhome').pluginpath()
 
 local runner = require('runner')
 local u = require('util')
 
 local sekreto = require('sekreto')
 local providers = require('sekreto.providers')
+
+-- THE CONFORMANCE SUITE LOADS EVERY PLUGIN, deliberately. The spec is the
+-- contract for the whole library and exercises all fourteen provider
+-- kinds, so this suite hands the full set to every Sekreto it builds.
+-- That is the split working, not a leak of it: a CONSUMER passes the
+-- kinds it configures and requires nothing else, while the suite that
+-- proves all fourteen behave has to have all fourteen.
+--
+-- `sigv4` lives with the aws plugin - it is the crypto edge, and only the
+-- two aws kinds use it (docs/design/plugin-providers.md) - so the sigv4
+-- group reaches it there and not through the core.
+local allplugins = require('sekreto.plugins').allplugins
+local sigv4 = require('sekreto.plugins.sigv4')
 
 local ONLY = arg[1]
 local PASSCOUNT = 0
@@ -203,7 +233,7 @@ local function chainof(entry)
     end
   end
 
-  return sekreto.sekreto(specs, false)
+  return sekreto.sekreto({ plugins = allplugins, providers = specs, cache = false })
 end
 
 --- The name a group's entry asks about.
@@ -277,7 +307,7 @@ local function SIGV4(input)
     end
   end
 
-  local signed = sekreto.sigv4({
+  local signed = sigv4.sigv4({
     method = str(input, 'method') or '',
     url = str(input, 'url') or '',
     service = str(input, 'service') or '',

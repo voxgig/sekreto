@@ -5,9 +5,13 @@
  * variables in development and a vault in production without changing a
  * line of its own code.
  *
- * This file holds the facade and every pure name function. Nothing here
- * opens a socket, runs a child or touches a certificate; providers.c does
- * all of that, and http.c and tls.c below it.
+ * This file holds the facade and every pure name function, and it builds
+ * the chain on a voxgig/plugin host: each spec'd provider is an instance
+ * addressed by name+tag, `load` runs the kind's `define` and `activate`
+ * takes it live. Nothing here opens a socket, runs a child or touches a
+ * certificate - and neither does anything else under `src/`. The kinds
+ * that do are plugins under `plugins/`, and only a link line that names
+ * one carries them.
  *
  * A port of typescript/src/Sekreto.ts, which is canonical.
  */
@@ -422,6 +426,9 @@ char *sek_storename(sek_pool *pool, sek_provider *provider) {
 
 typedef struct {
   char *store;
+  /* The plugin instance that built this provider - "" for one handed in
+   * already built, which no instance backs. */
+  const char *ref;
   sek_provider *provider;
 } entry;
 
@@ -433,6 +440,13 @@ typedef struct {
 
 struct sek_sekreto {
   sek_pool *pool;
+
+  /* The voxgig/plugin host every spec'd provider is an instance of, and
+   * the catalog of definitions it can build: the built-ins, then whatever
+   * sek_options.plugins handed in. */
+  Host *host;
+  Catalog *catalog;
+
   entry *entries;
   size_t count;
   int docache;
@@ -442,54 +456,227 @@ struct sek_sekreto {
   size_t cachecap;
 
   /* Every value ever resolved, for redaction. Kept independently of the
-   * read cache, so `cache: 0` does not silently disable sek_redact_text
+   * read cache, so `nocache` does not silently disable sek_redact_text
    * and leak secrets to logs, and append-only for the object's life: not
    * cleared by sek_refresh, not cleared by sek_close. */
   sek_list *seen;
 };
 
-sek_sekreto *sek_new(sek_pool *pool, sek_provider **providers, const char **names, size_t count,
-                     int cache) {
-  sek_sekreto *sek = (sek_sekreto *)sek_alloc(pool, sizeof(sek_sekreto));
+Host *sek_host(sek_sekreto *sek) { return sek->host; }
+
+Catalog *sek_catalog(sek_sekreto *sek) { return sek->catalog; }
+
+/* The message for a kind the catalog does not hold.
+ *
+ * A kind sekreto has never heard of is a typo; a kind that exists as a
+ * plugin but was not passed in is the split working as designed and
+ * telling you what to pass. Collapsing the two was the first thing that
+ * made the split confusing to use. */
+static sek_err unknownkind(sek_pool *pool, const char *kind, Catalog *catalog) {
+  Value *names = catalog_names(catalog);
+  sek_buf out;
   size_t index;
 
+  sek_buf_init(&out, pool);
+  sek_buf_addfmt(&out, "sekreto: unknown provider kind: %s (available: ", kind);
+
+  for (index = 0; index < vlen(names); index++) {
+    if (0 < index) {
+      sek_buf_add(&out, ", ");
+    }
+    sek_buf_add(&out, vasstr(vat(names, index)));
+  }
+
+  sek_buf_addch(&out, ')');
+
+  for (index = 0; NULL != SEK_PLUGIN_KINDS[index]; index++) {
+    if (0 == strcmp(SEK_PLUGIN_KINDS[index], kind)) {
+      sek_buf_addfmt(&out,
+                     " - %s is a sekreto plugin, not built in: pass it in the plugins option",
+                     kind);
+      break;
+    }
+  }
+
+  return out.data;
+}
+
+/* A sekreto refusal that crossed the plugin boundary, back as itself,
+ * byte for byte. Anything else is not sekreto's to rewrite and surfaces
+ * as the host reports it, naming the instance and the cause. */
+static sek_err unwrap(sek_pool *pool, PluginError *err) {
+  if (NULL == err) {
+    return sek_strdup(pool, "sekreto: the plugin host failed without saying why");
+  }
+
+  if (NULL != err->code && 0 == strcmp(SEK_ERROR_CODE, err->code)) {
+    Value *cause = vget(err->details, "cause");
+    if (visstr(cause)) {
+      return sek_strdup(pool, vasstr(cause));
+    }
+  }
+
+  return sek_strdup(pool, err->message);
+}
+
+/* One chain entry, as a plugin instance.
+ *
+ * The instance is `kind` for a store named after its kind and
+ * `kind$store` otherwise - `hashicorp$prod` - so host_list reads like the
+ * chain. A store name that is already taken gets a numbered tag from the
+ * host instead, because two providers MAY share a store name (a directed
+ * read walks both) and an instance ref may not.
+ *
+ * Raises through voxgig/plugin's `fail` for anything the host refuses;
+ * sek_new is the frame that catches it. */
+static sek_err declare(sek_sekreto *sek, const sek_spec *spec, entry *out) {
+  const char *kind = sek_orempty(spec->kind);
+  const char *store;
+  const char *ref;
+  DeclareSpec declared;
+  Value *exported;
+  sek_provider *provider;
+
+  if (!catalog_has(sek->catalog, kind)) {
+    return unknownkind(sek->pool, kind, sek->catalog);
+  }
+
+  store = sek_empty(spec->name) ? kind : spec->name;
+
+  if (!checktag(vstr(store))) {
+    return sek_fmt(sek->pool, "sekreto: invalid store name: %s", store);
+  }
+
+  ref = 0 == strcmp(store, kind) ? kind : formatref(vstr(kind), vstr(store));
+  if (NULL != host_instance(sek->host, ref)) {
+    ref = host_autotag(sek->host, kind);
+  }
+
+  memset(&declared, 0, sizeof(declared));
+  declared.options = sek_optionsof(spec);
+
+  /* `load` runs the definition's `define`, which builds the provider from
+   * the spec; `activate` takes the instance live. Nothing is contacted by
+   * either: a provider opens nothing until its first lookup. */
+  host_load(sek->host, ref, &declared);
+  host_activate(sek->host, ref);
+
+  exported = host_exports(sek->host, sek_fmt(sek->pool, "%s/%s", ref, SEK_PROVIDER_EXPORT));
+  provider = visnum(exported) ? sek_build_at(vasnum(exported)) : NULL;
+
+  if (NULL == provider) {
+    return sek_fmt(sek->pool, "sekreto: plugin %s exported no provider", kind);
+  }
+
+  out->store = sek_strdup(sek->pool, store);
+  out->ref = sek_strdup(sek->pool, ref);
+  out->provider = provider;
+
+  return NULL;
+}
+
+/* The whole of construction, inside the caller's catch frame. */
+static sek_err build(sek_sekreto *sek, const sek_options *options) {
+  Definition **builtins;
+  size_t count = sek_builtins(&builtins);
+  size_t index;
+
+  /* Built-ins first, then the plugins, into one catalog: a plugin that
+   * names a built-in kind replaces it, which is how a host substitutes an
+   * implementation and never an accident, because the four names are
+   * documented. */
+  for (index = 0; index < count; index++) {
+    catalog_add(sek->catalog, builtins[index]);
+  }
+  for (index = 0; index < options->plugincount; index++) {
+    catalog_add(sek->catalog, options->plugins[index]);
+  }
+
+  for (index = 0; index < options->count; index++) {
+    const sek_spec *spec = &options->providers[index];
+    sek_err err;
+
+    /* A provider already built joins the chain as it is, under its own
+     * store name, backed by no instance. */
+    if (NULL != spec->provider) {
+      sek->entries[sek->count].provider = spec->provider;
+      sek->entries[sek->count].ref = "";
+      sek->entries[sek->count].store = sek_empty(spec->name)
+                                           ? sek_storename(sek->pool, spec->provider)
+                                           : sek_strdup(sek->pool, spec->name);
+      sek->count++;
+      continue;
+    }
+
+    err = declare(sek, spec, &sek->entries[sek->count]);
+    if (NULL != err) {
+      return err;
+    }
+    sek->count++;
+  }
+
+  return NULL;
+}
+
+/* Construction, inside the one catch frame the whole of it runs under.
+ *
+ * Its own function so that nothing a `longjmp` comes back through is a
+ * parameter this code then modifies: `options` and `sek` are read-only
+ * here, and only `failure` straddles the frame. -Wclobbered is on, and it
+ * is the warning that catches exactly this. */
+static sek_err construct(sek_pool *pool, const sek_options *options, sek_sekreto *sek) {
+  CatchFrame frame;
+  /* volatile because it is written inside the frame and read after a
+   * longjmp has come back through it. C guarantees nothing else about a
+   * local a setjmp handler reads. */
+  volatile sek_err failure = NULL;
+
+  /* The pool reaches each kind's `define` through here, and the providers
+   * come back the same way. Held for exactly this call. */
+  sek_build_begin(pool);
+
+  if (0 == PLUGIN_TRY(&frame)) {
+    HostOptions hostopts;
+    memset(&hostopts, 0, sizeof(hostopts));
+    hostopts.catalog = sek->catalog;
+    sek->host = makehost(&hostopts);
+
+    failure = build(sek, options);
+    PLUGIN_END(&frame);
+  } else {
+    failure = unwrap(pool, plugin_caught());
+  }
+
+  sek_build_end();
+
+  return failure;
+}
+
+sek_err sek_new(sek_pool *pool, const sek_options *options, sek_sekreto **out) {
+  sek_sekreto *sek = (sek_sekreto *)sek_alloc(pool, sizeof(sek_sekreto));
+  sek_options empty;
+  sek_err failure;
+
+  memset(&empty, 0, sizeof(empty));
+
   sek->pool = pool;
-  sek->count = count;
-  sek->docache = 0 != cache;
-  sek->entries = (entry *)sek_alloc(pool, (0 == count ? 1 : count) * sizeof(entry));
+  sek->catalog = makecatalog();
+  sek->host = NULL;
+  sek->count = 0;
+  sek->docache = NULL == options || 0 == options->nocache;
+  sek->entries = (entry *)sek_alloc(
+      pool, (NULL == options || 0 == options->count ? 1 : options->count) * sizeof(entry));
   sek->cachecap = 8;
   sek->cache = (cached *)sek_alloc(pool, sek->cachecap * sizeof(cached));
   sek->cachelen = 0;
   sek->seen = sek_list_new(pool);
 
-  for (index = 0; index < count; index++) {
-    const char *given = NULL == names ? NULL : names[index];
-
-    sek->entries[index].provider = providers[index];
-    sek->entries[index].store = sek_empty(given) ? sek_storename(pool, providers[index])
-                                                 : sek_strdup(pool, given);
+  failure = construct(pool, NULL == options ? &empty : options, sek);
+  if (NULL != failure) {
+    return failure;
   }
 
-  return sek;
-}
-
-sek_err sek_sekreto_of(sek_pool *pool, const sek_spec *specs, size_t count, int cache,
-                       sek_sekreto **out) {
-  sek_provider **providers =
-      (sek_provider **)sek_alloc(pool, (0 == count ? 1 : count) * sizeof(sek_provider *));
-  const char **names = (const char **)sek_alloc(pool, (0 == count ? 1 : count) * sizeof(char *));
-  size_t index;
-
-  for (index = 0; index < count; index++) {
-    sek_err err = sek_makeprovider(pool, &specs[index], &providers[index]);
-    if (NULL != err) {
-      return err;
-    }
-    /* An empty spec name falls back to the kind, which sek_new does. */
-    names[index] = specs[index].name;
-  }
-
-  *out = sek_new(pool, providers, names, count, cache);
+  *out = sek;
 
   return NULL;
 }
@@ -706,11 +893,27 @@ char *sek_redact_text(sek_sekreto *sek, const char *text) {
 
 void sek_refresh(sek_sekreto *sek) { sek->cachelen = 0; }
 
-/* The chain and the cache go; `seen` stays, so redaction still knows
- * every value this Sekreto ever resolved. */
-void sek_close(sek_sekreto *sek) {
+/* Every plugin instance is deactivated and unloaded, in reverse, which is
+ * voxgig/plugin's teardown and not sekreto's: a provider that acquired a
+ * resource at activation has it released here, by the instance scope.
+ *
+ * The chain and the cache go with them; `seen` stays, so redaction still
+ * knows every value this Sekreto ever resolved. */
+sek_err sek_close(sek_sekreto *sek) {
+  CatchFrame frame;
+  volatile sek_err failure = NULL;
+
+  if (0 == PLUGIN_TRY(&frame)) {
+    host_close(sek->host);
+    PLUGIN_END(&frame);
+  } else {
+    failure = unwrap(sek->pool, plugin_caught());
+  }
+
   sek->count = 0;
   sek->cachelen = 0;
+
+  return failure;
 }
 
 /* `cache` and `seen` are ordinary fields, so the obvious debug print of a

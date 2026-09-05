@@ -20,8 +20,8 @@
  * `-lssl -lcrypto` is here for ONE call, SSL_CTX_load_verify_locations,
  * which is trust configuration and therefore transport. SHA-256 and
  * HMAC-SHA256 are NOT taken from it: they are in-tree, in
- * src/Sekreto/Crypto.lean, because the exception covers transport and
- * nothing else.
+ * plugins/SekretoPlugins/Crypto.lean, because the exception covers
+ * transport and nothing else.
  *
  * The four obligations every binding in this repository must meet, and
  * where each is met below:

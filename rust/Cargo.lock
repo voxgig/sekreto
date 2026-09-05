@@ -114,11 +114,121 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
+name = "voxgig_plugin"
+version = "0.1.6"
+
+[[package]]
 name = "voxgig_sekreto"
 version = "0.1.0"
 dependencies = [
+ "voxgig_plugin",
+]
+
+[[package]]
+name = "voxgig_sekreto_aws"
+version = "0.1.0"
+dependencies = [
+ "voxgig_plugin",
+ "voxgig_sekreto",
+ "voxgig_sekreto_httpjson",
+]
+
+[[package]]
+name = "voxgig_sekreto_azuresecrets"
+version = "0.1.0"
+dependencies = [
+ "voxgig_plugin",
+ "voxgig_sekreto",
+ "voxgig_sekreto_httpjson",
+]
+
+[[package]]
+name = "voxgig_sekreto_boru"
+version = "0.1.0"
+dependencies = [
+ "voxgig_plugin",
+ "voxgig_sekreto",
+ "voxgig_sekreto_httpjson",
+]
+
+[[package]]
+name = "voxgig_sekreto_doppler"
+version = "0.1.0"
+dependencies = [
+ "voxgig_plugin",
+ "voxgig_sekreto",
+ "voxgig_sekreto_httpjson",
+]
+
+[[package]]
+name = "voxgig_sekreto_gcpsecrets"
+version = "0.1.0"
+dependencies = [
+ "voxgig_plugin",
+ "voxgig_sekreto",
+ "voxgig_sekreto_httpjson",
+]
+
+[[package]]
+name = "voxgig_sekreto_hashicorp"
+version = "0.1.0"
+dependencies = [
+ "voxgig_plugin",
+ "voxgig_sekreto",
+ "voxgig_sekreto_httpjson",
+]
+
+[[package]]
+name = "voxgig_sekreto_httpjson"
+version = "0.1.0"
+dependencies = [
  "rustls",
+ "voxgig_sekreto",
  "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "voxgig_sekreto_infisical"
+version = "0.1.0"
+dependencies = [
+ "voxgig_plugin",
+ "voxgig_sekreto",
+ "voxgig_sekreto_httpjson",
+]
+
+[[package]]
+name = "voxgig_sekreto_onepassword"
+version = "0.1.0"
+dependencies = [
+ "voxgig_plugin",
+ "voxgig_sekreto",
+ "voxgig_sekreto_httpjson",
+]
+
+[[package]]
+name = "voxgig_sekreto_plugins"
+version = "0.1.0"
+dependencies = [
+ "voxgig_plugin",
+ "voxgig_sekreto",
+ "voxgig_sekreto_aws",
+ "voxgig_sekreto_azuresecrets",
+ "voxgig_sekreto_boru",
+ "voxgig_sekreto_doppler",
+ "voxgig_sekreto_gcpsecrets",
+ "voxgig_sekreto_hashicorp",
+ "voxgig_sekreto_httpjson",
+ "voxgig_sekreto_infisical",
+ "voxgig_sekreto_onepassword",
+ "voxgig_sekreto_secretspec",
+]
+
+[[package]]
+name = "voxgig_sekreto_secretspec"
+version = "0.1.0"
+dependencies = [
+ "voxgig_plugin",
+ "voxgig_sekreto",
 ]
 
 [[package]]

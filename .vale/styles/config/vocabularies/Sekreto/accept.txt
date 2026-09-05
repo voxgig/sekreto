@@ -23,6 +23,7 @@
 # straight through the error-level spelling gate this file exists to make
 # usable. Add the stem when a new one is needed; the cost of doing that is
 # the point.
+initialiser
 memoised
 
 # The project, the stores it reads, and the words of its domain.
@@ -34,6 +35,7 @@ Infisical(?:'s)?
 secretspec(?:'s)?
 struct's
 CLIs
+CLI's
 cleartext
 hostname
 kubernetes
@@ -45,11 +47,20 @@ untrusted
 [Uu]serinfo
 
 # General programming vocabulary.
+depfile
+destructure
+gitignored
+inlined
+interop
+preprocessor
+reentrant
+substrings?
+teardown
 async
 autoloader
 [Bb]ooleans?
 bundler
-classpath
+classpaths?
 config
 coroutine
 crypto
@@ -83,6 +94,9 @@ vendored
 vtable
 
 # Languages, their toolchains, and the libraries the pages name.
+Gradle
+Maven
+Glibc
 Asio
 [Cc]lojure
 comptime

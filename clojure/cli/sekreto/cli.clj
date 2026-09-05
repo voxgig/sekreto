@@ -20,10 +20,15 @@
 ;; the integration suite runs every port's CLI from an EMPTY directory: a
 ;; CLI that needed a deps.edn, or anything else in the working directory,
 ;; would be reading the very files a stray .env must not be able to supply.
+;;
+;; The four built-in kinds are in the library; the other ten are plugins,
+;; and this CLI passes every one of them because it can be asked for any
+;; source. See docs/design/plugin-providers.md.
 
 (ns sekreto.cli
   (:require [voxgig.sekreto :as sekreto]
-            [voxgig.sekreto.json :as json])
+            [voxgig.sekreto.json :as json]
+            [voxgig.sekreto.plugins :as plugins])
   (:import [java.net URI]
            [java.net.http HttpClient HttpClient$Version
             HttpRequest HttpResponse HttpResponse$BodyHandlers])
@@ -156,7 +161,12 @@
         ;; one, not from whichever provider happens to answer first.
         store (flag args "--store")
 
-        secrets (sekreto/sekreto (chainfor source))
+        ;; THE FULL SET, because this CLI can be asked for any source.
+        ;; An app requires the kinds it actually configures, each from its
+        ;; own namespace; reaching every one through
+        ;; `voxgig.sekreto.plugins` is what the split exists to make
+        ;; optional (docs/design/plugin-providers.md).
+        secrets (sekreto/sekreto (chainfor source) {:plugins plugins/ALL})
 
         token (try
                 (if (= "" store)
