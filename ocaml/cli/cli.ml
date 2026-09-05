@@ -28,8 +28,8 @@ let envor (name : string) (fallback : string) : string =
   let value = env name in
   if "" = value then fallback else value
 
-let chainfor (source : string) : Providers.spec list =
-  let open Providers in
+let chainfor (source : string) : Provider.spec list =
+  let open Provider in
   let envspec = { nospec with kind = "env"; prefix = env "SEKRETO_PREFIX" } in
   let dotenvspec = { nospec with kind = "dotenv"; file = envor "SEKRETO_DOTENV" ".env" } in
   let filespec = { nospec with kind = "file"; dir = envor "SEKRETO_FILEDIR" "/run/secrets" } in
@@ -215,7 +215,12 @@ let run (args : string array) : int =
   let store = flag args "--store" in
 
   match
-    let secrets = Providers.sekreto (chainfor source) in
+    (* THE FULL SET, because this CLI is asked for any of the fourteen
+       kinds on the command line and cannot know which. An app that ships
+       one chain passes only the plugins that chain names, and links only
+       those. The conformance suite cannot see this line - it hands every
+       plugin to every chain it builds - so test/plugins.ml pins it. *)
+    let secrets = Sekreto.sekreto ~plugins:(Allplugins.all ()) (chainfor source) in
 
     let token =
       match (if "" = store then Sekreto.get secrets "api.token"

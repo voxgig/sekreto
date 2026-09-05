@@ -51,7 +51,7 @@ let pairs (values : (string * string) list) : Omni.json =
 (* One provider spec, out of the spec's declarative chain description.
    Sixteen fields are all the corpus exercises; the rest keep their
    defaults. *)
-let specof (entry : Omni.json) : Providers.spec =
+let specof (entry : Omni.json) : Provider.spec =
   let values =
     match Omni.jget entry "values" with
     | Omni.JMap items -> List.map (fun (key, value) -> (key, text value)) items
@@ -63,7 +63,7 @@ let specof (entry : Omni.json) : Providers.spec =
     | Omni.JMap _ as useauth ->
       Some
         {
-          Providers.amethod = field useauth "method";
+          Provider.amethod = field useauth "method";
           amount = field useauth "mount";
           role = field useauth "role";
           jwt = field useauth "jwt";
@@ -75,7 +75,7 @@ let specof (entry : Omni.json) : Providers.spec =
   in
 
   {
-    Providers.kind = field entry "kind";
+    Provider.kind = field entry "kind";
     name = field entry "name";
     prefix = field entry "prefix";
     file = field entry "file";
@@ -116,10 +116,15 @@ let specof (entry : Omni.json) : Providers.spec =
    Called INSIDE each subject, never outside: four entries expect
    `unsupported kv version`, which the constructor raises, and only a
    constructor run inside the subject delivers that to omni as a subject
-   failure. Caching is off on every constructed chain. *)
+   failure. Caching is off on every constructed chain.
+
+   THE FULL SET GOES TO EVERY CHAIN, which is exactly why this suite can
+   see nothing about the plugin seam: it never builds a chain that is
+   missing a kind, so it can never notice one. test/plugins.ml covers
+   that half. *)
 let chainof (entry : Omni.json) : Sekreto.t =
   let chain = match Omni.jget entry "chain" with Omni.JList items -> items | _ -> [] in
-  Providers.sekreto ~cache:false (List.map specof chain)
+  Sekreto.sekreto ~cache:false ~plugins:(Allplugins.all ()) (List.map specof chain)
 
 let namearg (entry : Omni.json) : string = field entry "name"
 
