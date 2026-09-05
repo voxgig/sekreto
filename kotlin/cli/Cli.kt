@@ -8,6 +8,12 @@
 // Usage: java -cp build/sekreto-cli.jar sekreto.Cli <api-url>
 //            [--source <source>] [--store <name>]
 //
+// THE CLI PASSES THE FULL PLUGIN SET, because it is a harness that must
+// be able to reach every store the library ships. An application passes
+// only the kinds its own chain names - that is the point of the split,
+// and this file is the one place in the port that legitimately wants all
+// ten (docs/design/plugin-providers.md).
+//
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 //          gcpsecrets azuresecrets onepassword doppler infisical
 //          secretspec chain
@@ -20,9 +26,10 @@
 
 package sekreto
 
+import com.voxgig.sekreto.AuthSpec
 import com.voxgig.sekreto.Json
 import com.voxgig.sekreto.ProviderSpec
-import com.voxgig.sekreto.AuthSpec
+import com.voxgig.sekreto.plugins.Plugins
 import com.voxgig.sekreto.sekreto
 import java.net.URI
 import java.net.http.HttpClient
@@ -185,7 +192,7 @@ private fun run(args: Array<String>): Int {
     // from whichever provider happens to answer first.
     val store = flag(args, "--store")
 
-    val secrets = sekreto(chainfor(source))
+    val secrets = sekreto(chainfor(source), Plugins.ALL)
 
     val token = try {
         if (store.isEmpty()) secrets.get("api.token") else secrets.getfrom(store, "api.token")

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- THE PLUGIN ASSEMBLY, and the boundary itself.
+
+       This project references the core (../src/Sekreto.csproj). The core
+       does NOT reference this one, and cannot: a reference back would be
+       a cycle msbuild refuses to build. So an application that references
+       only VoxgigSekreto has no way to name a type in here - not by
+       accident, not by a later edit, not through a type the compiler
+       would erase. `make check-core` prints the assembly references to
+       prove it. See docs/design/plugin-providers.md. -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>VoxgigSekretoPlugins</AssemblyName>
+    <RootNamespace>Voxgig.Sekreto.Plugins</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../src/Sekreto.csproj" />
+  </ItemGroup>
+
+</Project>

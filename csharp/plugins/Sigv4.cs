@@ -10,7 +10,13 @@
 // carry known-answer cases that all ten ports must reproduce bit-for-bit,
 // and lets the integration mock recompute the signature server-side.
 //
-// A port of typescript/src/Sigv4.ts, which is canonical.
+// SIGV4 IS PLUGIN CODE, and moved here with the AWS providers it serves:
+// THE CORE OF NO PORT IMPORTS A HASH FUNCTION. This file lives in the
+// VoxgigSekretoPlugins assembly, so an application whose chain names only
+// built-in kinds links no System.Security.Cryptography through sekreto.
+// See docs/design/plugin-providers.md.
+//
+// A port of typescript/plugins/sigv4.ts, which is canonical.
 
 using System;
 using System.Collections.Generic;
@@ -18,7 +24,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 
-namespace Voxgig.Sekreto
+namespace Voxgig.Sekreto.Plugins
 {
     public static class Sigv4
     {

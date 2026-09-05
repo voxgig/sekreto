@@ -19,9 +19,8 @@
 package sekreto;
 
 import com.voxgig.sekreto.Json;
-import com.voxgig.sekreto.Provider;
-import com.voxgig.sekreto.Providers;
 import com.voxgig.sekreto.Sekreto;
+import com.voxgig.sekreto.plugins.Plugins;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
@@ -211,9 +210,12 @@ public final class Cli {
       }
     }
 
-    Object chain = chainspecs(source);
-    Sekreto secrets =
-        new Sekreto(Providers.makechain(chain), Providers.chainnames(chain), true);
+    // THE CLI PASSES THE FULL SET, because its --source names any of the
+    // fourteen kinds at run time. An app that knows its chain names only
+    // the plugins it configures, and javac links no more than those.
+    Sekreto secrets = new Sekreto(new Sekreto.Options()
+        .plugins(Plugins.ALL)
+        .providers(chainspecs(source)));
 
     String token;
     try {

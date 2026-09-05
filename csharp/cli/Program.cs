@@ -21,6 +21,7 @@ using System.Globalization;
 using System.Net;
 using System.Net.Http;
 using Voxgig.Sekreto;
+using Voxgig.Sekreto.Plugins;
 
 internal static class Program
 {
@@ -195,8 +196,17 @@ internal static class Program
             }
         }
 
-        object chain = ChainSpecs(source);
-        var secrets = new Sekreto(Providers.MakeChain(chain), Providers.ChainNames(chain), true);
+        // THE FULL SET, PASSED EXPLICITLY. The chain is decided at run time
+        // from --source, so this CLI wants every kind - and a kind it does
+        // not pass here is one this Sekreto cannot build, however the
+        // environment is configured. An application with a fixed chain
+        // passes only the kinds it configures.
+        var secrets = new Sekreto(new SekretoOptions
+        {
+            Providers = ChainSpecs(source),
+            Plugins = SekretoPlugins.All(),
+            Cache = true,
+        });
 
         string token;
         try

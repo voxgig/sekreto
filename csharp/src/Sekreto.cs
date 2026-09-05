@@ -5,6 +5,16 @@
 // variables in development and a vault in production without changing a
 // line of its own code.
 //
+// THE CORE REFERENCES NO PLUGIN, IN ANY FORM. The four built-in kinds -
+// env, memory, dotenv, file - read at most a local file; every other kind
+// is a voxgig/plugin definition in the SEPARATE VoxgigSekretoPlugins
+// assembly under plugins/, and a chain may name one only if the calling
+// project handed it in through SekretoOptions.Plugins. The boundary is
+// the assembly reference, and it points one way: plugins/ references
+// src/, and a reference back would be a build cycle. That is what keeps
+// an SDK whose chain is [dotenv, env] from carrying AWS request signing
+// and seven HTTP vault clients. See docs/design/plugin-providers.md.
+//
 // A port of typescript/src/Sekreto.ts, which is canonical.
 
 using System;
@@ -12,8 +22,32 @@ using System.Collections.Generic;
 using System.Text;
 using System.Text.RegularExpressions;
 
+using Voxgig.Plugin;
+
 namespace Voxgig.Sekreto
 {
+    /// <summary>How a Sekreto is built.</summary>
+    public sealed class SekretoOptions
+    {
+        /// <summary>
+        /// The provider chain, in resolution order. An entry is the
+        /// declarative spec of a provider - a map with `kind` and that
+        /// kind's own configuration - or a live IProvider handed in
+        /// directly.
+        /// </summary>
+        public List<object> Providers;
+
+        /// <summary>
+        /// The provider kinds beyond the built-ins that Providers may
+        /// name, as voxgig/plugin definitions. Static and explicit: the
+        /// calling project references the plugins it needs and passes them
+        /// here, and a kind it did not pass is unknown to this Sekreto.
+        /// </summary>
+        public List<Definition> Plugins;
+
+        /// <summary>Cache resolved values (default: true).</summary>
+        public bool Cache = true;
+    }
     /// <summary>
     /// Anything sekreto refuses to do: a bad name, a missing secret, a
     /// provider that could not be reached.
@@ -72,7 +106,7 @@ namespace Voxgig.Sekreto
         {
             CheckName(name);
 
-            return (prefix ?? "") + string.Join("_", ((string)name).Split('.')).ToUpperInvariant();
+            return (prefix ?? "") + string.Join("-", ((string)name).Split('.')).ToUpperInvariant();
         }
 
         /// <summary>
@@ -239,10 +273,15 @@ namespace Voxgig.Sekreto
     /// <summary>The secrets facade: a chain of providers plus a cache.</summary>
     public class Sekreto
     {
-        /// <summary>One provider in the chain, under the store name it answers to.</summary>
+        /// <summary>
+        /// One provider in the chain, under the store name it answers to,
+        /// and the ref of the plugin instance that built it - "" for a live
+        /// provider handed in directly, which no instance backs.
+        /// </summary>
         private sealed class Entry
         {
             public string Store;
+            public string Ref;
             public IProvider Provider;
         }
 
@@ -267,38 +306,207 @@ namespace Voxgig.Sekreto
         // leak secrets to logs.
         private readonly List<string> seen = new List<string>();
 
-        public Sekreto(IEnumerable<IProvider> useproviders, bool usecache = true)
-            : this(useproviders, null, usecache)
-        {
-        }
+        /// <summary>
+        /// The voxgig/plugin host every spec'd provider is an instance of.
+        /// Read it for introspection - List() names each store's ref and
+        /// status - and nothing on it advances the chain.
+        /// </summary>
+        public readonly Host Host;
 
         /// <summary>
-        /// A Sekreto whose providers answer to the given store names, in the
-        /// same order. A name left null or empty falls back to the provider's
-        /// kind.
+        /// The definitions this Sekreto can build: the built-ins plus what
+        /// SekretoOptions.Plugins handed in.
         /// </summary>
-        public Sekreto(IEnumerable<IProvider> useproviders, IList<string> names, bool usecache)
+        public readonly Catalog Catalog;
+
+        /// <summary>
+        /// A Sekreto from options: a catalog of the built-in kinds plus the
+        /// plugins, a voxgig/plugin host, and one instance of the right kind
+        /// per chain entry. It refuses a kind the catalog does not hold, a
+        /// store name that is not a valid tag, and a provider that refuses
+        /// its own configuration.
+        /// </summary>
+        public Sekreto(SekretoOptions options)
         {
-            if (null != useproviders)
+            SekretoOptions opts = options ?? new SekretoOptions();
+
+            // Built-ins first, then the plugins, into one catalog: a plugin
+            // that names a built-in kind replaces it, which is how a host
+            // substitutes an implementation and never an accident, because
+            // the four names are documented.
+            List<Definition> definitions = Providers.Builtins();
+
+            if (null != opts.Plugins)
             {
-                int index = 0;
-
-                foreach (IProvider provider in useproviders)
+                foreach (Definition definition in opts.Plugins)
                 {
-                    string store = StoreName(provider);
-
-                    if (null != names && index < names.Count
-                        && !string.IsNullOrEmpty(names[index]))
-                    {
-                        store = names[index];
-                    }
-
-                    entries.Add(new Entry { Store = store, Provider = provider });
-                    index++;
+                    definitions.Add(definition);
                 }
             }
 
-            docache = usecache;
+            Catalog = Voxgig.Plugin.Catalog.MakeCatalog(definitions);
+            Host = Voxgig.Plugin.Host.MakeHost(null);
+            Host.CatalogRef(Catalog);
+
+            if (null != opts.Providers)
+            {
+                foreach (object entry in opts.Providers)
+                {
+                    if (entry is IProvider live)
+                    {
+                        entries.Add(new Entry
+                        {
+                            Store = StoreName(live), Ref = "", Provider = live,
+                        });
+                        continue;
+                    }
+
+                    entries.Add(Declare(entry as Dictionary<string, object>));
+                }
+            }
+
+            docache = opts.Cache;
+        }
+
+        /// <summary>
+        /// A Sekreto over providers that are already built. The chain names
+        /// no kinds, so it needs no catalog entry beyond the built-ins.
+        /// </summary>
+        public Sekreto(IEnumerable<IProvider> useproviders, bool usecache = true)
+            : this(new SekretoOptions
+            {
+                Providers = Listed(useproviders),
+                Cache = usecache,
+            })
+        {
+        }
+
+        private static List<object> Listed(IEnumerable<IProvider> useproviders)
+        {
+            var out_ = new List<object>();
+
+            if (null != useproviders)
+            {
+                foreach (IProvider provider in useproviders)
+                {
+                    out_.Add(provider);
+                }
+            }
+
+            return out_;
+        }
+
+        /// <summary>
+        /// One chain entry, as a plugin instance.
+        ///
+        /// <para>The instance is `kind` for a store named after its kind and
+        /// `kind$store` otherwise - `hashicorp$prod` - so Host.List() reads
+        /// like the chain. A store name that is already taken gets a
+        /// numbered tag from the host instead, because two providers MAY
+        /// share a store name (a directed read walks both) and an instance
+        /// ref may not.</para>
+        /// </summary>
+        private Entry Declare(Dictionary<string, object> spec)
+        {
+            var use = spec ?? new Dictionary<string, object>();
+
+            string kind = Providers.Text(use.GetValueOrDefault("kind"));
+
+            if (null == kind || !Catalog.Has(kind))
+            {
+                throw new SekretoError(UnknownKind(kind, Catalog));
+            }
+
+            string store = Providers.Text(use.GetValueOrDefault("name"));
+
+            if (string.IsNullOrEmpty(store))
+            {
+                store = kind;
+            }
+
+            if (!Voxgig.Plugin.Plugin.CheckTag(store))
+            {
+                throw new SekretoError("sekreto: invalid store name: " + store);
+            }
+
+            string eref = store == kind ? kind : Voxgig.Plugin.Plugin.FormatRef(kind, store);
+
+            var declaration = new SortedDictionary<string, object>(StringComparer.Ordinal)
+            {
+                ["options"] = use,
+            };
+
+            if (null != Host.Instance(eref))
+            {
+                // The host assigns the lowest unused numbered tag, and the
+                // store name is untouched: `getfrom` still addresses both.
+                declaration["tag"] = "?";
+                eref = kind;
+            }
+
+            Voxgig.Plugin.Entry instance;
+
+            try
+            {
+                // Load runs the definition's define, which builds the
+                // provider from the spec; Activate takes the instance live.
+                // Nothing is contacted by either: a provider opens nothing
+                // until its first lookup.
+                instance = Host.Load(eref, declaration);
+                Host.Activate(instance.Ref);
+            }
+            catch (Exception err)
+            {
+                throw Unwrap(err);
+            }
+
+            if (!(Host.Exports(instance.Ref + "/" + Providers.ProviderExport) is IProvider provider))
+            {
+                throw new SekretoError("sekreto: plugin " + kind + " exported no provider");
+            }
+
+            return new Entry { Store = store, Ref = instance.Ref, Provider = provider };
+        }
+
+        /// <summary>
+        /// The message for a kind the catalog does not hold.
+        ///
+        /// <para>A kind sekreto has never heard of is a typo; a kind that
+        /// exists as a plugin but was not passed in is the split working as
+        /// designed and telling you what to pass. Collapsing the two was the
+        /// first thing that made the split confusing to use.</para>
+        /// </summary>
+        private static string UnknownKind(string kind, Catalog catalog)
+        {
+            string named = kind ?? "";
+            bool known = -1 != Array.IndexOf(Providers.PluginKinds, named);
+
+            return "sekreto: unknown provider kind: " + named
+                + " (available: " + string.Join(", ", catalog.Names()) + ")"
+                + (known
+                    ? " - " + named
+                      + " is a sekreto plugin, not built in: pass it in the plugins option"
+                    : "");
+        }
+
+        /// <summary>
+        /// A SekretoError that crossed the plugin boundary comes back out as
+        /// itself, byte for byte. Anything else is not sekreto's to rewrite,
+        /// and surfaces as the host reports it.
+        /// </summary>
+        private static Exception Unwrap(Exception err)
+        {
+            if (err is PluginException wrapped && Providers.ErrorCode == wrapped.Code)
+            {
+                string cause = Types.Str(Types.Get(wrapped.Details, "cause"));
+
+                if (null != cause)
+                {
+                    return new SekretoError(cause);
+                }
+            }
+
+            return err;
         }
 
         /// <summary>
@@ -528,6 +736,22 @@ namespace Voxgig.Sekreto
         /// </summary>
         public void Refresh()
         {
+            cache.Clear();
+        }
+
+        /// <summary>
+        /// Tear the chain down: every plugin instance is deactivated and
+        /// unloaded, in reverse, releasing whatever a provider acquired at
+        /// activation.
+        ///
+        /// <para>Afterwards there is nothing to read from - Get reports every
+        /// secret unknown - and the cache is dropped, though Redact still
+        /// knows every value that was ever resolved.</para>
+        /// </summary>
+        public void Close()
+        {
+            Host.Close();
+            entries.Clear();
             cache.Clear();
         }
     }

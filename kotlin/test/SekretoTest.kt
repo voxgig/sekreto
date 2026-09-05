@@ -19,14 +19,15 @@
 import com.voxgig.sekreto.AuthSpec
 import com.voxgig.sekreto.ProviderSpec
 import com.voxgig.sekreto.Sekreto
-import com.voxgig.sekreto.Signing
 import com.voxgig.sekreto.awsparam
 import com.voxgig.sekreto.envkey
 import com.voxgig.sekreto.flatname
 import com.voxgig.sekreto.parsedotenv
 import com.voxgig.sekreto.redact
+import com.voxgig.sekreto.plugins.Plugins
+import com.voxgig.sekreto.plugins.Signing
+import com.voxgig.sekreto.plugins.sigv4
 import com.voxgig.sekreto.sekreto
-import com.voxgig.sekreto.sigv4
 import com.voxgig.sekreto.validname
 import com.voxgig.sekreto.vaultref
 import java.io.File
@@ -156,10 +157,16 @@ fun specof(entry: Json): ProviderSpec {
     )
 }
 
-/** Build a Sekreto from the spec's declarative chain description. */
+/**
+ * Build a Sekreto from the spec's declarative chain description.
+ *
+ * THE FULL PLUGIN SET, for every chain, which is exactly why this suite
+ * cannot see the seam: it can never notice a plugin a consumer failed to
+ * pass. test/PluginsTest.kt is what pins that half.
+ */
 fun chainof(entry: Json): Sekreto {
     val chain = entry.get("chain").aslist ?: mutableListOf()
-    return sekreto(chain.map { specof(it) }, cache = false)
+    return sekreto(chain.map { specof(it) }, Plugins.ALL, cache = false)
 }
 
 /** The name a group's entry asks about. */

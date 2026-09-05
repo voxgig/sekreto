@@ -10,9 +10,14 @@
 // carry known-answer cases that all ports must reproduce bit-for-bit, and
 // lets the integration mock recompute the signature server-side.
 //
-// A port of typescript/src/Sigv4.ts, which is canonical.
+// SIGV4 IS A PLUGIN, and travels with the aws providers that are its
+// only callers: the core of no port imports a hash function.
+//
+// A port of typescript/plugins/sigv4.ts, which is canonical.
 
-package com.voxgig.sekreto
+package com.voxgig.sekreto.plugins
+
+import com.voxgig.sekreto.SekretoError
 
 import java.io.ByteArrayOutputStream
 import java.net.URI

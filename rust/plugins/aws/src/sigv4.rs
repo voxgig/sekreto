@@ -15,7 +15,7 @@
 use std::collections::BTreeMap;
 
 use crate::crypto;
-use crate::sekreto::{Answer, SekretoError};
+use voxgig_sekreto::{Answer, SekretoError};
 
 /// One request to sign. Absent optional fields are empty strings.
 #[derive(Clone, Debug, Default)]

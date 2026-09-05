@@ -5,26 +5,44 @@
 //! GCP, Azure or a boru vault. Swapping the chain is a config change, not
 //! a code change.
 //!
-//! This port depends on nothing beyond the standard library (and rustls,
-//! for TLS): it carries its own JSON reader, a small HTTP/1.1 client,
-//! SHA-256/HMAC and SigV4 signing for the vault providers.
+//! THIS IS THE CORE, AND ITS ONLY DEPENDENCY IS `voxgig_plugin`. Four
+//! provider kinds are built in - `env`, `memory`, `dotenv` and `file` -
+//! and what makes them built in is that they read at most a local file. No
+//! TLS, no socket, no subprocess, no hash function: the manifest here
+//! names no TLS crate at all, so a consumer whose chain is `[dotenv, env]`
+//! compiles none of one.
+//!
+//! Every kind that opens a socket, signs a request or spawns a process is
+//! a voxgig/plugin definition in its own crate under `plugins/`, and a
+//! `Sekreto` can build exactly the ones its constructor was handed:
+//!
+//! ```ignore
+//! use voxgig_sekreto::{Options, ProviderSpec, Sekreto};
+//!
+//! let secrets = Sekreto::new(Options {
+//!     plugins: vec![voxgig_sekreto_hashicorp::plugin()],
+//!     providers: vec![ProviderSpec::of("hashicorp")],
+//!     ..Default::default()
+//! })?;
+//! ```
+//!
+//! See `docs/design/plugin-providers.md`.
 
-pub mod crypto;
-pub mod http;
-pub mod json;
+pub mod addr;
 pub mod providers;
 pub mod sekreto;
-pub mod sigv4;
 
-pub use crate::json::Json;
+pub use crate::addr::{checkaddr, safeaddr};
 pub use crate::providers::{
-    makechain, makeprovider, AuthSpec, AwsParamsProvider, AwsSecretsProvider,
-    AzureSecretsProvider, BoruProvider, DopplerProvider, DotenvProvider, EnvProvider,
-    FileProvider, GcpSecretsProvider, HashicorpProvider, InfisicalProvider, MemoryProvider,
-    OnePasswordProvider, Provider, ProviderSpec, SecretSpecProvider,
+    builtins, optionsof, providerplugin, specof, AuthSpec, DotenvProvider, EnvProvider,
+    FileProvider, MemoryProvider, Provider, ProviderSpec, BUILTIN_KINDS, ERROR_CODE, PLUGIN_KINDS,
+    PROVIDER_EXPORT,
 };
 pub use crate::sekreto::{
-    awsparam, envkey, flatname, parsedotenv, redact, validname, vaultref, Answer, Sekreto,
-    SekretoError, VaultRef,
+    awsparam, checkname, envkey, flatname, parsedotenv, redact, storename, validname, vaultref,
+    Answer, ChainError, Options, Sekreto, SekretoError, VaultRef,
 };
-pub use crate::sigv4::{sigv4, Sigv4Input, Sigv4Output};
+
+/// voxgig/plugin, re-exported: a consumer builds a custom kind with
+/// `providerplugin` and never needs to name the dependency itself.
+pub use voxgig_plugin;

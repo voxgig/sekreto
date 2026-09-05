@@ -1,0 +1,49 @@
+# THE FULL SET - every plugin this repository ships, in one dependency -
+# and the CLI that test/integration.sh runs.
+#
+# It exists for the callers that genuinely want all ten kinds: the CLI, the
+# conformance suite, an app whose chain is decided at run time.
+#
+# IT IS ALSO THE THING TO AVOID IF YOU CARE ABOUT SIZE. Depending on this
+# crate links every plugin - AWS request signing and seven HTTP vault
+# clients included - which is the cost the core/plugin split exists to
+# remove. A lean consumer depends on the kinds it actually configures, each
+# its own crate:
+#
+#     voxgig_sekreto = { path = "..." }
+#     voxgig_sekreto_hashicorp = { path = ".../plugins/hashicorp" }
+#
+# See docs/design/plugin-providers.md.
+[package]
+name = "voxgig_sekreto_plugins"
+version = "0.1.0"
+edition = "2021"
+description = "sekreto: every provider plugin, in one dependency"
+license = "MIT"
+
+[dependencies]
+voxgig_sekreto = { path = "../.." }
+voxgig_plugin = { path = "../../.plugin/rust" }
+voxgig_sekreto_httpjson = { path = "../httpjson" }
+voxgig_sekreto_aws = { path = "../aws" }
+voxgig_sekreto_azuresecrets = { path = "../azuresecrets" }
+voxgig_sekreto_boru = { path = "../boru" }
+voxgig_sekreto_doppler = { path = "../doppler" }
+voxgig_sekreto_gcpsecrets = { path = "../gcpsecrets" }
+voxgig_sekreto_hashicorp = { path = "../hashicorp" }
+voxgig_sekreto_infisical = { path = "../infisical" }
+voxgig_sekreto_onepassword = { path = "../onepassword" }
+voxgig_sekreto_secretspec = { path = "../secretspec" }
+
+[lib]
+name = "voxgig_sekreto_plugins"
+path = "src/lib.rs"
+
+# The CLI lives HERE, not in the core, and that is the split working: a
+# program that can reach fourteen kinds is a consumer of all ten plugins,
+# so it is the plugin side that builds it. The workspace shares one target
+# directory, so the binary still lands at rust/target/release/sekreto-cli,
+# which is the path test/integration.sh knows.
+[[bin]]
+name = "sekreto-cli"
+path = "src/bin/sekreto-cli.rs"

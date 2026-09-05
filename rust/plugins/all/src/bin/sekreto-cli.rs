@@ -18,9 +18,9 @@
 use std::env;
 use std::process;
 
-use voxgig_sekreto::http;
-use voxgig_sekreto::json;
-use voxgig_sekreto::{makechain, AuthSpec, ProviderSpec, Sekreto};
+use voxgig_sekreto::{AuthSpec, Options, ProviderSpec, Sekreto};
+use voxgig_sekreto_httpjson::{http, json};
+use voxgig_sekreto_plugins::all;
 
 const LANG: &str = "rust";
 
@@ -196,18 +196,21 @@ fn run() -> i32 {
         _ => String::new(),
     };
 
-    let specs = chainfor(&source);
-    let names: Vec<String> = specs.iter().map(|spec| spec.name.clone()).collect();
-
-    let providers = match makechain(&specs) {
-        Ok(providers) => providers,
+    // THE CLI PASSES THE FULL SET, deliberately: it is the one program
+    // here that can be asked for any of the fourteen kinds at run time.
+    // An app that knows its chain names the kinds it configures instead,
+    // and links nothing else.
+    let mut secrets = match Sekreto::new(Options {
+        plugins: all(),
+        providers: chainfor(&source),
+        ..Default::default()
+    }) {
+        Ok(secrets) => secrets,
         Err(err) => {
             eprintln!("sekreto-cli: {}", err);
             return 2;
         }
     };
-
-    let mut secrets = Sekreto::named(providers, &names, true);
 
     let found = if store.is_empty() {
         secrets.get("api.token")

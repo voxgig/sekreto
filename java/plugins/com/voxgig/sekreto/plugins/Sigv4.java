@@ -10,9 +10,13 @@
 // carry known-answer cases that all ten ports must reproduce bit-for-bit,
 // and lets the integration mock recompute the signature server-side.
 //
-// A port of typescript/src/Sigv4.ts, which is canonical.
+// A port of typescript/plugins/sigv4.ts, which is canonical.
+//
+// IT LIVES WITH THE AWS PLUGIN. Signing is the crypto edge - Mac and
+// MessageDigest - and the core of no port imports a hash function.
+// Only the two aws kinds sign a request, and both are plugins.
 
-package com.voxgig.sekreto;
+package com.voxgig.sekreto.plugins;
 
 import com.voxgig.sekreto.Sekreto.SekretoError;
 import java.io.ByteArrayOutputStream;
