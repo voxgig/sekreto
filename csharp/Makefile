@@ -1,4 +1,4 @@
-.PHONY: build test test-plugins check-core deps clean inspect
+.PHONY: build test test-plugins check-core check-trim deps clean inspect
 
 export DOTNET_CLI_TELEMETRY_OPTOUT = 1
 export DOTNET_NOLOGO = 1
@@ -90,8 +90,44 @@ check-core: deps
 	fi
 	@echo "the core reaches no plugin"
 
+# ONE PLUGIN COSTS ONE PLUGIN - the .NET form of it.
+#
+# Every other port proves this at its unit of loading: rust a crate,
+# javascript a module, kotlin a class file. C#'s unit of loading is the
+# ASSEMBLY and all ten plugins are one, so reaching Hashicorp really does
+# load Sigv4's code. The property does not hold here as the other ports
+# state it, and a test claiming it did would be false -- which is why the
+# seam suite does not claim it.
+#
+# The claim that DOES hold is the one a consumer cares about: what the app
+# never reaches, the trimmer removes. trim names Hashicorp.Plugin and
+# nothing else; this asserts the AWS signing symbols are gone from the
+# published output. Kept out of `test` because a trimmed self-contained
+# publish pulls a runtime pack and takes a minute - the same reason c
+# keeps tlscheck and kotlin keeps check-core separate.
+check-trim: deps
+	@test -n "$(PLUGIN)" || { echo "sekreto: voxgig/plugin not found - run make deps, or set PLUGIN_HOME" >&2; exit 1; }
+	@rm -rf trim/out trim/bin trim/obj
+	@dotnet publish trim -c Release -v q --nologo \
+	  -p:PluginPath=$(PLUGINPROJ) -o trim/out
+	@echo "--- AWS signing symbols in the trimmed output ---"
+	@fail=0; for name in AwsSecretsProvider AwsParamsProvider Sigv4 \
+	                     AWS4-HMAC-SHA256; do \
+	  if grep -qa "$$name" trim/out/VoxgigSekretoPlugins.dll 2>/dev/null; then \
+	    echo "KEPT     $$name"; fail=1; \
+	  else \
+	    echo "trimmed  $$name"; \
+	  fi; \
+	done; \
+	if [ 0 != $$fail ]; then \
+	  echo "sekreto: a consumer naming only hashicorp still carries the aws plugin" >&2; \
+	  exit 1; \
+	fi
+	@echo "a consumer naming one plugin carries one plugin"
+
 clean:
 	rm -rf src/bin src/obj test/bin test/obj cli/bin cli/obj plugins/bin plugins/obj
+	rm -rf trim/bin trim/obj trim/out
 
 inspect:
 	@dotnet --version

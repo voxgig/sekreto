@@ -443,10 +443,19 @@ fun main(args: Array<String>) {
         // ...and no class IN the core jar so much as mentions one, nor a
         // socket, a cipher or a child process. A class file carries every
         // type it refers to as a UTF8 constant, so the bytes are the
-        // record - including for a reference only reflection would reach.
+        // record.
+        //
+        // BOTH SPELLINGS, and the dotted half is why. The constant pool
+        // holds a resolved type with slashes, so the slash list covers
+        // every reference the COMPILER resolved. A reference only
+        // REFLECTION would reach is a Class.forName string literal, which
+        // is dotted - so the slash list alone could not see the very case
+        // this comment used to claim it saw.
         val banned = listOf(
             "com/voxgig/sekreto/plugins", "java/net/http", "java/net/Socket",
             "javax/crypto", "java/security/MessageDigest", "java/lang/ProcessBuilder",
+            "com.voxgig.sekreto.plugins", "java.net.http", "java.net.Socket",
+            "javax.crypto", "java.security.MessageDigest", "java.lang.ProcessBuilder",
         )
 
         var classes = 0

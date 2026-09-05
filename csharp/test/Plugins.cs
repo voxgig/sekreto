@@ -484,7 +484,14 @@ internal static class Seam
                 Providers = new List<object>(),
             }), "a null plugin");
 
-            Eq(Plugin.CodeOf(err), "plugin_definition_name", "the catalog's code");
+            // A SEKRETO refusal, not the plugin library's. The message
+            // names the fix, and it matches java and python byte for byte.
+            Eq(err.GetType().Name, "SekretoError", "refused by sekreto, not the catalog");
+            Eq(
+                err.Message,
+                "sekreto: not a plugin definition: null"
+                + " - a plugin is what Support.ProviderPlugin(kind, make) returns",
+                "the message names the fix");
         });
 
         return cases;

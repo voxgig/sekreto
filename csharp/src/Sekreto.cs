@@ -340,6 +340,20 @@ namespace Voxgig.Sekreto
             {
                 foreach (Definition definition in opts.Plugins)
                 {
+                    // REFUSED HERE, not three layers down. A null fell
+                    // through to the plugin library, which reported its own
+                    // `plugin_definition_name` - a true message about the
+                    // wrong subject, naming a catalog the caller never
+                    // touched. java and python both refuse it at this seam
+                    // and name the fix; csharp differed on the same input
+                    // for no reason anyone chose.
+                    if (null == definition)
+                    {
+                        throw new SekretoError(
+                            "sekreto: not a plugin definition: null"
+                            + " - a plugin is what Support.ProviderPlugin(kind, make) returns");
+                    }
+
                     definitions.Add(definition);
                 }
             }

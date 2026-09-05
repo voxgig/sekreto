@@ -21,18 +21,31 @@ trap 'rm -rf "$work"' EXIT
 
 unzip -qq -o "$jar" -d "$work"
 
-# What the core may not so much as mention. The class-file spelling, with
-# slashes, is what a constant pool holds.
+# What the core may not so much as mention. BOTH SPELLINGS, and the
+# second is the one that was missing. A constant pool holds a resolved
+# type with slashes -- com/voxgig/sekreto/plugins -- so the slash list
+# catches every reference the COMPILER resolved. It does not catch a
+# reference only REFLECTION would reach, because Class.forName takes a
+# dotted string literal, and this file's comment claimed it did. A guard
+# that overstates what it checks is worse than one that says less.
 banned='com/voxgig/sekreto/plugins
 java/net/http
 java/net/Socket
 javax/crypto
 java/security/MessageDigest
-java/lang/ProcessBuilder'
+java/lang/ProcessBuilder
+com.voxgig.sekreto.plugins
+java.net.http
+java.net.Socket
+javax.crypto
+java.security.MessageDigest
+java.lang.ProcessBuilder'
 
 bad=0
 for pattern in $banned; do
-  hits=$(grep -rl "$pattern" "$work" 2>/dev/null || true)
+  # -F: these are literal class names, and the dotted ones would
+  # otherwise let `.` match any byte.
+  hits=$(grep -rlF "$pattern" "$work" 2>/dev/null || true)
   if [ -n "$hits" ]; then
     echo "core: $jar reaches $pattern:"
     echo "$hits" | sed "s#^$work/#  #"

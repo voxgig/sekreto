@@ -1,0 +1,42 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- A CONSUMER THAT NAMES ONE PLUGIN, published trimmed.
+
+       The other ports prove "one plugin costs one plugin" at their unit of
+       loading: rust gives each plugin a crate, javascript a module, kotlin a
+       class file. C#'s unit of loading is the ASSEMBLY, and all ten plugins
+       are one, so reaching Hashicorp really does load the code for Sigv4 -
+       the property does not hold as the other ports state it, and a test
+       asserting otherwise would be false.
+
+       What DOES hold in .NET is the claim a consumer actually cares about:
+       trimming removes what the app does not reach. This project is the
+       smallest thing that can prove it - it names Hashicorp.Plugin and
+       nothing else, and check-trim asserts the AWS signing code is gone
+       from the published output.
+
+       IT LIVES BESIDE test/ RATHER THAN INSIDE IT, deliberately. The SDK
+       globs **/*.cs from a project directory, so a project nested under
+       test/ is swallowed by SekretoTest along with its generated
+       AssemblyInfo.cs - nine duplicate-attribute errors, and the whole
+       suite stops building. -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <RuntimeIdentifier>linux-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishTrimmed>true</PublishTrimmed>
+    <TrimMode>full</TrimMode>
+    <!-- The trimmer warns about the plugin host's reflection over
+         definitions; that is the library's business, not this probe's. -->
+    <SuppressTrimAnalysisWarnings>true</SuppressTrimAnalysisWarnings>
+    <AssemblyName>TrimConsumer</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../plugins/SekretoPlugins.csproj" />
+  </ItemGroup>
+
+</Project>
