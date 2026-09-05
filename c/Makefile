@@ -109,10 +109,19 @@ deps:
 # prerequisites of the same make invocation that runs it: GNU make expands
 # a prerequisite list when it reads the rule, and on a machine with no
 # plugin yet $(PLUGIN) is empty then - so $(VOXGIGOBJ) is empty, and the
-# host archive is quietly built out of nothing. Measured, not theorised:
-# the archive came out with no members and the link failed on every symbol
-# voxgig/plugin defines. The sub-make re-reads the makefile after `deps`
-# has run, when $(PLUGIN) answers, and keeps per-file rebuilds.
+# host archive is built out of nothing. The sub-make re-reads the makefile
+# after `deps` has run, when $(PLUGIN) answers, and keeps per-file
+# rebuilds.
+#
+# Measured on a simulated cold machine, and the symptom depends on how
+# $(PLUGIN) is assigned - which is why the fix is the sub-make and not a
+# guard on any one message. Reverting to `build: deps build/sekreto-cli`
+# fails at `ar: build/vobj/capability.o: No such file or directory` with a
+# recursive PLUGIN, and earlier still, at `src/sekreto.h:47:10: fatal
+# error: host.h: No such file or directory`, with a simple one. An earlier
+# version of this comment claimed an empty archive and a link failure on
+# every voxgig/plugin symbol; that does not reproduce, and a comment that
+# says "measured" has to be.
 build: deps
 	@$(MAKE) --no-print-directory build/sekreto-cli
 

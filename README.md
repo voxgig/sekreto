@@ -111,9 +111,9 @@ clients are loaded differs.
 | [clojure](clojure/) | yes | `clojure/plugins/` | a checkout, found by `make deps`; classpaths written by the Makefile (plugin's clojure port ships no `deps.edn`) |
 | [swift](swift/) | yes | `swift/plugins/` (its own module) | a checkout, found or fetched by `make deps` |
 | [dart](dart/) | yes | `dart/plugins/` | a checkout, found or fetched by `make deps` (plugin's dart port is not on pub, so nothing declares it) |
-| [elixir](elixir/) | switch — pending | | exists |
+| [elixir](elixir/) | yes | `elixir/plugins/` | a checkout, found or fetched by `make deps` |
 | [cpp](cpp/) | switch — pending | | exists |
-| [c](c/) | switch — pending | | exists |
+| [c](c/) | yes | `c/plugins/` (one object per kind) | a checkout, compiled into this port's `build/` |
 | [lua](lua/) | yes | `lua/src/sekreto/plugins/` | a checkout, found or fetched by `make deps` |
 | [ocaml](ocaml/) | switch — pending | | exists |
 | [haskell](haskell/) | switch — pending | | exists |
