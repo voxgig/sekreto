@@ -6,6 +6,7 @@ wherever they live.
 ```sh
 make deps                     # find or fetch voxgig/plugin
 make test                     # the conformance suite, and the plugin seam
+make check-core               # the core opens no socket and spawns nothing
 make coreproof                # what a chain of built-ins actually links
 ```
 
@@ -90,12 +91,24 @@ not one of them is `Http`, `Tls`, `Sigv4`, `Crypto` or a provider kind. So
 a consumer whose chain is `[dotenv; env]` links no TLS, no HTTP client and
 no request signing, and loads no OpenSSL at all. `test/plugins.ml` pins
 both readings, unit by unit and by exact name, with the same extraction
-run over the CLI as a control.
+run over the CLI as a control — and then runs the binary, because one that
+links is not yet one that works.
+
+Both of those answer by NAME, so `make check-core` covers what neither can
+see: a core module called something else that opens a socket, spawns a
+child or hashes a secret. It is a source grep, as it is in the Zig, C and
+C++ ports, because `ocamlopt` links the `Unix` stubs whole — a core-only
+binary leaves `socket` and `execve` undefined whatever the core does, so
+reading symbols cannot answer this one.
 
 `sigv4` travels with the AWS plugin and `crypto.ml` with it: the core of
 no port imports a hash function. `plugins/secretspec.ml` reads its store
-through a child process rather than a socket, so it reaches no transport
-either, which `test/plugins.ml` also pins.
+through a child process rather than a socket, so no transport is anywhere
+in its closure — which `test/plugins.ml` pins by WALKING that closure, one
+`ocamlobjinfo` list at a time. Reading secretspec's own list would not do
+it: an HTTP call added to the subprocess runner it shares leaves that list
+unchanged and still drags `Http`, `Tls` and libssl into every consumer of
+the kind.
 
 A plugin value carries numbers, strings, lists and maps, never a closure,
 so a definition's `define` exports the HANDLE of the provider it built and

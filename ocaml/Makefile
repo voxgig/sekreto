@@ -1,4 +1,4 @@
-.PHONY: build test deps tlscheck coreproof clean inspect
+.PHONY: build test deps tlscheck check-core coreproof clean inspect
 
 # voxgig/plugin is a RUNTIME dependency of this port - the core is built on
 # it (AGENTS.md rule 3, rule 4). It has no opam release, and this port takes
@@ -169,11 +169,30 @@ build/tlsprobe: $(PLUGINSLIB) test/tlsprobe.ml
 #   tlsproof.sh  the TLS binding, against a real handshake. No case in the
 #                corpus opens a socket, so a port with no transport at all
 #                could pass the first two.
-test: build build/sekretotest build/behaviour build/plugintest build/tlsprobe
+test: check-core build build/sekretotest build/behaviour build/plugintest build/tlsprobe
 	./build/sekretotest $(GROUP)
 	./build/behaviour
 	./build/plugintest
 	./test/tlsproof.sh
+
+# WHAT NEITHER THE COMPILER NOR THE SYMBOL READ CAN SEE.
+#
+# `-I $(CORESTAGE)` stops a core module NAMING a plugin, and test/plugins.ml
+# reads the built artifacts back unit by unit - but both answer by NAME. A
+# core module called something else that opens a socket, spawns a child or
+# hashes a secret passes both: it compiles, it links, and its unit name is
+# in neither list. An audit added `src/wire.ml` calling `Unix.socket`,
+# reached it from the facade, and the whole suite stayed green.
+#
+# An undefined-symbol read has no teeth here, which is why this is a source
+# grep rather than cpp's `nm -u`: ocamlopt links the unix stubs wholesale,
+# so build/coreonly already leaves `socket`, `fork` and `execve` undefined
+# whatever the core does. zig, c and cpp keep the same grep for the same
+# reason.
+check-core:
+	@if grep -n -E 'Unix\.(socket|connect|bind|listen|accept|getaddrinfo|gethostbyname|getprotoby|inet_addr_|ADDR_INET|ADDR_UNIX|PF_INET|SOCK_|create_process|open_process|establish_server|execv|execve|execvp|fork|system|pipe)|Sys\.command|Thread\.|Dynlink|Digest\.|\b(sha256|hmac|Sha256|Hmac)\b|SSL_' src/*.ml; then \
+	  echo "sekreto: the core reaches for something that belongs in a plugin" >&2; exit 1; \
+	else echo "core: opens no socket, spawns no process, hashes nothing"; fi
 
 # The TLS proof on its own.
 tlscheck: build/tlsprobe

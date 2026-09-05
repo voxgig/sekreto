@@ -416,10 +416,19 @@ let built : (int, provider) Hashtbl.t = Hashtbl.create 16
 
 let lasthandle = ref 0
 
+(* The handle is read out of the counter ONCE, before the table is touched,
+   and that read is what is returned. Reading `!lasthandle` back after the
+   `Hashtbl.replace` would be a second read across an allocation, and on a
+   runtime that preempts there - systhreads does - a construction on another
+   thread could bump the counter in between and hand this one somebody
+   else's handle. No thread safety is claimed here either way; this costs
+   nothing and removes the one window where the failure would be a silent
+   cross-wire rather than an error. *)
 let stash (made : provider) : int =
   incr lasthandle;
-  Hashtbl.replace built !lasthandle made;
-  !lasthandle
+  let handle = !lasthandle in
+  Hashtbl.replace built handle made;
+  handle
 
 let unstash (handle : int) : unit = Hashtbl.remove built handle
 

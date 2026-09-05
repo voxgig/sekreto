@@ -475,12 +475,34 @@ let () =
   check "the CLI loads libssl" (None <> Sekreto.findsub clilibs "libssl");
   check "the CLI loads libcrypto" (None <> Sekreto.findsub clilibs "libcrypto");
   check "the core loads no libssl" (None = Sekreto.findsub corelibs "libssl");
-  check "the core loads no libcrypto" (None = Sekreto.findsub corelibs "libcrypto")
+  check "the core loads no libcrypto" (None = Sekreto.findsub corelibs "libcrypto");
+
+  (* ...AND IT RUNS. A core-only consumer that LINKS is not the same claim
+     as one that WORKS, and nothing else in this port ever executes a
+     binary built without the plugin archive: build/coreonly was compiled,
+     read by nm and ldd, and never started. *)
+  let ran = lines "./build/coreonly" in
+  let line index = match List.nth_opt ran index with Some text -> text | None -> "" in
+
+  check "the core-only consumer ran" (3 = List.length ran);
+  same "the core-only chain answers" "secret: tok01" (line 0);
+  same "the core-only chain names its stores" "stores: memory env dotenv file" (line 1);
+  List.iter
+    (fun r ->
+      check ("the core-only host has " ^ r ^ " live")
+        (None <> Sekreto.findsub (line 2) (r ^ "=live")))
+    [ "memory"; "env"; "dotenv"; "file" ]
 
 (* WHAT EACH MODULE IMPORTS, from the compiled unit rather than from a
    `open` line: ocamlobjinfo's "Implementations imported" is the linker's
-   own answer, and it names a module reached through a re-export as
-   readily as one named outright. *)
+   own answer, and it names a module reached through a re-export as readily
+   as one named outright.
+
+   It names what the unit imports ITSELF, and nothing further. So a list
+   read off one unit answers "does this module NAME transport", never "does
+   this module REACH it" - see `reaches` below, which walks the difference,
+   because a helper that grew an edge would leave the first answer right
+   and the second one wrong. *)
 let importsof (unit : string) : string list =
   let out = ref [] in
   let inside = ref false in
@@ -497,6 +519,33 @@ let importsof (unit : string) : string list =
     (lines ("ocamlobjinfo " ^ Filename.quote unit));
 
   sorted !out
+
+(* THE WHOLE CLOSURE of a unit, walked one `Implementations imported` list
+   at a time over the compiled units this port built.
+
+   A DIRECT list is not the claim "reaches no transport" makes. Adding one
+   line to `plugins/runcmd.ml` that calls `Http.request` leaves every
+   direct list in this file unchanged - secretspec still imports exactly
+   `Provider Runcmd Secret Stdlib Unix` - while a consumer whose only
+   plugin is secretspec starts linking `Http` and `Tls` and loading
+   libssl. This walk is what sees that; an audit found it by making
+   exactly that edit. *)
+let cmxof (unit : string) : string option =
+  let named dir = dir ^ "/" ^ String.uncapitalize_ascii unit ^ ".cmx" in
+  if Sys.file_exists (named "build/plugins") then Some (named "build/plugins")
+  else if Sys.file_exists (named "build/core") then Some (named "build/core")
+  else None
+
+let reaches (unit : string) : string list =
+  let seen = ref [] in
+  let rec walk name =
+    if not (List.mem name !seen) then begin
+      seen := name :: !seen;
+      match cmxof name with None -> () | Some file -> List.iter walk (importsof file)
+    end
+  in
+  walk unit;
+  sorted (List.filter (fun name -> unit <> name) !seen)
 
 let () =
   let coremodules = [ "json"; "secret"; "provider"; "sekreto" ] in
@@ -526,12 +575,31 @@ let () =
     [ "Httpjson"; "Json"; "Provider"; "Secret"; "Stdlib"; "Stdlib__Option"; "Unix" ]
     hashicorp;
 
-  (* secretspec reads its own CLI and nothing else, so it takes no HTTP
-     client - and therefore no TLS anywhere in its closure. If that ever
-     stops being true it is a real change, not a tidy-up. *)
-  samelist "secretspec reaches no transport"
+  (* secretspec reads its own CLI and nothing else, so it NAMES no HTTP
+     client. If that ever stops being true it is a real change, not a
+     tidy-up. *)
+  samelist "secretspec names no transport"
     [ "Provider"; "Runcmd"; "Secret"; "Stdlib"; "Unix" ]
     (importsof "build/plugins/secretspec.cmx");
+
+  (* ...and it REACHES none either, which is the claim that matters and a
+     different question: a consumer whose only plugin is secretspec links
+     no HTTP client, no TLS binding and no OpenSSL. Walked, not read off
+     one unit - `Runcmd` is in the list above, so an HTTP edge inside it
+     would be invisible there. *)
+  let secretspecreach = reaches "Secretspec" in
+  check "the secretspec closure was walked" (3 < List.length secretspecreach);
+  List.iter
+    (fun unit -> check ("secretspec reaches no " ^ unit) (not (List.mem unit secretspecreach)))
+    [ "Http"; "Httpjson"; "Tls"; "Sigv4"; "Crypto" ];
+
+  (* THE CONTROL FOR THE WALK: the same walk over a plugin that DOES dial
+     finds the transport under it, so a walk that came back short fails
+     here rather than passing the check above vacuously. *)
+  let hashicorpreach = reaches "Hashicorp" in
+  List.iter
+    (fun unit -> check ("the hashicorp closure reaches " ^ unit) (List.mem unit hashicorpreach))
+    [ "Http"; "Httpjson"; "Tls" ];
 
   (* ...and no plugin reaches the full set, which is what makes naming one
      kind cost one kind. *)
