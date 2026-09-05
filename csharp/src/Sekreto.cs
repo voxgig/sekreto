@@ -106,7 +106,7 @@ namespace Voxgig.Sekreto
         {
             CheckName(name);
 
-            return (prefix ?? "") + string.Join("-", ((string)name).Split('.')).ToUpperInvariant();
+            return (prefix ?? "") + string.Join("_", ((string)name).Split('.')).ToUpperInvariant();
         }
 
         /// <summary>
