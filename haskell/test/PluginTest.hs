@@ -23,7 +23,7 @@ module Main (main) where
 
 import AllPlugins (allplugins)
 import Catalog (catalogNames)
-import Control.Exception (Exception, SomeException, displayException, throwIO, try)
+import Control.Exception (Exception, SomeException, displayException, fromException, throwIO, try)
 import Control.Monad (when)
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (isInfixOf, nub, sort)
@@ -278,9 +278,15 @@ anyothererroristhehostsreport = do
 
   err <- raised (sekreto emptyoptions {optplugins = [broken], optproviders = [emptyspec {speckind = "broken"}]})
 
-  case err of
-    _ | "plugin/plugin_define_failed" `isInfixOf` displayException err -> pure ()
-    _ -> throwIO (Failed ("sekreto rewrote an error that was not its own: " ++ displayException err))
+  -- The TYPE, and the code on it - not a substring of what it renders
+  -- to. The canonical reads `err.code`, which a SekretoError has not
+  -- got; here that is a PluginError, which is what "the host's report"
+  -- means. A rewrap into a SekretoError carrying the host's own text
+  -- renders identically, so rendering it can never be the check.
+  case fromException err :: Maybe PluginError of
+    Just found -> same "the host's own code" "plugin_define_failed" (peCode found)
+    Nothing ->
+      throwIO (Failed ("sekreto rewrote an error that was not its own: " ++ displayException err))
 
   when (not ("boom" `isInfixOf` displayException err)) $
     throwIO (Failed ("the cause is gone: " ++ displayException err))
@@ -300,6 +306,10 @@ anyothererroristhehostsreport = do
 
   when (not ("not a plugin error" `isInfixOf` displayException loud)) $
     throwIO (Failed ("the exception was rewritten: " ++ displayException loud))
+
+  case fromException loud :: Maybe SekretoError of
+    Just _ -> throwIO (Failed ("sekreto rewrapped an error that was not its own as its own"))
+    Nothing -> pure ()
 
 shouty :: [(String, String)] -> Provider
 shouty values =

@@ -108,7 +108,7 @@ FOREIGN := floor
 # is the runtime binding under it, and BOTH are spawning. `COREMODS` is
 # the core's whole import set - `Init`, voxgig/plugin, its own modules -
 # read off the two module lists above.
-PROCSYMS := ^(l_IO_NoSuchThing_)
+PROCSYMS := ^(l_IO_Process_|lean_io_process_)
 COREMODS := ^initialize_(Init|Plugin|Sekreto)($$|_)
 
 HOSTOBJS := $(patsubst %,$(IR)/%.o,$(HOSTMODULES))

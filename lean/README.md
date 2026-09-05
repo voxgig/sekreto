@@ -65,7 +65,8 @@ $ make check-core
   plugin: sekreto_curl_fetch
   plugin: sekreto_epoch_seconds
   core:   floor
-== and reaches no IO.Process at all
+== and spawns nothing, by either name
+== and imports Init, voxgig/plugin and its own modules, and nothing else
 == one plugin reaches only the shared support it dials
   SekretoPlugins.Hashicorp -> initialize_SekretoPlugins_Httpjson
   SekretoPlugins.Secretspec -> initialize_SekretoPlugins_Proc
@@ -77,12 +78,26 @@ checked too: every forbidden name has to be found on the plugin side, or
 the target fails for proving nothing.
 
 A list of names could still miss a socket opened under a name nobody
-thought to list, so two of those claims need no list. Reaching a platform
-from Lean takes an `@[extern]`, and every `@[extern]` shows up as an
-undefined symbol outside Lean's own `l_`/`lean_`/`initialize_` naming —
-the core is allowed exactly one, the C math library's `floor`, which is
-what `Float` arithmetic compiles to. `l_IO_Process_` is the second: no symbol from that
-family, whichever one it is.
+thought to list, so three of those claims need no list, and each of the
+three is a prefix rather than an enumerated API. The first: an `@[extern]`
+written here shows up as an undefined symbol outside Lean's own
+`l_`/`lean_`/`initialize_` naming, and the core is allowed exactly one,
+the C math library's `floor`, which is what `Float` arithmetic compiles
+to.
+
+The other two exist because that first one proves less than it reads.
+Lean's own runtime bindings are `lean_*` too, so `IO.Process.spawn`
+compiles to an undefined `lean_io_process_spawn` that the naming test
+skips, needs no `@[extern]` here, and needs no import either, since
+`Init` is always in scope. An audit built a core that ran `/bin/sh -c id`
+and watched the target pass. So the second claim denies both spellings —
+`l_IO_Process_` for the compiled Lean function and `lean_io_process_` for
+the runtime binding under it — whichever the compiler picks. The third
+reads the import graph instead of the platform reach: every
+`initialize_` symbol the core wants has to name `Init`, voxgig/plugin or
+one of its own modules. That is what stops a core reaching `Std.Time` for
+a wall clock, or a future `Std.Internal.UV.TCP` for a socket, both of
+which arrive under `lean_*` names as well.
 
 `build/sekreto-core` is the last piece — a real program, linked from the
 core objects and voxgig/plugin with no `ffi/` object file and no
