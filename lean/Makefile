@@ -217,6 +217,11 @@ $(B)/sekreto-core: $(LIB)/.stamp test/CoreOnly.lean
 #      the clock binding or IO.Process
 #   3. the plugin objects reference every one of those names
 #
+# ...and one more, which is (2) turned around: `SekretoPlugins.Hashicorp`
+# reaches exactly one other plugin module - the shared HTTP client - and
+# `SekretoPlugins.Secretspec` reaches only the child-process helper, so a
+# consumer that imports one plugin does not link the other nine.
+#
 # (3) IS THE CONTROL, and it is the half that is easy to leave out. A
 # forbidden list that matched nothing - a renamed symbol, an `nm` that
 # read no files, a typo - would let (2) pass while proving nothing at
@@ -261,6 +266,15 @@ check-core: $(PLIB)/.stamp $(B)/sekreto-core
 	    echo "sekreto: build/sekreto-core links a plugin:" >&2; \
 	    echo "$$linked" >&2; exit 1; \
 	  fi; \
+	  echo "== one plugin reaches only the shared support it dials"; \
+	  for pair in "Hashicorp:initialize_SekretoPlugins_Httpjson" "Secretspec:initialize_SekretoPlugins_Proc"; do \
+	    mod=$${pair%%:*}; want=$${pair#*:}; \
+	    got=$$(nm --undefined-only --format=posix $(IR)/SekretoPlugins.$$mod.o \
+	      | awk '{print $$1}' | grep '^initialize_SekretoPlugins_' | sort -u | tr '\n' ' '); \
+	    echo "  SekretoPlugins.$$mod -> $$got"; \
+	    test "$$got" = "$$want " || { \
+	      echo "sekreto: SekretoPlugins.$$mod reaches past $$want" >&2; exit 1; }; \
+	  done; \
 	  echo "core: $$(wc -l < $(B)/core.syms) symbols, no plugin among them"; \
 	  ./$(B)/sekreto-core
 

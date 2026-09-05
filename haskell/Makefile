@@ -1,4 +1,4 @@
-.PHONY: build build-core check-core clean deps inspect test test-plugins test-spec
+.PHONY: build build-core build-one check-core clean deps inspect test test-plugins test-spec
 
 # voxgig/plugin is a RUNTIME dependency of this port - the core is built on
 # it. It has no Hackage release and there is no cabal file to name one from,
@@ -74,17 +74,26 @@ build-core: deps
 	$(GHC) $(COREPATH) -itest -outputdir build/core -o build/sekreto-core \
 	  --make test/CoreOnly.hs $(FLAGS) -v0
 
+# ONE PLUGIN, and only one: a consumer that configures HashiCorp Vault
+# links Hashicorp and none of the other nine kinds. Compiled WITH
+# -iplugins, since it names a plugin on purpose.
+build-one: deps
+	@test -n "$(PLUGIN)" || { echo "sekreto: voxgig/plugin not found - run make deps" >&2; exit 1; }
+	mkdir -p build
+	$(GHC) $(PLUGINPATH) -itest -outputdir build/one -o build/sekreto-one \
+	  --make test/OnePlugin.hs plugins/tls.c $(TLSLIBS) $(FLAGS) -v0
+
 # THE SPLIT, READ OUT OF THE BUILT ARTIFACT rather than out of the source.
 # A grep of the sources proves what a reader can see; `nm` proves what is
 # in the binary, which is the thing a consumer ships.
-check-core: build-core
+check-core: build build-core build-one
 	@python3 test/checkcore.py
 
 test: build check-core test-plugins test-spec
 
 # The plugin seam, which the conformance suite cannot see: it hands every
 # plugin to every chain it builds, so it can never notice a missing one.
-test-plugins: build
+test-plugins: build build-core build-one
 	$(GHC) $(PLUGINPATH) -itest -outputdir build/plugins -o build/sekreto-plugins \
 	  --make test/PluginTest.hs plugins/tls.c $(TLSLIBS) $(FLAGS) -v0
 	./build/sekreto-plugins

@@ -30,9 +30,17 @@ Note also what is NOT adapted here: the chain is built INSIDE each
 subject, so that a constructor refusal - `unsupported kv version`, which
 four entries expect - reaches omni as a subject error rather than
 escaping the run.
+
+AFTER THE FOURTEEN GROUPS COMES THE PLUGIN SEAM, which the spec cannot
+see. Every chain the corpus builds is handed every plugin, so the corpus
+can never notice a consumer that passes the wrong ones, a kind that is
+refused for the wrong reason, or a core that reaches into `plugins/`.
+Those checks are at the bottom of this file, and the authoritative half
+of the last one is `make check-core`, which reads the compiled objects.
 -/
 
 import Sekreto
+import SekretoPlugins
 import Omni
 
 open Lean
@@ -129,7 +137,12 @@ def specof (entry : Json) : ProviderSpec :=
 Caching is OFF on every constructed chain, so no group can pass on a
 value another group resolved. -/
 def chainof (entry : Val) : IO Sekreto :=
-  Sekreto.sekreto (((aslist (jget entry "chain")).getD #[]).toList.map specof) false
+  -- Every plugin, to every chain the spec builds: the spec names kinds
+  -- from both halves and does not know the split exists.
+  Sekreto.sekreto {
+    plugins := Sekreto.allplugins,
+    providers := ((aslist (jget entry "chain")).getD #[]).toList.map specof,
+    cache := false }
 
 -- ----------------------------------------------------------- the subjects
 
@@ -206,6 +219,296 @@ def REDACT : Subject := fun args =>
     textof (some held))
   .ok (some (jstr (Sekreto.redact (textof (jget entry "text")) values)))
 
+-- -------------------------------------------------------- the plugin seam
+
+-- `open Sekreto` for the seam and nothing else. The bridge above needs
+-- omni's `Json`, and the library ships a `Sekreto.Json` of its own, so
+-- opening the namespace for the whole file would make the two ambiguous.
+section Seam
+open Sekreto
+
+/-- What a seam check answers: nothing, or what went wrong. -/
+abbrev Fault := Option String
+
+def wants (what wanted got : String) : Fault :=
+  if wanted == got then none else
+    some (what ++ "\n  wanted: " ++ wanted ++ "\n  got:    " ++ got)
+
+/-- The first fault, or none. -/
+def firstfault (faults : List Fault) : Fault :=
+  faults.foldl (fun held next => held.orElse (fun _ => next)) none
+
+/-- What a refusal said, or `<accepted>` when there was none. -/
+def refusal {α : Type} (act : IO α) : IO String :=
+  tryCatch (do let _ ← act; return "<accepted>") (fun err => return Sekreto.why err)
+
+def joined (values : List String) : String := String.intercalate " " values
+
+/-- Each plugin instance as `ref=status`, in the host's own order. -/
+def refs (secrets : Sekreto) : IO String := do
+  return joined ((← secrets.instances).map (fun entry => entry.1 ++ "=" ++ entry.2))
+
+def sorted (values : List String) : List String :=
+  values.mergeSort (fun left right => left ≤ right)
+
+def PLUGINS : List String := [
+  "awsparams", "awssecrets", "azuresecrets", "boru", "doppler", "gcpsecrets",
+  "hashicorp", "infisical", "onepassword", "secretspec"]
+
+def EVERY : List String :=
+  sorted (["dotenv", "env", "file", "memory"] ++ PLUGINS)
+
+/-- The import lines of one source file, in order. -/
+def importsof (path : String) : IO (List String) := do
+  let text ← IO.FS.readFile path
+  return ((text.splitOn "\n").filter (fun line => line.startsWith "import ")).map
+    (fun line => (line.drop 7).trim)
+
+-- The full set holds every kind, and the core's own list of what ships as
+-- a plugin says the same. That list is what tells a typo from a plugin
+-- nobody passed in, so a kind added on one side and not the other would
+-- give the wrong advice.
+def seamFullSet : IO Fault := do
+  return firstfault [
+    wants "allplugins" (joined PLUGINS) (joined (sorted (allplugins.map (·.name)))),
+    wants "PLUGINKINDS" (joined PLUGINS) (joined (sorted PLUGINKINDS)),
+    wants "BUILTINS" (joined BUILTINKINDS) (joined (BUILTINS.map (·.name)))]
+
+-- Naming a kind is not enough: a kind can be in the catalog and still
+-- fail to build. Construction is what the CLI does before any network.
+def seamEveryKind : IO Fault := do
+  let secrets ← sekreto {
+    plugins := allplugins,
+    providers := EVERY.map (fun kind =>
+      { kind := kind, addr := "http://127.0.0.1:8200", token := "t",
+        dir := "/tmp", file := "/tmp/.env" }) }
+
+  return firstfault [
+    wants "stores" (joined EVERY) (joined (← secrets.stores)),
+    wants "kinds" (joined EVERY) (joined (← secrets.kinds)),
+    wants "instances" (joined (EVERY.map (fun kind => kind ++ "=live"))) (← refs secrets)]
+
+-- THE CONSUMER'S LIST IS THE BLIND SPOT THE CORPUS CANNOT SEE: a CLI that
+-- passes one plugin instead of ten leaves all fourteen groups green and
+-- fails nine integration checks. Matched through the NEXT FIELD, so that
+-- `plugins := allplugins.take 1` cannot satisfy a prefix of it.
+def seamCli : IO Fault := do
+  let source ← IO.FS.readFile "cli/Cli.lean"
+  let lines := (source.splitOn "\n").map String.trim
+  return firstfault [
+    wants "cli imports the full set" "true" (toString (lines.contains "import SekretoPlugins")),
+    wants "cli passes the full set" "true"
+      (toString (hasText source "{ plugins := allplugins, providers := ← chainfor source }"))]
+
+-- One plugin is enough for a chain that names only it - and a kind that
+-- was not passed in is refused with a message that names the fix.
+def seamOnePlugin : IO Fault := do
+  let secrets ← sekreto {
+    plugins := [hashicorp],
+    providers := [
+      { kind := "memory", values := [("API_TOKEN", "tok01")] },
+      { kind := "hashicorp", name := "prod", addr := "https://vault.example.com", token := "t" }] }
+
+  let notpassed ← refusal (sekreto {
+    plugins := [hashicorp],
+    providers := [{ kind := "doppler", token := "t" }] })
+
+  -- A kind nobody ships is a typo, and gets no such hint.
+  let typo ← refusal (sekreto { providers := [{ kind := "vualt" }] })
+
+  return firstfault [
+    wants "stores" "memory prod" (joined (← secrets.stores)),
+    wants "sources" "memory hashicorp:https://vault.example.com/secret"
+      (joined (← secrets.sources)),
+    wants "get" "tok01" (← secrets.get "api.token"),
+    wants "instances" "hashicorp$prod=live memory=live" (← refs secrets),
+    wants "kinds" "dotenv env file hashicorp memory" (joined (← secrets.kinds)),
+    wants "a kind nobody passed in"
+      ("sekreto: unknown provider kind: doppler (available: dotenv, env, file, hashicorp, memory)"
+        ++ " - doppler is a sekreto plugin, not built in: pass it in the plugins option")
+      notpassed,
+    wants "a typo"
+      "sekreto: unknown provider kind: vualt (available: dotenv, env, file, memory)"
+      typo]
+
+-- Two providers MAY share a store name - a directed read walks both, and
+-- the spec pins it - but an instance ref may not, so the second gets a
+-- numbered tag from the host and keeps its store name. A store name is
+-- therefore also a plugin tag, and one that is not is refused.
+def seamStoreNames : IO Fault := do
+  let secrets ← sekreto { providers := [
+    { kind := "memory" },
+    { kind := "memory", values := [("API_TOKEN", "second")] },
+    { kind := "memory", name := "pair" },
+    { kind := "memory", name := "pair", values := [("API_TOKEN", "pair2")] }] }
+
+  let bad ← refusal (sekreto { providers := [{ kind := "memory", name := "my store" }] })
+
+  return firstfault [
+    wants "stores" "memory pair" (joined (← secrets.stores)),
+    wants "instances" "memory=live memory$1=live memory$2=live memory$pair=live"
+      (← refs secrets),
+    wants "getfrom memory" "second" (← secrets.getfrom "memory" "api.token"),
+    wants "getfrom pair" "pair2" (← secrets.getfrom "pair" "api.token"),
+    wants "an unusable store name" "sekreto: invalid store name: my store" bad]
+
+-- A provider that refuses its own configuration raises a SekretoError
+-- from inside the plugin's `define`. The spec pins that message byte for
+-- byte, so it must come back out of the host as itself - not wrapped as
+-- plugin_define_failed, and not as the host's wording of it.
+def seamRefusal : IO Fault := do
+  let kv ← refusal (sekreto {
+    plugins := allplugins,
+    providers := [{ kind := "hashicorp", addr := "https://v", token := "t", kv := some 3 }] })
+
+  -- ...and any other error is not sekreto's to rewrite: it surfaces as
+  -- the host reports it, naming the instance and the cause. A
+  -- `SekretoError` is `IO.userError` and nothing else is, which is how
+  -- the two are told apart.
+  let broken := providerplugin "broken" (fun _ => throw (IO.Error.otherError 7 "boom"))
+  let other ← refusal (sekreto {
+    plugins := [broken],
+    providers := [{ kind := "broken" }] })
+
+  return firstfault [
+    wants "a sekreto refusal" "sekreto: hashicorp: unsupported kv version: 3" kv,
+    wants "any other error names the host's code" "true"
+      (toString (hasText other "plugin_define_failed")),
+    wants "any other error names the instance" "true" (toString (hasText other "broken")),
+    wants "any other error keeps the cause" "true" (toString (hasText other "boom"))]
+
+/-- A custom kind is one `providerplugin` call: a provider that answers to
+SHOUTED names, and refuses a spec with no values. -/
+def shouty : Plugin.Definition := providerplugin "shouty" (fun spec => do
+  if spec.values.isEmpty then fail "sekreto: shouty: no values"
+  return {
+    lookup := fun name => pure (Pairs.find? spec.values (asciiupper name)),
+    describe := "shouty" })
+
+def seamCustom : IO Fault := do
+  let secrets ← sekreto {
+    plugins := [shouty],
+    providers := [{ kind := "shouty", values := [("API.TOKEN", "loud")] }] }
+
+  let empty ← refusal (sekreto { plugins := [shouty], providers := [{ kind := "shouty" }] })
+
+  -- A definition Lean's types cannot reject - a name that is not a legal
+  -- plugin name - is refused by the host rather than half-loaded. It is
+  -- what the dynamic ports guard by refusing a module passed as a plugin.
+  let unnamed ← refusal (sekreto { plugins := [providerplugin "" (fun _ => fail "never")] })
+
+  return firstfault [
+    wants "get" "loud" (← secrets.get "api.token"),
+    wants "instances" "shouty=live" (← refs secrets),
+    wants "a custom refusal" "sekreto: shouty: no values" empty,
+    wants "an unusable definition name" "true"
+      (toString (hasText unnamed "plugin_definition_name"))]
+
+-- A plugin that names a built-in kind replaces it - how a host
+-- substitutes an implementation, and never an accident, because the four
+-- names are documented. The catalog still holds four kinds.
+def loudmemory : Plugin.Definition := providerplugin "memory" (fun _ =>
+  pure { lookup := fun _ => pure (some "replaced"), describe := "memory" })
+
+def seamReplace : IO Fault := do
+  let secrets ← sekreto {
+    plugins := [loudmemory],
+    providers := [{ kind := "memory", values := [("API_TOKEN", "original")] }] }
+
+  -- ...and the replacement belongs to that chain alone: `allplugins` and
+  -- BUILTINS are data, and each Sekreto copies them into a catalog of its
+  -- own rather than sharing one.
+  let plain ← sekreto { providers := [{ kind := "memory", values := [("API_TOKEN", "original")] }] }
+
+  return firstfault [
+    wants "replaced" "replaced" (← secrets.get "api.token"),
+    wants "kinds" "dotenv env file memory" (joined (← secrets.kinds)),
+    wants "the next chain is unaffected" "original" (← plain.get "api.token")]
+
+-- `close` tears the chain down - the host empties, every read reports the
+-- secret unknown - and keeps redaction, which must outlive the chain
+-- because the log it protects does.
+def seamClose : IO Fault := do
+  let secrets ← sekreto {
+    providers := [{ kind := "memory", values := [("API_TOKEN", "tok01secret")] }] }
+  let before ← secrets.get "api.token"
+
+  secrets.close
+
+  return firstfault [
+    wants "get" "tok01secret" before,
+    wants "instances after close" "" (← refs secrets),
+    wants "stores after close" "" (joined (← secrets.stores)),
+    wants "tryget after close" "none" (toString (← secrets.tryget "api.token")),
+    wants "get after close" "sekreto: unknown secret: api.token"
+      (← refusal (secrets.get "api.token")),
+    wants "redaction survives close" "token=[redacted]"
+      (← secrets.redactText "token=tok01secret")]
+
+-- THE CORE IMPORTS NO PLUGIN, and one plugin imports only itself.
+--
+-- This reads the sources, which fails faster and names the file. The
+-- AUTHORITATIVE proof is `make check-core`, which reads the compiled
+-- objects: `lean` emits one `initialize_<Module>` symbol per import, so
+-- the core's import graph is in its object files under exact names, and
+-- the core is linked there with no libcurl and no `ffi/` at all.
+def COREFILES : List String := [
+  "src/Sekreto.lean", "src/Sekreto/Text.lean", "src/Sekreto/Json.lean",
+  "src/Sekreto/Core.lean", "src/Sekreto/Addr.lean", "src/Sekreto/Provider.lean",
+  "src/Sekreto/Builtin.lean", "src/Sekreto/Chain.lean"]
+
+def seamCoreImports : IO Fault := do
+  let mut reached : List String := []
+  for path in COREFILES do
+    for named in ← importsof path do
+      if named == "SekretoPlugins" || named.startsWith "SekretoPlugins." then
+        reached := reached ++ [path ++ " -> " ++ named]
+  return firstfault [
+    wants "core files read" (toString COREFILES.length)
+      (toString (← COREFILES.filterM (fun path =>
+        System.FilePath.pathExists (System.FilePath.mk path))).length),
+    wants "the core reaches no plugin" "" (joined reached)]
+
+-- One plugin imports itself, the core it is built on, and - only if it
+-- dials one - the shared HTTP client. It never imports another plugin
+-- kind. secretspec reads its own CLI and nothing else, so it takes no
+-- HTTP client and therefore no TLS anywhere in its closure; if that ever
+-- stops being true it is a real change, not a tidy-up.
+def seamPluginImports : IO Fault := do
+  return firstfault [
+    wants "hashicorp"
+      "Sekreto.Text Sekreto.Json Sekreto.Core Sekreto.Provider Sekreto.Addr SekretoPlugins.Httpjson"
+      (joined (← importsof "plugins/SekretoPlugins/Hashicorp.lean")),
+    wants "secretspec"
+      "Sekreto.Text Sekreto.Json Sekreto.Core Sekreto.Provider SekretoPlugins.Proc"
+      (joined (← importsof "plugins/SekretoPlugins/Secretspec.lean")),
+    wants "every kind has a module of its own" (joined (sorted PLUGINS))
+      (joined (sorted (← PLUGINS.filterM (fun kind => do
+        let module := if kind.startsWith "aws" then "Aws"
+                      else asciiupper (kind.take 1) ++ kind.drop 1
+        System.FilePath.pathExists
+          (System.FilePath.mk ("plugins/SekretoPlugins/" ++ module ++ ".lean"))))))]
+
+structure Seam where
+  name : String
+  check : IO Fault
+
+def SEAMS : List Seam := [
+  { name := "plugins/fullset", check := seamFullSet },
+  { name := "plugins/everykind", check := seamEveryKind },
+  { name := "plugins/cli", check := seamCli },
+  { name := "plugins/oneplugin", check := seamOnePlugin },
+  { name := "plugins/storenames", check := seamStoreNames },
+  { name := "plugins/refusal", check := seamRefusal },
+  { name := "plugins/custom", check := seamCustom },
+  { name := "plugins/replace", check := seamReplace },
+  { name := "plugins/close", check := seamClose },
+  { name := "plugins/coreimports", check := seamCoreImports },
+  { name := "plugins/pluginimports", check := seamPluginImports }]
+
+end Seam
+
+
 -- ------------------------------------------------------------ the runner
 
 structure Counts where
@@ -225,6 +528,24 @@ def testcase (only : Option String) (counts : IO.Ref Counts) (name : String)
   | .error message =>
     counts.modify (fun held => { held with fail := held.fail + 1 })
     IO.println s!"FAIL - {name}"
+    IO.println message
+
+/-- One seam check, reported like a corpus group. A seam check that
+raises is a failure, not a crash: the message is what it says. -/
+def seamcase (only : Option String) (counts : IO.Ref Counts) (seam : Seam) : IO Unit := do
+  match only with
+  | some wanted => if wanted != seam.name then return ()
+  | none => pure ()
+
+  let outcome ← tryCatch seam.check (fun err => return some ("raised: " ++ Sekreto.why err))
+
+  match outcome with
+  | none =>
+    counts.modify (fun held => { held with pass := held.pass + 1 })
+    IO.println s!"ok   - {seam.name}"
+  | some message =>
+    counts.modify (fun held => { held with fail := held.fail + 1 })
+    IO.println s!"FAIL - {seam.name}"
     IO.println message
 
 def main (argv : List String) : IO UInt32 := do
@@ -248,6 +569,10 @@ def main (argv : List String) : IO UInt32 := do
   run "tryfrom" (R.runset (R.set "tryfrom") (some TRYFROM))
   run "sigv4" (R.runset (R.set "sigv4") (some SIGV4))
   run "redact" (R.runset (R.set "redact") (some REDACT))
+
+  -- ...and the plugin seam, which is this port's own.
+  for seam in SEAMS do
+    seamcase only counts seam
 
   let final ← counts.get
   IO.println s!"\n{final.pass} passed, {final.fail} failed"

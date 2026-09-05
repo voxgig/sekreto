@@ -18,6 +18,7 @@
 
 module V = Value
 open Secret
+
 (* ---- the declarative form -------------------------------------------- *)
 
 (* Logging in to a vault instead of being handed a token. `amethod` is
@@ -166,6 +167,7 @@ let spectostring (spec : spec) : string =
     spec.kind spec.name spec.addr (setornot spec.token) (setornot spec.secret)
     (setornot spec.clientsecret)
     (match spec.auth with None -> "none" | Some auth -> authtostring auth)
+
 (* ---- shared machinery ------------------------------------------------ *)
 
 let getenv (name : string) : string =
@@ -176,7 +178,6 @@ let firstof (candidates : string list) : string =
   match List.find_opt (fun value -> "" <> value) candidates with Some value -> value | None -> ""
 
 let trimslash (text : string) : string = dropsuffix text "/"
-
 
 (* An address with any userinfo replaced by `[redacted]`, for messages.
 
@@ -264,6 +265,7 @@ let checkaddr (addr : string) : unit =
     if "localhost" <> host && "127.0.0.1" <> host && "::1" <> host && "[::1]" <> host then
       fail ("sekreto: refusing to send a token in plaintext to " ^ safeaddr addr ^ " (use https)")
   end
+
 (* Read a whole file, letting the platform's own error code through so that
    the caller can tell "no secrets here" from "I could not answer". *)
 let readfile (path : string) : string =
@@ -298,6 +300,7 @@ let notfound (err : Unix.error) : bool = Unix.ENOENT = err || Unix.ENOTDIR = err
    directory into a leading slash and read from the root. *)
 let joinpath (dir : string) (name : string) : string =
   if "" = dir then name else Filename.concat dir name
+
 (* ---- the four built-in kinds ------------------------------------------
 
    The criterion for "built in": needs nothing of the platform beyond
@@ -424,6 +427,11 @@ let unstash (handle : int) : unit = Hashtbl.remove built handle
    exported none - which is how a definition that is not a provider plugin
    at all is told apart from one that is. *)
 let providerof (handle : int) : provider option = Hashtbl.find_opt built handle
+
+(* How many providers the table is holding. A chain that has been closed,
+   or one whose construction was refused, must leave this where it found
+   it; `test/plugins.ml` reads it before and after. *)
+let stashed () : int = Hashtbl.length built
 
 (* The declarative form as a plugin options map, and back.
 
@@ -589,7 +597,15 @@ let providerplugin (kind : string) (make : spec -> provider) : Defs.definition =
           Host.exportvalue inst provider_export (V.vnum (float_of_int (stash made))));
     activate = None;
     deactivate = None;
-    close = None;
+    (* THE LIFECYCLE OWNS THE RELEASE. `unload` runs this for a loaded
+       instance and for a failed one alike, so a chain that was torn down
+       and a chain whose construction was refused both hand their handles
+       back, and no caller has to remember to. *)
+    close =
+      Some
+        (fun inst ->
+          let held = V.get inst.Defs.exports provider_export in
+          if V.is_num held then unstash (int_of_float (V.as_num held)));
     reconfigure = None;
   }
 

@@ -328,18 +328,45 @@ let () =
     (names (Sekreto.catalog secrets));
   Sekreto.close secrets
 
+(* A provider already built joins the chain as it is, under its own store
+   name, backed by no instance. *)
 let () =
+  let secrets =
+    Sekreto.make ~names:[ ""; "quiet" ]
+      [ shouty [ ("API.TOKEN", "loud") ]; shouty [] ]
+  in
+
+  samelist "a live provider joins the chain" [ "shouty"; "quiet" ] (Sekreto.stores secrets);
+  samelist "a live provider is backed by no instance" [] (refsof secrets);
+  same "a live provider answers" "loud" (Sekreto.get secrets "api.token")
+
+let () =
+  (* The provider table is module-global, so a chain that has been closed
+     and one that was refused must both leave it where they found it. *)
+  let before = Provider.stashed () in
+
   let secrets =
     Sekreto.sekreto [ { (spec "memory") with values = [ ("API_TOKEN", "tok01") ] } ]
   in
 
   same "one built-in is a chain" "tok01" (Sekreto.get secrets "api.token");
+  same "a live chain holds its provider" (before + 1) (Provider.stashed ());
   Sekreto.close secrets;
 
   samelist "close unloads every instance" [] (refsof secrets);
   samelist "close empties the chain" [] (Sekreto.stores secrets);
   same "close makes a read miss" None (Sekreto.tryget secrets "api.token");
-  same "close keeps redaction" "token=[redacted]" (Sekreto.redacttext secrets "token=tok01")
+  same "close keeps redaction" "token=[redacted]" (Sekreto.redacttext secrets "token=tok01");
+  same "close hands every handle back" before (Provider.stashed ());
+
+  (* A construction that fails partway leaves nothing behind either: the
+     first entry was built before the second was refused. *)
+  ignore
+    (refusal (fun () ->
+         ignore
+           (Sekreto.sekreto
+              [ { (spec "memory") with values = [ ("API_TOKEN", "tok01") ] }; spec "doppler" ])));
+  same "a refused chain leaves nothing behind" before (Provider.stashed ())
 
 (* ---- the core reaches no plugin --------------------------------------- *)
 
@@ -406,6 +433,35 @@ let () =
   List.iter
     (fun unit -> check ("the core links " ^ unit) (List.mem unit core))
     [ "Sekreto"; "Provider"; "Secret"; "Json"; "Host"; "Catalog"; "Value"; "Defs" ];
+
+  (* A LIST THAT IS NOT THE DIRECTORY LISTING, because the listing answers
+     the wrong question if a module MOVES. `plugins/http.ml` dragged back
+     into `src/` would leave the check above with nothing to find; these
+     names may not be in a core-only binary wherever their source sits. *)
+  List.iter
+    (fun unit -> check ("the core links no " ^ unit ^ " under any name") (not (List.mem unit core)))
+    ([ "Http"; "Httpjson"; "Tls"; "Sigv4"; "Crypto"; "Runcmd"; "Allplugins" ]
+    @ List.map String.capitalize_ascii Provider.pluginkinds);
+
+  (* And the general form of the same question: every unit in the binary
+     that is not the OCaml runtime was compiled against build/core, the
+     staging directory that holds the core's interfaces and voxgig/plugin's
+     and no interface from `plugins/`. A unit with no interface there got
+     in by a route nobody intended. *)
+  let runtime unit =
+    String.starts_with ~prefix:"Stdlib" unit
+    || String.starts_with ~prefix:"Camlinternal" unit
+    || List.mem unit [ "Unix"; "UnixLabels"; "Std_exit" ]
+  in
+  let own = List.filter (fun unit -> not (runtime unit)) core in
+
+  check "the core-only binary has units of its own" (5 < List.length own);
+  List.iter
+    (fun unit ->
+      check
+        ("the core was compiled against " ^ unit)
+        (Sys.file_exists ("build/core/" ^ String.uncapitalize_ascii unit ^ ".cmi")))
+    own;
 
   (* The C side says the same thing louder: the TLS binding is a plugin
      concern, so a core-only program loads no OpenSSL at all. *)

@@ -73,19 +73,15 @@ interfaces and voxgig/plugin's and not one interface from `plugins/`, so a
 core module that named a plugin would not compile. `make coreproof` then
 reads the built artifacts back:
 
-```sh
-$ nm build/coreonly | sed -n 's/.* T caml\([A-Za-z0-9_]*\)__entry$/\1/p' | sort
-...
-Json
-Order
-Point
-Provider
-Ref
-Secret
-Sekreto
-...
-$ ldd build/coreonly | grep -c ssl
-0
+```
+$ make coreproof
+== the compilation units in build/coreonly
+... Catalog Defs Export Host Json Order Point Provider Ref Secret Sekreto ...
+== what each binary links beside the C runtime
+  coreonly    libm.so.6 => /lib/x86_64-linux-gnu/libm.so.6
+  coreonly    libc.so.6 => /lib/x86_64-linux-gnu/libc.so.6
+  sekreto-cli libssl.so.3 => /lib/x86_64-linux-gnu/libssl.so.3
+  sekreto-cli libcrypto.so.3 => /lib/x86_64-linux-gnu/libcrypto.so.3
 ```
 
 `build/coreonly` is a whole program whose chain is the four built-ins.
@@ -112,39 +108,54 @@ instance carries.
 
 ```ocaml
 let secrets =
-  Providers.sekreto
+  Sekreto.sekreto
+    ~plugins:[ Hashicorp.plugin () ]
     [
-      { Providers.nospec with kind = "env" };
-      { Providers.nospec with kind = "dotenv"; file = ".env" };
-      { Providers.nospec with kind = "hashicorp"; addr = vaultaddr; token = vaulttoken };
+      { Provider.nospec with kind = "env" };
+      { Provider.nospec with kind = "dotenv"; file = ".env" };
+      { Provider.nospec with kind = "hashicorp"; addr = vaultaddr; token = vaulttoken };
     ]
 
 let token = Sekreto.get secrets "api.token"                  (* the chain answers *)
 let same = Sekreto.getfrom secrets "hashicorp" "api.token"   (* one named store *)
 ```
 
-`Providers.nospec` is the record with every field at its default, so a
+`Provider.nospec` is the record with every field at its default, so a
 chain reads as configuration and the compiler checks every field name.
 String fields default to the empty string rather than to an option, because
 "not configured" and "configured empty" mean the same thing everywhere in
 this library. `Sekreto.make ~names ~cache providers` takes live providers
 instead, for a provider of your own: it is a record of two functions,
-`lookup` and `describe`, so the provider set stays open.
+`lookup` and `describe`, so the provider set stays open. A custom kind is
+one call to `Provider.providerplugin`, which is what every built-in and
+every shipped plugin is made of.
+
+`Allplugins.all ()` is every kind at once, for a caller that wants all ten
+— the CLI takes it, because a source named on the command line is not
+known until the command line is read. An app that ships one chain names
+the kinds that chain configures and links those.
 
 ## Layout
 
 | | |
 |---|---|
-| `src/sekreto.ml` | the facade, the provider record, the name helpers, `parsedotenv`, `redact` |
-| `src/providers.ml` | the fourteen provider kinds, `spec`, `checkaddr`, `fetchjson`, the subprocess runner |
-| `src/sigv4.ml` | AWS request signing |
-| `src/crypto.ml` | SHA-256 and HMAC-SHA256 |
+| `src/secret.ml` | the error, the provider record, the name helpers, `parsedotenv`, `redact` |
+| `src/provider.ml` | `spec`, the four built-in kinds, `checkaddr`, `providerplugin` |
+| `src/sekreto.ml` | the facade over the plugin host, and the core surface under its canonical names |
 | `src/json.ml` | the JSON value model, reader and writer |
-| `src/http.ml` | HTTP/1.1 framing over a socket, and strict base64 |
-| `src/tls.ml` | the OCaml side of the TLS binding |
-| `src/tls_stubs.c` | the OpenSSL binding itself, and the port's only dependency |
+| `plugins/<kind>.ml` | one module per plugin kind; `aws.ml` carries both AWS kinds |
+| `plugins/allplugins.ml` | the full set |
+| `plugins/httpjson.ml` | one JSON round-trip, and the reads a response body needs |
+| `plugins/http.ml` | HTTP/1.1 framing over a socket, and strict base64 |
+| `plugins/tls.ml` | the OCaml side of the TLS binding |
+| `plugins/tls_stubs.c` | the OpenSSL binding itself, and the port's only third-party edge |
+| `plugins/sigv4.ml` | AWS request signing |
+| `plugins/crypto.ml` | SHA-256 and HMAC-SHA256 |
+| `plugins/runcmd.ml` | the subprocess runner |
 | `test/sekreto_test.ml` | the conformance suite |
 | `test/behaviour.ml` | what the corpus cannot reach |
+| `test/plugins.ml` | the plugin seam, from both sides |
+| `test/coreonly.ml` | a chain of built-ins as a whole program, for the link proof |
 | `test/tlsproof.sh` | the TLS binding, against a real handshake |
 | `cli/cli.ml` | the app that needs a secret |
 
@@ -166,13 +177,24 @@ across the boundary. A chain is built inside each subject, never outside
 it, so that a constructor refusal — `unsupported kv version` is the one the
 corpus pins — reaches omni as a subject failure.
 
-`make test` runs two more suites beside it, because **a port that passes
+`make test` runs three more suites beside it, because **a port that passes
 the corpus is not a port**. No case in `spec/sekreto.json` opens a socket,
 so a port with no transport at all could pass all fourteen groups.
 `test/behaviour.ml` covers what the corpus never reaches — the whole
 `checkaddr` decision table, strict base64, a miss that is not a failure on
-a real file, the cache, and redaction lifecycle. `test/tlsproof.sh` covers
-the handshake, and is described below.
+a real file, the cache, and redaction lifecycle.
+
+`test/plugins.ml` covers the plugin seam. The conformance suite hands the
+full set to every chain it builds, so it can never see a chain that is
+missing a kind, a kind that was not passed in, or a consumer whose list is
+wrong; a CLI passing one plugin instead of ten leaves all fourteen groups
+green and fails nine integration checks. That suite therefore pins the
+call site in `cli/cli.ml` by exact text, closing bracket included, and
+reads `build/coreonly` and `build/sekreto-cli` back with `nm`, `ldd` and
+`ocamlobjinfo`. Every reading carries a control: a check whose input came
+back empty would otherwise pass over an unread binary.
+
+`test/tlsproof.sh` covers the handshake, and is described below.
 
 That leaves what proves this port can actually *fetch* a secret, which is
 the integration run, from the repository root:
@@ -271,7 +293,15 @@ either is missing rather than passing silently.
 - **`Sekreto_error` registers a printer.** omni reads a subject's failure
   with `Printexc.to_string`, and the corpus pins refusal messages byte for
   byte; without the printer the message would arrive as
-  `Sekreto.Sekreto_error("…")`.
+  `Secret.Sekreto_error("…")`. A plugin error gets one too, so a host that
+  catches what a definition raised reads the diagnostic rather than the
+  constructor.
+- **Three modules where canonical has one.** OCaml compiles a module
+  before anything that uses it, and the facade needs the four built-in
+  kinds, which need the name functions and the error. So `src/secret.ml`
+  holds the floor, `src/provider.ml` the kinds, and `src/sekreto.ml` the
+  facade — which re-exports every name from the first two, so a caller
+  writes `Sekreto.envkey` and never has to know.
 
 ## API
 

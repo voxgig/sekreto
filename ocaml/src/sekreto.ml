@@ -103,11 +103,10 @@ let unwrap (err : exn) : exn =
 
 (* ---- the facade ------------------------------------------------------ *)
 
-(* One provider in the chain, under the store name it answers to, with the
-   ref of the plugin instance that built it and the handle its provider
-   was stashed under - `""` and 0 for a live provider handed in directly,
-   which no instance backs. *)
-type entry = { store : string; eref : string; ehandle : int; eprovider : provider }
+(* One provider in the chain, under the store name it answers to, and the
+   ref of the plugin instance that built it - `""` for a live provider
+   handed in directly, which no instance backs. *)
+type entry = { store : string; eref : string; eprovider : provider }
 
 type cached = { cstore : string; cname : string; cvalue : string }
 
@@ -191,7 +190,7 @@ let declare (self : t) (spec : Provider.spec) : entry =
   in
 
   match Provider.providerof handle with
-  | Some made -> { store; eref = iref; ehandle = handle; eprovider = made }
+  | Some made -> { store; eref = iref; eprovider = made }
   (* A definition that loads, activates and exports no provider is not a
      provider plugin at all, and saying so by name is more use than a
      missing-export error from the host. *)
@@ -207,12 +206,7 @@ let make ?(names = []) ?(cache = true) (providers : provider list) : t =
     List.mapi
       (fun index made ->
         let named = match List.nth_opt names index with Some n -> n | None -> "" in
-        {
-          store = (if "" <> named then named else storename made);
-          eref = "";
-          ehandle = 0;
-          eprovider = made;
-        })
+        { store = (if "" <> named then named else storename made); eref = ""; eprovider = made })
       providers;
   self
 
@@ -225,17 +219,16 @@ let make ?(names = []) ?(cache = true) (providers : provider list) : t =
    refusal says so. *)
 let sekreto ?(cache = true) ?(plugins = []) (specs : Provider.spec list) : t =
   let self = empty plugins cache in
-  let done_ = ref [] in
 
-  match List.iter (fun spec -> done_ := !done_ @ [ declare self spec ]) specs with
-  | () ->
-    self.entries <- !done_;
+  match List.map (declare self) specs with
+  | entries ->
+    self.entries <- entries;
     self
   | exception err ->
     (* Whatever was declared before the refusal is torn down, so a chain
        that never came into being leaves no live instance and no stashed
-       provider behind. *)
-    List.iter (fun e -> if 0 <> e.ehandle then Provider.unstash e.ehandle) !done_;
+       provider behind. Each definition's `close` hands its own handle
+       back, so nothing here has to know which were taken. *)
     (try Host.close self.thost with _ -> ());
     raise err
 
@@ -330,7 +323,6 @@ let refresh (self : t) : unit = self.cache <- []
    the whole point of keeping `seen` separately. *)
 let close (self : t) : unit =
   Host.close self.thost;
-  List.iter (fun e -> if 0 <> e.ehandle then Provider.unstash e.ehandle) self.entries;
   self.entries <- [];
   self.cache <- []
 
