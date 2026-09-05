@@ -15,9 +15,16 @@ import 'dart:io';
 
 import 'package:voxgig_omni/omni.dart';
 
-import '../src/providers.dart';
 import '../src/sekreto.dart';
-import '../src/sigv4.dart';
+import '../src/spec.dart';
+
+// THE FULL SET, and the AWS signer with it. A conformance suite is exactly
+// the caller the full set exists for: the spec's chain groups name kinds
+// this file does not choose, so every chain it builds is handed every
+// plugin. That is also why this suite CANNOT SEE the split - it is only
+// ever exercising the one consumer that gets the plugin list right - and
+// why test/plugins_test.dart exists.
+import '../plugins/plugins.dart';
 
 String? only;
 int passcount = 0;
@@ -133,6 +140,13 @@ ProviderSpec specof(dynamic entry) {
 /// built here delivers that to omni as a subject error rather than as a
 /// crash before the run starts.
 ///
+/// EVERY PLUGIN IS HANDED TO EVERY CHAIN. The spec's chain groups name
+/// hashicorp, boru and eight more as well as the four built-in kinds, and a
+/// conformance suite may not choose which of them a case gets - so it
+/// passes the full set. That is exactly why the split is invisible here:
+/// the CLI's own plugin list, the refusal a consumer meets, and the import
+/// graph are all somebody else's, and test/plugins_test.dart pins them.
+///
 /// Caching off: each entry is its own chain, and a cache would only hide a
 /// provider that was asked twice.
 Sekreto chainof(dynamic entry) {
@@ -146,7 +160,7 @@ Sekreto chainof(dynamic entry) {
     }
   }
 
-  return sekreto(specs, cache: false);
+  return sekreto(specs, plugins: allplugins, cache: false);
 }
 
 String nameof(dynamic entry) =>

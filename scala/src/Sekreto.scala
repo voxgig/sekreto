@@ -5,6 +5,17 @@
 // variables in development and a vault in production without changing a
 // line of its own code.
 //
+// THE CORE IMPORTS NO PLUGIN, IN ANY FORM. The four built-in kinds - env,
+// memory, dotenv, file - read at most a local file; every other kind is a
+// voxgig/plugin definition under `plugins/`, and a chain may name one only
+// if the calling project handed it in through `plugins`. That is what keeps
+// an SDK whose chain is `[dotenv, env]` from carrying AWS request signing
+// and seven HTTP vault clients. Nothing in this package names
+// `com.voxgig.sekreto.plugins`, the Makefile compiles `src/` with
+// `plugins/` on neither the classpath nor the sourcepath, and
+// `make check-core` proves it of the compiled artifact rather than of the
+// source. See docs/design/plugin-providers.md.
+//
 // A port of typescript/src/Sekreto.ts, which is canonical.
 
 package com.voxgig.sekreto
@@ -13,6 +24,16 @@ import java.util.Locale
 import scala.collection.immutable.ListMap
 import scala.collection.mutable.ListBuffer
 import scala.util.matching.Regex
+
+import voxgig.plugin.Catalog
+import voxgig.plugin.Host
+import voxgig.plugin.HostOptions
+import voxgig.plugin.Plugin
+import voxgig.plugin.PluginError
+import voxgig.plugin.VMap
+import voxgig.plugin.VOpaque
+import voxgig.plugin.VStr
+import voxgig.plugin.Value
 
 /** A secret name: dot-separated lowercase segments, e.g. `api.token`. */
 type Name = String
@@ -181,6 +202,30 @@ def redact(text: Any, values: Option[List[Any]]): String =
   */
 def storename(provider: Provider): String = provider.describe().takeWhile(_ != ':')
 
+/** The message for a kind the catalog does not hold.
+  *
+  * A kind sekreto has never heard of is a typo; a kind that exists as a
+  * plugin but was not passed in is the split working as designed, and the
+  * message names the fix. Collapsing the two was the first thing that made
+  * the split confusing to use.
+  */
+private def unknownkind(kind: String, catalog: Catalog): String =
+  s"sekreto: unknown provider kind: $kind (available: ${catalog.names.mkString(", ")})" +
+    (if KINDS.plugin.contains(kind) then
+       s" - $kind is a sekreto plugin, not built in: pass it in the plugins option"
+     else "")
+
+/** A SekretoError that crossed the plugin boundary comes back out as itself,
+  * byte for byte. Anything else is not sekreto's to rewrite, and surfaces as
+  * the host reports it, naming the instance.
+  */
+private def unwrap(err: RuntimeException): RuntimeException = err match
+  case failed: PluginError if ERROR_CODE == failed.code =>
+    failed.details.get("cause") match
+      case Some(VStr(cause)) => SekretoError(cause)
+      case _                 => err
+  case _ => err
+
 /** The secrets facade: a chain of providers plus a cache.
   *
   * Two ways to read. `get` is transparent - it walks the chain and takes the
@@ -189,24 +234,55 @@ def storename(provider: Provider): String = provider.describe().takeWhile(_ != '
   * first for ordinary configuration, the second when *which* store holds a
   * secret is part of what you mean.
   *
-  * `names` gives the store names, positionally; an entry left None or empty
-  * falls back to the provider's kind.
+  * `providers` is the chain in resolution order. An entry is a declarative
+  * `ProviderSpec` - which becomes a voxgig/plugin instance on `host` - or a
+  * live `Provider` of your own, which does not. A UNION TYPE rather than
+  * `Any`: the two shapes a chain entry may have are the two the compiler
+  * admits, so "not a provider or a provider spec" is not a run-time refusal
+  * this port has to carry.
+  *
+  * `plugins` is the provider kinds beyond the four built-in ones that
+  * `providers` may name. Static and explicit: the calling project imports
+  * the definitions it needs and passes them here, and a kind it did not pass
+  * is unknown to this Sekreto. A list handed to a constructor cannot be
+  * erased by a compiler, which a registry filled at import can.
+  *
+  * `names` gives the store names of the LIVE providers, positionally; an
+  * entry left None or empty falls back to the provider's kind. A spec'd
+  * provider carries its own `name`.
   */
 class Sekreto(
-    providers: List[Provider] = List.empty,
+    providers: List[Provider | ProviderSpec] = List.empty,
+    plugins: List[Definition] = List.empty,
     names: List[Option[String]] = List.empty,
     docache: Boolean = true,
 ):
 
+  /** The definitions this Sekreto can build: the built-ins first, then what
+    * `plugins` handed in. A plugin naming a built-in kind replaces it - a
+    * host substituting an implementation, never an accident, because the
+    * four names are documented.
+    */
+  val catalog: Catalog = Plugin.makeCatalog(BUILTINS ++ plugins)
+
+  /** The voxgig/plugin host every spec'd provider is an instance of. Read it
+    * for introspection - `host.list` names each store's ref and status - and
+    * nothing on it advances the chain.
+    */
+  val host: Host = Plugin.makeHost(HostOptions(catalog = Some(catalog)))
+
   /** One provider in the chain, under the store name it answers to. */
-  private case class Entry(store: String, provider: Provider)
+  private case class Entry(store: String, ref: String, provider: Provider)
 
   /** One resolved value, with the store it came from. */
   private case class Cached(store: String, name: Name, value: String)
 
-  private val entries: List[Entry] = providers.zipWithIndex.map: (provider, index) =>
-    val named = names.lift(index).flatten.filter(_.nonEmpty)
-    Entry(named.getOrElse(storename(provider)), provider)
+  private var entries: List[Entry] = providers.zipWithIndex.map: (entry, index) =>
+    entry match
+      case spec: ProviderSpec => declare(spec)
+      case provider: Provider =>
+        val named = names.lift(index).flatten.filter(_.nonEmpty)
+        Entry(named.getOrElse(storename(provider)), "", provider)
 
   // A buffer, not a map: the store a value came from stays attached, and
   // redaction order does not vary between runs.
@@ -217,6 +293,51 @@ class Sekreto(
   // uncached Sekreto would silently disable redact() and leak secrets to
   // logs.
   private val seen = ListBuffer.empty[String]
+
+  /** One chain entry, as a plugin instance.
+    *
+    * The instance is `kind` for a store named after its kind and
+    * `kind$store` otherwise - `hashicorp$prod` and `hashicorp$test` coexist
+    * - so `host.list` reads like the chain. A ref that is already taken gets
+    * a numbered tag from the host instead, because two providers MAY share a
+    * store name (the spec says a directed read walks both) and an instance
+    * ref may not: the repeat keeps its store name and takes `memory$1`.
+    */
+  private def declare(spec: ProviderSpec): Entry =
+    val kind = spec.kind
+
+    if !catalog.has(kind) then throw SekretoError(unknownkind(kind, catalog))
+
+    val store = spec.name.filter(_.nonEmpty).getOrElse(kind)
+
+    if !Plugin.checkTag(VStr(store)) then
+      throw SekretoError(s"sekreto: invalid store name: $store")
+
+    val wanted = if store == kind then kind else Plugin.formatRef(VStr(kind), VStr(store))
+    val taken = host.instance(VStr(wanted)).isDefined
+
+    // plugin's own auto-tagging: the lowest unused positive integer,
+    // assigned by the host, so nothing here counts instances.
+    val declaration = Map("options" -> optionsof(spec)) ++
+      (if taken then Map("tag" -> VStr("?")) else Map.empty)
+
+    // `load` runs the definition's `define`, which builds the provider from
+    // the spec; `activate` takes the instance live. Nothing is contacted by
+    // either: a provider opens nothing until its first lookup.
+    val ref =
+      try
+        val loaded = host.load(VStr(if taken then kind else wanted), VMap(declaration))
+        host.activate(VStr(loaded.ref))
+        loaded.ref
+      catch case err: RuntimeException => throw unwrap(err)
+
+    // A definition whose `define` exported no provider - one that is not a
+    // `providerplugin` at all. plugin's `run` simply returns when a
+    // definition has no callback, so without this the chain would carry a
+    // hole and the first lookup would blame the wrong thing.
+    host.exports(s"$ref/$PROVIDER_EXPORT") match
+      case VOpaque(provider: Provider) => Entry(store, ref, provider)
+      case _ => throw SekretoError(s"sekreto: plugin $kind exported no provider")
 
   /** The secret, or a SekretoError if no provider has it. */
   def get(name: Name): String =
@@ -279,6 +400,18 @@ class Sekreto(
   def all(names: List[Name]): ListMap[String, String] =
     ListMap.from(names.map(name => (name, get(name))))
 
+  /** What a Sekreto shows of itself when something prints it: its store
+    * names, and nothing else.
+    *
+    * `println(secrets)` must never reach `cache` or `seen`, which between
+    * them hold every value this chain has ever resolved - one ordinary
+    * logging call would otherwise write every secret to the log. A `case
+    * class` would do exactly that, which is why Sekreto is not one; this
+    * says so out loud rather than relying on the default `Object.toString`
+    * to keep being what it is.
+    */
+  override def toString: String = s"Sekreto(stores=[${stores().mkString(", ")}])"
+
   /** A description of each provider, in resolution order. */
   def sources(): List[String] = entries.map(_.provider.describe())
 
@@ -300,8 +433,26 @@ class Sekreto(
   /** Drop cached values, so the next `get` asks the providers again. */
   def refresh(): Unit = cache.clear()
 
+  /** Tear the chain down: every plugin instance is deactivated and unloaded,
+    * in reverse, releasing whatever a provider acquired at activation.
+    * Afterwards there is nothing to read from - `get` reports every secret
+    * unknown - and the cache is dropped, though `redact` still knows every
+    * value that was ever resolved.
+    */
+  def close(): Unit =
+    host.close()
+    entries = List.empty
+    cache.clear()
+
 /** Make a Sekreto from declarative provider specs - the same shape the
   * shared spec and an app's config file use.
+  *
+  * `plugins` is the kinds beyond the four built-in ones that `specs` may
+  * name: `sekreto(chain, Plugins.ALL)` for the lot, `sekreto(chain,
+  * List(hashicorp))` for one.
   */
-def sekreto(specs: List[ProviderSpec], cache: Boolean = true): Sekreto =
-  Sekreto(specs.map(Providers.makeprovider), specs.map(_.name), cache)
+def sekreto(
+    specs: List[ProviderSpec],
+    plugins: List[Definition] = List.empty,
+    cache: Boolean = true,
+): Sekreto = Sekreto(providers = specs, plugins = plugins, docache = cache)

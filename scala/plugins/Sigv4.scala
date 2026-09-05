@@ -1,4 +1,9 @@
-// AWS Signature Version 4, hand-rolled.
+// AWS Signature Version 4, hand-rolled - AND UNDER `plugins/`.
+//
+// The core of no port imports a hash function. Signing is what the two AWS
+// kinds need and nothing else does, so it moved here with them: a chain of
+// the four built-in kinds links no MessageDigest and no Mac, which is what
+// `make check-core` reads back off the compiled core.
 //
 // The AWS providers need exactly one thing from the AWS SDK - request
 // signing - and taking the SDK for it would break the no-dependency rule
@@ -10,9 +15,9 @@
 // carry known-answer cases that all ports must reproduce bit-for-bit, and
 // lets the integration mock recompute the signature server-side.
 //
-// A port of typescript/src/Sigv4.ts, which is canonical.
+// A port of typescript/plugins/sigv4.ts, which is canonical.
 
-package com.voxgig.sekreto
+package com.voxgig.sekreto.plugins
 
 import java.io.ByteArrayOutputStream
 import java.net.URI
@@ -25,6 +30,8 @@ import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
 import scala.collection.immutable.ListMap
 import scala.collection.immutable.TreeMap
+
+import com.voxgig.sekreto.SekretoError
 
 /** One request to sign - the same declarative shape the shared spec uses.
   * `datetime` is `YYYYMMDDTHHMMSSZ`, and it is the caller's, so that signing
@@ -43,21 +50,21 @@ case class Signing(
     session: Option[String] = None,
 )
 
-private[sekreto] def hex(bytes: Array[Byte]): String =
+private[plugins] def hex(bytes: Array[Byte]): String =
   val out = StringBuilder()
 
   for byte <- bytes do out.append("%02x".format(byte.toInt & 0xff))
 
   out.toString
 
-private[sekreto] def sha256hex(text: String): String =
+private[plugins] def sha256hex(text: String): String =
   try hex(MessageDigest.getInstance("SHA-256").digest(text.getBytes(StandardCharsets.UTF_8)))
   catch
     // Every JDK ships SHA-256; a JVM without it cannot sign anything.
     case err: NoSuchAlgorithmException =>
       throw SekretoError(s"sekreto: sigv4: no SHA-256: ${err.getMessage}")
 
-private[sekreto] def hmac(key: Array[Byte], text: String): Array[Byte] =
+private[plugins] def hmac(key: Array[Byte], text: String): Array[Byte] =
   try
     val mac = Mac.getInstance("HmacSHA256")
     mac.init(SecretKeySpec(key, "HmacSHA256"))
@@ -69,7 +76,7 @@ private[sekreto] def hmac(key: Array[Byte], text: String): Array[Byte] =
 /** RFC 3986 escaping, which is stricter than the usual URL encoder: AWS
   * wants everything but unreserved characters escaped, with uppercase hex.
   */
-private[sekreto] def uriescape(text: String): String =
+private[plugins] def uriescape(text: String): String =
   val out = StringBuilder()
 
   for byte <- text.getBytes(StandardCharsets.UTF_8) do
@@ -90,7 +97,7 @@ private def hexbyte(text: String): Option[Int] =
   catch case _: NumberFormatException => None
 
 /** Percent-decode, and nothing else: `+` stays `+`, as on the wire. */
-private[sekreto] def uridecode(text: String): String =
+private[plugins] def uridecode(text: String): String =
   val out = ByteArrayOutputStream()
   var index = 0
 
@@ -116,7 +123,7 @@ private[sekreto] def uridecode(text: String): String =
 /** The canonical query string: each pair RFC 3986-escaped, sorted by escaped
   * key then escaped value.
   */
-private[sekreto] def canonicalquery(query: String): String =
+private[plugins] def canonicalquery(query: String): String =
   if query.isEmpty then ""
   else
     query

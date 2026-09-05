@@ -15,6 +15,11 @@
 // known-answer vectors in the shared spec. A signature is a chain of these
 // two functions, so one wrong bit anywhere fails there.
 //
+// IT LIVES UNDER plugins/ AND NOT IN THE CORE. The core of no port
+// imports a hash function: sigv4 is the sharpest instance of the
+// core/plugin line, and it moved here with the aws plugin
+// (docs/design/plugin-providers.md).
+//
 // A port of rust/src/crypto.rs.
 
 import Foundation
@@ -187,60 +192,4 @@ public func hex(_ bytes: [UInt8]) -> String {
   }
 
   return out
-}
-
-/// Decode standard base64, strictly.
-///
-/// Strict on purpose: a lenient decoder skips bytes outside the alphabet
-/// and hands back plausible bytes for a corrupted payload, which are then
-/// returned as the secret. Whitespace is stripped first because the
-/// canonical function accepts embedded newlines - a PEM body or a wrapped
-/// AWS SecretBinary - and everything else is refused.
-public func unbase64(_ text: String) -> String? {
-  var clean = ""
-
-  for ch in text.unicodeScalars {
-    if " " == ch || "\n" == ch || "\r" == ch || "\t" == ch { continue }
-    clean.unicodeScalars.append(ch)
-  }
-
-  let chars = Array(clean.utf8)
-  if 0 != chars.count % 4 { return nil }
-
-  var padding = 0
-  var body = chars
-
-  while 0 < body.count, 0x3d == body[body.count - 1] {  // '='
-    padding += 1
-    body.removeLast()
-    if 2 < padding { return nil }
-  }
-
-  var accumulator: UInt32 = 0
-  var bits = 0
-  var out: [UInt8] = []
-
-  for byte in body {
-    guard let sextet = b64value(byte) else { return nil }
-    accumulator = (accumulator << 6) | UInt32(sextet)
-    bits += 6
-
-    if 8 <= bits {
-      bits -= 8
-      out.append(UInt8((accumulator >> UInt32(bits)) & 0xff))
-    }
-  }
-
-  return String(decoding: out, as: UTF8.self)
-}
-
-private func b64value(_ byte: UInt8) -> UInt8? {
-  switch byte {
-  case 0x41...0x5a: return byte - 0x41  // A-Z
-  case 0x61...0x7a: return byte - 0x61 + 26  // a-z
-  case 0x30...0x39: return byte - 0x30 + 52  // 0-9
-  case 0x2b: return 62  // +
-  case 0x2f: return 63  // /
-  default: return nil
-  }
 }

@@ -14,7 +14,9 @@
 //
 // `parse` returns `Json?`, where `nil` means "this text is not JSON" and
 // `.null` means "this text is the JSON literal null" - a distinction the
-// callers of fetchjson need, since only the first is a malformed response.
+// plugins' HTTP round-trip needs, since only the first is a malformed
+// response. It stays in the core because the core writes JSON too: a
+// Sekreto describes itself as data, without its secrets.
 //
 // A port of typescript/src/Json.ts, which is canonical.
 

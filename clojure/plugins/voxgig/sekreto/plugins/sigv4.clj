@@ -1,4 +1,7 @@
-;; AWS Signature Version 4, hand-rolled.
+;; AWS Signature Version 4, hand-rolled - and OUTSIDE THE CORE, because it
+;; is this library's one cryptographic edge. Only the two aws kinds sign
+;; anything, which is why the core of no port imports a hash function
+;; (docs/design/plugin-providers.md).
 ;;
 ;; The AWS providers need exactly one thing from the AWS SDK - request
 ;; signing - and taking the SDK for it would break the no-dependency rule
@@ -10,14 +13,14 @@
 ;; carry known-answer cases that all ports must reproduce bit-for-bit, and
 ;; lets the integration mock recompute the signature server-side.
 ;;
-;; A port of typescript/src/Sigv4.ts, which is canonical.
+;; A port of typescript/plugins/sigv4.ts, which is canonical.
 
-(ns voxgig.sekreto.sigv4
+(ns voxgig.sekreto.plugins.sigv4
   (:require [clojure.string :as string]
             [voxgig.sekreto.core :as core]
-            [voxgig.sekreto.json :as json])
-  (:import [java.io ByteArrayOutputStream]
-           [java.net URI]
+            [voxgig.sekreto.json :as json]
+            [voxgig.sekreto.plugins.httpjson :as http])
+  (:import [java.net URI]
            [java.nio.charset StandardCharsets]
            [java.security GeneralSecurityException MessageDigest NoSuchAlgorithmException]
            [java.util Locale]
@@ -45,46 +48,10 @@
     (catch GeneralSecurityException err
       (throw (core/sekretoerror (str "sekreto: sigv4: no HmacSHA256: " (.getMessage err)))))))
 
-(defn uriescape
-  "RFC 3986 escaping, which is stricter than the usual URL encoder: AWS
-  wants everything but unreserved characters escaped, with uppercase hex."
-  [^String text]
-  (let [out (StringBuilder.)]
-    (doseq [byte (.getBytes text StandardCharsets/UTF_8)]
-      (let [ch (bit-and (int byte) 0xff)]
-        (if (or (<= (int \A) ch (int \Z))
-                (<= (int \a) ch (int \z))
-                (<= (int \0) ch (int \9))
-                (= (int \-) ch) (= (int \_) ch) (= (int \.) ch) (= (int \~) ch))
-          (.append out (char ch))
-          (.append out (format "%%%02X" ch)))))
-    (.toString out)))
-
-(defn- hexbyte
-  "Two hex digits as a byte, or nil. The usual number reads are decimal."
-  [^String text]
-  (try (Integer/parseInt text 16) (catch NumberFormatException _ nil)))
-
-(defn uridecode
-  "Percent-decode, and nothing else: `+` stays `+`, as on the wire."
-  [^String text]
-  (let [out (ByteArrayOutputStream.)]
-    (loop [index 0]
-      (if (<= (count text) index)
-        (String. (.toByteArray out) StandardCharsets/UTF_8)
-        (let [head (.charAt text index)
-              code (when (and (= \% head) (> (count text) (+ index 2)))
-                     (hexbyte (subs text (inc index) (+ index 3))))]
-          (if (some? code)
-            (do (.write out (int code))
-                (recur (+ index 3)))
-            ;; A stray % is kept as-is, the way a browser would.
-            (do (.write out (.getBytes (str head) StandardCharsets/UTF_8))
-                (recur (inc index)))))))))
-
 (defn canonicalquery
   "The canonical query string: each pair RFC 3986-escaped, sorted by escaped
-  key then escaped value."
+  key then escaped value. The escaping itself lives with the shared HTTP
+  helpers, because four plugins that sign nothing need it too."
   [^String query]
   (if (= "" query)
     ""
@@ -93,7 +60,8 @@
                 (let [eq (string/index-of pair "=")
                       key (if (nil? eq) pair (subs pair 0 eq))
                       value (if (nil? eq) "" (subs pair (inc eq)))]
-                  [(uriescape (uridecode key)) (uriescape (uridecode value))])))
+                  [(http/uriescape (http/uridecode key))
+                   (http/uriescape (http/uridecode value))])))
          (sort)
          (map (fn [[key value]] (str key "=" value)))
          (string/join "&"))))

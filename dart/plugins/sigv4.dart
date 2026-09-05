@@ -1,5 +1,10 @@
 // AWS Signature Version 4, hand-rolled.
 //
+// A PLUGIN FILE, with `crypto.dart` beside it: the core of no port imports
+// a hash function, and this is where sekreto's one use of one lives. Only
+// the aws plugin reaches it, and only a consumer that passed the aws plugin
+// reaches that.
+//
 // The AWS providers need exactly one thing from the AWS SDK - request
 // signing - and taking the SDK for it would break the no-dependency rule
 // that keeps the ports honest. SigV4 is a stable, published algorithm built
@@ -14,7 +19,16 @@
 
 import 'dart:convert';
 
+import '../src/addr.dart';
+
 import 'crypto.dart';
+// `uriescape` and `uridecode` live with the transport rather than here, so
+// that a plugin which only has to escape a query parameter does not compile
+// a hash function to get one. Canonical keeps them in this file because
+// JavaScript's own `encodeURIComponent` covers the other plugins' needs and
+// dart's `Uri.encodeComponent` does not: it leaves `!*'()` unescaped, which
+// is not RFC 3986 and not what AWS signs.
+import 'httpjson.dart';
 
 /// One request to sign - the same declarative shape the shared spec uses.
 /// `datetime` is `YYYYMMDDTHHMMSSZ`, and it is the caller's, so that signing
@@ -43,16 +57,6 @@ class Signing {
     this.body = '',
     this.session,
   });
-}
-
-/// The index of the first character of [chars], or -1.
-int stopat(String text, String chars) {
-  for (var at = 0; at < text.length; at++) {
-    if (chars.contains(text[at])) {
-      return at;
-    }
-  }
-  return -1;
 }
 
 /// The three pieces of a URL that signing needs, split by hand.
@@ -129,76 +133,6 @@ _Parts _split(String url) {
   final query = -1 == mark2 ? '' : tail.substring(mark2 + 1);
 
   return _Parts(host, path.isEmpty ? '/' : path, query);
-}
-
-/// RFC 3986 escaping, which is stricter than the usual URL encoder: AWS
-/// wants everything but unreserved characters escaped, with uppercase hex.
-String uriescape(String text) {
-  final out = StringBuffer();
-
-  for (final byte in utf8.encode(text)) {
-    final ch = byte & 0xff;
-    final unreserved = (0x41 <= ch && 0x5a >= ch) ||
-        (0x61 <= ch && 0x7a >= ch) ||
-        (0x30 <= ch && 0x39 >= ch) ||
-        0x2d == ch ||
-        0x5f == ch ||
-        0x2e == ch ||
-        0x7e == ch;
-
-    if (unreserved) {
-      out.writeCharCode(ch);
-    } else {
-      out.write('%');
-      out.write(ch.toRadixString(16).toUpperCase().padLeft(2, '0'));
-    }
-  }
-
-  return out.toString();
-}
-
-/// Two hex digits as a byte, or nothing.
-int? _hexbyte(String text) {
-  var value = 0;
-
-  for (final unit in text.codeUnits) {
-    final digit = _HEX.indexOf(String.fromCharCode(unit).toLowerCase());
-    if (-1 == digit) {
-      return null;
-    }
-    value = value * 16 + digit;
-  }
-
-  return value;
-}
-
-const String _HEX = '0123456789abcdef';
-
-/// Percent-decode, and nothing else: `+` stays `+`, as on the wire.
-String uridecode(String text) {
-  final out = <int>[];
-  var index = 0;
-
-  while (index < text.length) {
-    var taken = false;
-
-    if ('%' == text[index] && index + 2 < text.length) {
-      final code = _hexbyte(text.substring(index + 1, index + 3));
-      if (null != code) {
-        out.add(code);
-        index += 3;
-        taken = true;
-      }
-    }
-
-    if (!taken) {
-      // A stray % is kept as-is, the way a browser would.
-      out.addAll(utf8.encode(text[index]));
-      index += 1;
-    }
-  }
-
-  return utf8.decode(out, allowMalformed: true);
 }
 
 /// The canonical query string: each pair RFC 3986-escaped, sorted by escaped

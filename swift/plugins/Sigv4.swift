@@ -10,9 +10,14 @@
 // carry known-answer cases that all ports must reproduce bit-for-bit, and
 // lets the integration mock recompute the signature server-side.
 //
+// It travels with the aws plugin, not with the core: signing a request is
+// what makes a kind a plugin (docs/design/plugin-providers.md).
+//
 // A port of typescript/src/Sigv4.ts, which is canonical.
 
 import Foundation
+
+import Sekreto
 
 /// One request to sign - the same declarative shape the shared spec uses.
 /// `datetime` is `YYYYMMDDTHHMMSSZ`, and it is the caller's, so that
@@ -65,27 +70,6 @@ public func hmac(_ key: [UInt8], _ text: String) -> [UInt8] {
   return hmacsha256(key, Array(text.utf8))
 }
 
-/// RFC 3986 escaping, which is stricter than the usual URL encoder: AWS
-/// wants everything but unreserved characters escaped, with uppercase hex.
-/// `!'()*` are escaped too, which is where this differs from the encoders
-/// most standard libraries offer.
-public func uriescape(_ text: String) -> String {
-  var out = ""
-
-  for byte in Array(text.utf8) {
-    let ch = Character(Unicode.Scalar(byte))
-
-    if ("A" <= ch && "Z" >= ch) || ("a" <= ch && "z" >= ch) || ("0" <= ch && "9" >= ch)
-      || "-" == ch || "_" == ch || "." == ch || "~" == ch
-    {
-      out.append(ch)
-    } else {
-      out += String(format: "%%%02X", byte)
-    }
-  }
-
-  return out
-}
 
 /// Percent-decode, and nothing else: `+` stays `+`, as on the wire, and a
 /// malformed escape is kept literal.

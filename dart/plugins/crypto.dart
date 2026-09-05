@@ -1,5 +1,10 @@
 // SHA-256 and HMAC-SHA256, hand-rolled.
 //
+// UNDER `plugins/`, WITH THE AWS PLUGIN, because the core of no port
+// imports a hash function: `sigv4` is the aws plugin's own business and
+// this is what it is built from. A chain of the four built-in kinds never
+// compiles a round of SHA-256.
+//
 // dart:io has no cryptography and package:crypto is a third-party package,
 // so the two primitives AWS request signing is built from are written out
 // here. Both are small, published and completely specified: SHA-256 is FIPS
