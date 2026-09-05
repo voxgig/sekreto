@@ -118,7 +118,7 @@ clients are loaded differs.
 | [lua](lua/) | yes | `lua/src/sekreto/plugins/` | a checkout, found or fetched by `make deps` |
 | [ocaml](ocaml/) | yes | `ocaml/plugins/` | a checkout, compiled into this port's `build/` |
 | [haskell](haskell/) | yes | `haskell/plugins/` | a checkout, compiled into this port's `build/` |
-| [lean](lean/) | switch — pending | | exists |
+| [lean](lean/) | yes | `lean/plugins/` (`SekretoPlugins.*`) | a checkout, compiled into this port's `build/` |
 | [zig](zig/) | yes | `zig/plugins/` | plugin's zig port as a named module — a checkout, found or fetched by `make deps` |
 
 **typescript** — one import per plugin, or the full set from

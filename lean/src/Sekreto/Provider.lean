@@ -390,10 +390,24 @@ kind is one call:
     providerplugin "mystore" (fun spec => mystoreprovider spec.addr)
 
 WHICH FAILURES ARE SEKRETO'S IS DECIDED BY THE CONSTRUCTOR OF THE ERROR,
-not by guessing at its text. `SekretoError` is `IO.userError` and nothing
-else is, so a `userError` raised by `make` is a provider refusing its own
-configuration and comes back out under `ERROR_CODE` byte for byte; every
-other `IO.Error` - a missing file, a permission denial - is not sekreto's
+not by guessing at its text. A `userError` raised by `make` is taken as a
+provider refusing its own configuration and comes back out under
+`ERROR_CODE` byte for byte; every other `IO.Error` - a missing file, a
+permission denial - is not sekreto's
+
+AND THE LIMIT OF THAT, STATED RATHER THAN GLOSSED: `IO.userError` is not
+sekreto's alone. It is Lean's ordinary message-only error, and
+`IO.ofExcept` on any `Except String _` produces one, so a `make` that
+reaches a library raising `userError` for its own reasons has that error
+taken as sekreto's - the message survives byte for byte, but the host's
+framing and the instance ref are lost. Canonical checks
+`err instanceof SekretoError` and rethrows everything else; `IO.Error` is
+a closed inductive with no subclass to check, so Lean cannot do the same.
+Every kind this library ships raises through `Sekreto.fail`, so the
+shipped surface is exact; only a consumer's own `providerplugin` can reach
+the gap. Measured: a definition whose `make` is
+`IO.ofExcept (Except.error "connection refused by libfoo")` comes back as
+a bare SekretoError rather than the host's report of it
 to rewrite and surfaces as the host reports it, naming the instance. -/
 def providerplugin (kind : String) (make : ProviderSpec → IO Provider) : Plugin.Definition := {
   name := kind
