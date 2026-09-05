@@ -50,7 +50,7 @@ exist" without hiding a typo.
 ## Built in, or a plugin
 
 Every port has the same **four built-in provider kinds** — the ones that
-read at most a local file, and need no socket, no TLS, no crypto and no
+read at most a local file, and need no socket, no TLS, no crypto, and no
 child process:
 
 | kind | reads |
@@ -83,8 +83,9 @@ env]` carries no AWS request signing and no HTTP vault client at all.
 The plugin mechanism is voxgig/plugin's, not sekreto's own: a provider
 kind is a plugin *definition*, a configured store is an *instance*
 addressed by name and tag (`hashicorp$prod`), and `secrets.host` is the
-plugin host they live on. The design, and what each port owes it, is
-[`docs/design/plugin-providers.md`](docs/design/plugin-providers.md).
+plugin host they live on. The core imports no plugin in any form, and
+loading is explicit rather than a side effect of importing: a `Sekreto`
+can build only the kinds its constructor was handed.
 
 ### Per language
 
@@ -96,9 +97,9 @@ clients are loaded differs.
 
 | | plugin architecture | plugins live in | voxgig/plugin port |
 |---|---|---|---|
-| [typescript](typescript/) *(canonical)* | ✅ | `typescript/plugins/` | `@voxgig/plugin` |
-| [go](go/) | ✅ | `go/plugins/<kind>/` | `github.com/voxgig/plugin/go` |
-| [python](python/) | ✅ | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git) |
+| [typescript](typescript/) *(canonical)* | yes | `typescript/plugins/` | `@voxgig/plugin` |
+| [go](go/) | yes | `go/plugins/<kind>/` | `github.com/voxgig/plugin/go` |
+| [python](python/) | yes | `python/voxgig_sekreto/plugins/` | `voxgig-plugin` (from git) |
 | [javascript](javascript/) | switch — pending | | exists |
 | [ruby](ruby/) | switch — pending | | exists |
 | [php](php/) | switch — pending | | exists |
@@ -118,7 +119,7 @@ clients are loaded differs.
 | [ocaml](ocaml/) | switch — pending | | exists |
 | [haskell](haskell/) | switch — pending | | exists |
 | [lean](lean/) | switch — pending | | exists |
-| [zig](zig/) | ✅ | `zig/plugins/` | plugin's zig port as a named module — a checkout, found or fetched by `make deps` |
+| [zig](zig/) | yes | `zig/plugins/` | plugin's zig port as a named module — a checkout, found or fetched by `make deps` |
 
 **typescript** — one import per plugin, or the full set from
 `@voxgig/sekreto/plugins`:
@@ -232,34 +233,34 @@ joins the chain like any shipped plugin. See [DOCS.md](DOCS.md#plugins).
 
 | | conformance | CLI |
 |---|---|---|
-| [typescript](typescript/) *(canonical)* | ✅ | ✅ |
-| [javascript](javascript/) | ✅ | ✅ |
-| [python](python/) | ✅ | ✅ |
-| [ruby](ruby/) | ✅ | ✅ |
-| [php](php/) | ✅ | ✅ |
-| [perl](perl/) | ✅ | ✅ |
-| [go](go/) | ✅ | ✅ |
-| [rust](rust/) | ✅ | ✅ |
-| [java](java/) | ✅ | ✅ |
-| [csharp](csharp/) | ✅ | ✅ |
-| [zig](zig/) | ✅ | ✅ |
-| [kotlin](kotlin/) | ✅ | ✅ |
-| [scala](scala/) | ✅ | ✅ |
-| [clojure](clojure/) | ✅ | ✅ |
-| [swift](swift/) | ✅ | ✅ |
-| [dart](dart/) | ✅ | ✅ |
-| [elixir](elixir/) | ✅ | ✅ |
-| [cpp](cpp/) | ✅ | ✅ |
-| [c](c/) | ✅ | ✅ |
-| [lua](lua/) | ✅ | ✅ |
-| [ocaml](ocaml/) | ✅ | ✅ |
-| [haskell](haskell/) | ✅ | ✅ |
-| [lean](lean/) | ✅ | ✅ |
+| [typescript](typescript/) *(canonical)* | yes | yes |
+| [javascript](javascript/) | yes | yes |
+| [python](python/) | yes | yes |
+| [ruby](ruby/) | yes | yes |
+| [php](php/) | yes | yes |
+| [perl](perl/) | yes | yes |
+| [go](go/) | yes | yes |
+| [rust](rust/) | yes | yes |
+| [java](java/) | yes | yes |
+| [csharp](csharp/) | yes | yes |
+| [zig](zig/) | yes | yes |
+| [kotlin](kotlin/) | yes | yes |
+| [scala](scala/) | yes | yes |
+| [clojure](clojure/) | yes | yes |
+| [swift](swift/) | yes | yes |
+| [dart](dart/) | yes | yes |
+| [elixir](elixir/) | yes | yes |
+| [cpp](cpp/) | yes | yes |
+| [c](c/) | yes | yes |
+| [lua](lua/) | yes | yes |
+| [ocaml](ocaml/) | yes | yes |
+| [haskell](haskell/) | yes | yes |
+| [lean](lean/) | yes | yes |
 
 Every port is tested three ways: the shared conformance spec, an
 integration run against mock servers, and — on demand and weekly — the
-same CLIs against the **real** stores in Docker
-(`doc/design/real-stores.md`).
+same CLIs against the **real** stores in Docker: HashiCorp Vault,
+LocalStack, self-hosted Infisical, a Key Vault emulator, and a real boru.
 
 Every port has **zero third-party dependencies, with one deliberate
 exception**: the Rust port takes `rustls` (with `webpki-roots` for the
@@ -331,7 +332,7 @@ stores reject dots in ids.
 
 A store that does not hold a secret is a **miss** — the chain carries on. A
 store that *could not answer* (a locked vault, a wrong passphrase, an
-unreachable host) is an **error**: falling through there would quietly reach
+unreachable host) is an **error**: falling through there would silently reach
 for a weaker store.
 
 ### HashiCorp Vault
@@ -432,9 +433,13 @@ secret and use it.
 
 ## Documentation
 
-- [DOCS.md](DOCS.md) — the full API, provider by provider
-- [AGENTS.md](AGENTS.md) — how to work in this repository
-- each port's own `README.md` for language-specific notes
+- [DOCS.md](DOCS.md). The full API, provider by provider.
+- Each port's own `README.md`, for language-specific notes.
+- [STYLE-GUIDE.md](STYLE-GUIDE.md). How these pages are written.
+
+To change behaviour, change the canonical TypeScript first, then
+`spec/sekreto.aon`, then every port. A port that disagrees with the spec
+is the thing that is wrong.
 
 ## License
 

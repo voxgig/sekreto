@@ -16,7 +16,7 @@ The optional lookup is `TryGet`. The cache is an insertion-ordered list so
 that `Redact` does not vary between runs.
 
 `make test` passes the voxgig/omni path as `-p:OmniPath=`, so the test
-project file names no machine-specific location.
+project file records no machine-specific location.
 
 ## Layout
 

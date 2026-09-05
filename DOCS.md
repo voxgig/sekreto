@@ -221,7 +221,7 @@ its configuration — and Go has nothing to throw. Its `Options.Providers`
 is a list of specs; a spec may carry a `Provider` already built, which is
 how a custom provider that is not a plugin joins the chain.
 
-`try` is a keyword in Java, Kotlin and Scala and a special form in
+`try` is a keyword in Java, Kotlin, and Scala, and a special form in
 Clojure, and Python needs to avoid shadowing the statement, hence `tryget`
 and `try_`. Kotlin can escape a
 keyword with backticks, so it carries `` `try` `` as well. Go and Rust have no
@@ -240,7 +240,7 @@ the shared suite at all. A chain of local stores completes without
 yielding and hands back a plain value; the first provider that opens a
 socket returns a future and the chain returns one in turn. `await` reads
 either. It also keeps every pre-I/O refusal — `checkaddr`, an unsupported
-kv version, missing AWS credentials — synchronous at the call.
+`kv` version, missing AWS credentials — synchronous at the call.
 
 ---
 
@@ -248,14 +248,14 @@ kv version, missing AWS credentials — synchronous at the call.
 
 Four provider kinds are **built in** to every port: `env`, `memory`,
 `dotenv` and `file` — the ones that read at most a local file, and need
-no socket, no TLS, no crypto and no child process. Every other kind is a
+no socket, no TLS, no crypto, and no child process. Every other kind is a
 **plugin**: a [voxgig/plugin](https://github.com/voxgig/plugin)
 definition in the port's `plugins/` folder, which the calling project
 hands to `Sekreto` at construction.
 
 | plugin | kinds | needs | typescript | go | python | zig |
 |---|---|---|---|---|---|---|
-| `hashicorp` | `hashicorp` | HTTPS, fs | `@voxgig/sekreto/plugins/hashicorp` → `hashicorp` | `plugins/hashicorp` → `hashicorp.Plugin` | `voxgig_sekreto.plugins.hashicorp` → `hashicorp` | `plugins/hashicorp.zig` → `hashicorp` |
+| `hashicorp` | `hashicorp` | HTTPS, the filesystem | `@voxgig/sekreto/plugins/hashicorp` → `hashicorp` | `plugins/hashicorp` → `hashicorp.Plugin` | `voxgig_sekreto.plugins.hashicorp` → `hashicorp` | `plugins/hashicorp.zig` → `hashicorp` |
 | `boru` | `boru` | child process, or HTTPS | `…/plugins/boru` → `boru` | `plugins/boru` → `boru.Plugin` | `…plugins.boru` → `boru` | `plugins/boru.zig` → `boru` |
 | `aws` | `awssecrets`, `awsparams` | HTTPS, HMAC-SHA256 | `…/plugins/aws` → `awssecrets`, `awsparams` | `plugins/aws` → `aws.Secrets`, `aws.Params` | `…plugins.aws` → `awssecrets`, `awsparams` | `plugins/aws.zig` → `awssecrets`, `awsparams` |
 | `gcpsecrets` | `gcpsecrets` | HTTPS | `…/plugins/gcpsecrets` → `gcpsecrets` | `plugins/gcpsecrets` → `gcpsecrets.Plugin` | `…plugins.gcpsecrets` → `gcpsecrets` | `plugins/gcpsecrets.zig` → `gcpsecrets` |
@@ -400,7 +400,7 @@ Environment variables, via `envkey`.
 
 ### `dotenv` — built in
 
-A `.env` file, read once on first use and keyed exactly like the
+A `.env` file, read once on first use, and keyed exactly like the
 environment. **A missing file is not an error** — it means "no secrets
 here", so a chain works unchanged on a machine that has no `.env`.
 
@@ -464,8 +464,8 @@ tools that write these files disagree about it.
 KV v2 (the default): `api.token` reads `{addr}/v1/{mount}/data/api` with
 an `X-Vault-Token` header and takes the `token` field of `data.data`.
 KV v1 (`kv: 1`) reads `{addr}/v1/{mount}/api` and takes the field of
-`data`. Any other `kv` value raises — a version typo must not quietly
-behave as v2 and turn its 404s into misses. This is Vault's published
+`data`. Any other `kv` value raises — a version typo must not silently
+behave as v2 and turn its 404 responses into misses. This is Vault's published
 HTTP API, so the provider talks to a real Vault — or an
 [OpenBao](https://openbao.org) — unmodified.
 
@@ -489,12 +489,12 @@ unwrap once, so interception is detectable), dynamic secrets minted per use,
 and audit devices. sekreto adds one guard of its own, because the easy
 mistake is `VAULT_ADDR=http://vault.internal:8200`:
 
-| addr | result |
+| address | result |
 |---|---|
 | `https://…` | allowed |
 | `http://127.0.0.1`, `localhost`, `::1` | allowed — `vault server -dev`, test harnesses |
 | `http://` anything else | `sekreto: refusing to send a token in plaintext to <addr> (use https)` |
-| anything not http(s) | `sekreto: not an http(s) address: <addr>` |
+| anything but http or https | `sekreto: not an http(s) address: <addr>` |
 
 Over https every port verifies the server certificate **and** the host name;
 neither is optional and there is no "skip verify" switch. The Rust port
@@ -574,7 +574,7 @@ allowed case.
 Region and credentials come from config first, then AWS's own environment
 convention (`AWS_REGION`/`AWS_DEFAULT_REGION`, `AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`); missing either raises.
-Requests are SigV4-signed in-tree (see `sigv4` above). Default endpoints
+Requests are SigV4-signed in-tree (see `sigv4`, earlier on this page). Default endpoints
 follow the region's partition: a `cn-*` region resolves under
 `.amazonaws.com.cn`.
 

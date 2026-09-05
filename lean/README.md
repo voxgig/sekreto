@@ -178,11 +178,10 @@ make build
 
 ## An open question this port does not settle
 
-[`doc/design/more-ports.md`](../doc/design/more-ports.md) records that Lean
-is "still its own question": struct's Lean port makes sense as a data
-structure library that Lean proofs can reason about, and a secrets client
-that opens sockets is a different kind of thing. That document leaves open
-whether Lean should be a full port at all, or whether local providers only
+Whether Lean belongs here at all is still its own question: struct's Lean
+port makes sense as a data structure library that Lean proofs can reason
+about, and a secrets client that opens sockets is a different kind of
+thing. The question left open is whether Lean should be a full port at all, or whether local providers only
 — `env`, `dotenv`, `file`, `memory` and boru-via-CLI — is the destination
 here rather than a staging post.
 

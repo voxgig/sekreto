@@ -8,7 +8,7 @@ make test                     # the conformance suite, and the TLS check
 ```
 
 Lua 5.4's whole standard library is basic, coroutine, package, string,
-utf8, table, math, io, os and debug. There are no sockets of any kind, no
+`utf8`, `table`, `math`, `io`, `os`, and `debug`. There are no sockets of any kind, no
 TLS, and `io.popen` is unidirectional and goes through a shell — so this
 port carries one C program, `native/sekretonet.c`, compiled by its own
 Makefile. That program links `-lssl -lcrypto`, and the distribution's
@@ -157,7 +157,7 @@ lua5.4 cli/sekreto-cli.lua \
 - **Child processes are not `io.popen`.** That would mean a shell, a
   quoted command line, and no way to read stderr apart from stdout — and
   the miss detection for both boru and secretspec reads stderr. The
-  helper forks and `execvp`s an argv array, closes the child's stdin on
+  helper forks and `execvp`s an `argv` array, closes the child's stdin on
   `/dev/null`, and drains both streams through one `poll`. Draining them
   in series deadlocks permanently once the child writes more than one
   64 KiB pipe buffer to stderr, which secretspec's box-drawn diagnostics

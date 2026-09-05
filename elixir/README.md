@@ -110,8 +110,8 @@ build/sekreto-cli http://127.0.0.1:8099/whoami --source hashicorp
   would behave differently on two releases of the same runtime.
 - **The HTTP framing is in-tree, and `:httpc` is not used.** Three of this
   library's rules are not expressible through it: the 8 MiB body bound
-  (httpc buffers the whole body before the caller sees a byte), the single
-  ten-second deadline across connect, send and read, and the guarantee
+  (httpc buffers the whole body before the caller receives a byte), the single
+  ten-second deadline across connect, send and read, and the rule
   that no proxy is consulted — httpc's proxy, redirect and cookie settings
   live on a shared profile a host application may already have configured.
   Response headers are still decoded by OTP's `{:packet, :http_bin}` mode,
