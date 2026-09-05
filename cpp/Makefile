@@ -99,19 +99,30 @@ build/obj/plugins/%.o: plugins/%.cpp
 # `ar r` REPLACES a member and KEEPS every other one, so an archive that is
 # already there outlives the source file a member came from: Crypto.o stayed
 # inside libsekreto.a after Crypto.cpp moved to plugins/, and the core went
-# on looking as though it needed SHA-256. A stale member can hide a symbol
-# just as easily as invent one, so every archive is removed before it is
-# built and the proofs below are taken from an archive with nothing in it
-# but what was just compiled.
+# on looking as though it needed SHA-256. Every proof below is read out of
+# these archives, so a stale member makes all of them answer about code that
+# is no longer here.
+#
+# `rm -f` ALONE DOES NOT CLOSE IT, and this is the whole trap: the member
+# list comes from `$(wildcard)`, so deleting a source REMOVES a prerequisite,
+# a target whose prerequisites only got fewer is up to date, and the recipe -
+# `rm -f` and all - never runs. That is exactly the Crypto.cpp case.
+#
+# So the SOURCE DIRECTORY is a prerequisite too. Its mtime changes when a
+# file is added to it or removed from it, which is precisely the event the
+# object list cannot see, and it makes the removal below actually happen.
+# (The plugin checkout's archive is left as it is: those sources are a
+# dependency this port never edits, and naming a directory under an unset
+# $(PLUGIN) would fail the build before `deps` could fetch one.)
 build/libvoxgigplugin.a: $(PLUGINOBJ)
 	@rm -f $@
 	ar rcs $@ $(PLUGINOBJ)
 
-build/libsekreto.a: $(COREOBJ)
+build/libsekreto.a: $(COREOBJ) src
 	@rm -f $@
 	ar rcs $@ $(COREOBJ)
 
-build/libsekretoplugins.a: $(KINDOBJ)
+build/libsekretoplugins.a: $(KINDOBJ) plugins
 	@rm -f $@
 	ar rcs $@ $(KINDOBJ)
 

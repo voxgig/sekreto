@@ -561,6 +561,42 @@ void nothingisleftinaslot() {
   }
 
   same(sekreto::providerslots(), size_t(0), "after a chain failed halfway");
+
+  // ...AND THE CASE THAT ONE CANNOT SEE. `kv: 3` refuses inside `define`,
+  // before the provider exists and therefore before anything is parked, so
+  // it never reaches the discard at all: taking `providerdiscard` out of
+  // `declare` leaves the assertion above green while a provider is stranded
+  // for good. A slot is only left filled when `define` SUCCEEDS - the
+  // provider is parked and its ticket exported - and the instance then fails
+  // to go live, which is what this builds.
+  {
+    class Fixed : public Provider {
+     public:
+      std::optional<std::string> lookup(const std::string&) override { return "fixed"; }
+      std::string describe() const override { return "wontstart"; }
+    };
+
+    Definition built = sekreto::providerplugin(
+        "wontstart", [](const ProviderSpec&) -> std::shared_ptr<Provider> {
+          return std::make_shared<Fixed>();
+        });
+
+    auto refuses = std::make_shared<plugin::Definition>();
+    refuses->name = built->name;
+    refuses->define = built->define;
+    refuses->activate = [](plugin::Inst&) {
+      plugin::fail("wontstart_refused", "this instance will not go live");
+    };
+
+    try {
+      sekreto::makesekreto({of("memory"), of("wontstart")}, {refuses});
+      fail("an activate that refuses was not reported");
+    } catch (const plugin::PluginError&) {
+      // As it should be: an error that is not sekreto's to rewrite.
+    }
+
+    same(sekreto::providerslots(), size_t(0), "after an activate refused");
+  }
 }
 
 // ------------------------------------------------- what the core reaches

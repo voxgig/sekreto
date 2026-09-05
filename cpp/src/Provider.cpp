@@ -211,7 +211,20 @@ struct Slots {
 };
 
 Slots& slots() {
-  static Slots one;
+  // thread_local, NOT a process-global. A provider is parked by `define`
+  // and claimed by `Sekreto::declare` in the same synchronous call on the
+  // same thread, so per-thread is the same table for every purpose this
+  // has - and it removes the sharing entirely. As a process-global it was
+  // shared mutable state on the construction path: four threads building
+  // 500 chains each aborted every run with
+  //
+  //   malloc(): unaligned tcache chunk detected
+  //
+  // three of them inside providerslot -> _Rb_tree_insert_and_rebalance.
+  // The port documents that it claims no thread safety across concurrent
+  // constructions, but heap corruption is not what a disclaimer buys you,
+  // and the pre-refactor port had no shared construction state at all.
+  static thread_local Slots one;
   return one;
 }
 

@@ -174,8 +174,12 @@ make build
   values carry numbers and strings, not pointers, so a definition's
   `define` parks the provider it built and exports the slot number;
   `Sekreto` reads it back off the host and takes it, which empties the
-  slot. The same shape the zig port uses, for the same reason, and neither
-  claims thread safety across concurrent constructions.
+  slot. The same shape the zig port uses, for the same reason. The table is
+  `thread_local`: a provider is parked and claimed inside one synchronous
+  `declare` on one thread, so per-thread costs nothing and concurrent
+  constructions cannot reach each other's table. As a process-global it was
+  shared mutable state on the construction path, and four threads building
+  chains at once corrupted the heap rather than failing cleanly.
 - **HTTP/1.1 is written by hand**, with no redirects and no proxies. A
   followed redirect would carry `X-Vault-Token` to a host `checkaddr`
   never saw and could downgrade https to http; a proxy in the environment

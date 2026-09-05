@@ -112,7 +112,7 @@ clients are loaded differs.
 | [swift](swift/) | yes | `swift/plugins/` (its own module) | a checkout, found or fetched by `make deps` |
 | [dart](dart/) | yes | `dart/plugins/` | a checkout, found or fetched by `make deps` (plugin's dart port is not on pub, so nothing declares it) |
 | [elixir](elixir/) | yes | `elixir/plugins/` | a checkout, found or fetched by `make deps` |
-| [cpp](cpp/) | switch — pending | | exists |
+| [cpp](cpp/) | yes | `cpp/plugins/` (its own archive) | a checkout, compiled into this port's `build/` |
 | [c](c/) | yes | `c/plugins/` (one object per kind) | a checkout, compiled into this port's `build/` |
 | [lua](lua/) | yes | `lua/src/sekreto/plugins/` | a checkout, found or fetched by `make deps` |
 | [ocaml](ocaml/) | switch — pending | | exists |
