@@ -22,7 +22,7 @@ provider answers `String?`, where `null` is the miss that sends the chain
 on to the next store, and the empty string is a hit.
 
 A read answers `FutureOr<String>`, not `Future<String>`, and the
-distinction is load-bearing rather than an optimisation. A chain of local
+distinction is a matter of correctness rather than an optimisation. A chain of local
 stores — the environment, a `.env` file, a secrets directory, a child
 process — completes without yielding, and answers with a plain value; the
 first provider that opens a socket answers with a future, and the chain
@@ -35,7 +35,7 @@ caller has not looked at yet.
 
 Ordering is never left to a default: Dart maps are insertion-ordered
 (`LinkedHashMap`), which is what `parsedotenv`, a `memory` provider's
-values, a signed request body and the SigV4 output all need.
+values, a signed request body, and the SigV4 output all need.
 
 ## Layout
 
@@ -84,7 +84,7 @@ OMNI_HOME=/path/to/omni make test
 
 `sekreto_test.dart` carries the bridge between the two value models: omni
 answers plain Dart values with an `Absent` marker for a key that is not
-there, and this port takes typed specs, so absent, null and value stay
+there, and this port takes typed specs, so absent, null, and value stay
 distinct across the boundary. It also holds the one adaptation the corpus
 needs, `validname` returning a JSON boolean, which belongs in the test
 rather than in the library.
@@ -138,7 +138,7 @@ make build
   directory all mean *this store does not hold it*, so the chain carries
   on. A locked vault, a rejected token, an unreachable host, a directory
   read as a file and SecretSpec's `Provider backend '<name>' not found`
-  all raise. Absence is told from failure by errno — `ENOENT` and
+  all raise. Absence is told from failure by `errno` — `ENOENT` and
   `ENOTDIR` only — rather than by an `exists()` predicate, which answers
   false for a permission error and would turn a locked mount into a miss.
 - **HTTP/1.1 needs no pinning here.** `dart:io`'s `HttpClient` speaks

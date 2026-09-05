@@ -365,6 +365,32 @@ The fullest write-up of this design is `voxgig/apidef`'s
 `voxgig/omni`'s.
 
 
+## Prose follows STYLE-GUIDE.md
+
+[`STYLE-GUIDE.md`](STYLE-GUIDE.md) is normative for the reader-facing pages:
+the root `README.md` and `DOCS.md`, and every port's `README.md` — 25 pages.
+Two gates enforce it and both run in CI (`.github/workflows/docs.yml`) and
+under `make test`:
+
+| Gate | Checks |
+|---|---|
+| `vale --minAlertLevel=error $(python3 tools/check_prose.py --files)` | Google's rules plus the banned list, at the levels in `.vale.ini` |
+| `python3 tools/check_prose.py` | the banned list across line wraps, em-dash spacing and ration, first person, no emoji, no citations of a working document, resolving relative links, a complete page set |
+
+`make scan-prose` runs both (Vale where installed). The banned list is
+`.vale/styles/config/vocabularies/Sekreto/reject.txt`, read by both gates.
+The page set is the configuration block at the top of
+`tools/check_prose.py`: a new port's `README.md` is picked up by directory,
+and any other new page must be reachable from that block or neither gate
+reads it.
+
+Three things trip agents most often: a page must not name or link
+`AGENTS.md`, `doc/design/*` or `docs/design/*` (state the fact instead —
+those are plans, arguments and reviews, and the spec under `spec/` is what
+a page cites); the em dash is spaced (` — `) and rationed to one aside per
+line; and a word Vale's dictionary does not know goes into `accept.txt` one
+entry at a time, never as a suffix pattern.
+
 ## Style
 
 Match the surrounding code. Across ports that means: lowercase function

@@ -71,7 +71,7 @@ OMNI_HOME=/path/to/omni make test
 
 `SekretoTest.swift` carries the bridge between the two value models: omni
 has an `enum Json` with an `absent` case, and this port takes plain Swift
-values and typed specs, so absent, null and value stay distinct across the
+values and typed specs, so absent, null, and value stay distinct across the
 boundary. Both modules export a type called `Json`, so omni's is spelled
 `J` throughout the suite and the ambiguity is resolved once rather than at
 every use.

@@ -14,7 +14,7 @@ binds — and the audit surface is the distribution's own build, pinned to
 no version, vendored nowhere, patched nowhere. `ldd build/sekreto-cli`
 names libssl, libcrypto and libc, and nothing else. Everything the
 standard library lacks is still written in-tree: JSON, HTTP/1.1 framing,
-SHA-256, HMAC-SHA256, hex, base64 and PEM. **`libcrypto` is linked for
+SHA-256, HMAC-SHA256, hex, base64, and PEM. **`libcrypto` is linked for
 the handshake and is never called for a digest** — `make check-tls` runs
 `nm` over the archive and fails if any object but `tls.o` reaches an
 OpenSSL symbol. Only the conformance suite needs voxgig/omni, and only on
@@ -46,7 +46,7 @@ is that plus a miss check.
 | `src/tls.c` | the OpenSSL binding, and the only file that names it |
 | `src/proc.c` | the subprocess runner and the two clocks |
 | `src/util.c` | the arena, the buffer, the ordered map and list |
-| `src/internal.h` | what the library's files share and a consumer never sees |
+| `src/internal.h` | what the library's files share and a consumer never touches |
 | `test/sekretotest.c` | the conformance suite |
 | `test/tlscheck.sh` | the TLS obligations, proved against a real server |
 | `cli/cli.c` | the app that needs a secret |
@@ -93,7 +93,7 @@ OMNI_HOME=/path/to/omni make test
 
 `sekretotest.c` carries the bridge between the two value models: omni has
 an `omni_json` whose ABSENT case is distinct from null, and this port
-takes plain C strings and a flat `sek_spec`, so absent, null and value
+takes plain C strings and a flat `sek_spec`, so absent, null, and value
 stay distinct across the boundary. That is also where `sek_validname`'s C
 `int` becomes the JSON boolean the spec compares — the adaptation belongs
 in the test, never in the library.

@@ -87,7 +87,7 @@ OMNI_HOME=/path/to/omni make test
 
 `SekretoTest.hs` carries the bridge between the two value models: omni has
 a `Json` type with an `Absent` case, and this port takes plain Haskell
-strings and a typed spec, so absent, null and value stay distinct across
+strings and a typed spec, so absent, null, and value stay distinct across
 the boundary. It also forces every answer that a pure name function
 produced, so that a refusal raised lazily inside one arrives as a subject
 failure rather than somewhere later.
@@ -125,8 +125,8 @@ make build
   otherwise come back broken.
 - **The TLS binding verifies four things, and its own test proves each.**
   The chain, against the system trust store; the **host name**, which is a
-  separate step and the half people forget — by dNSName with
-  `SSL_set1_host`, or by iPAddress SAN with
+  separate step and the half people forget — by `dNSName` with
+  `SSL_set1_host`, or by `iPAddress` SAN with
   `X509_VERIFY_PARAM_set1_ip_asc`, because a name check will never match
   an address; SNI, sent for a name and never for an address, which RFC
   6066 forbids; and `SEKRETO_CA_BUNDLE`, which **adds** roots rather than

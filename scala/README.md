@@ -62,7 +62,7 @@ OMNI_HOME=/path/to/omni make test
 
 `SekretoTest.scala` carries the bridge between the two value models: omni
 has an `enum Json` with an `Absent` case, and this port takes plain Scala
-values and typed specs, so absent, null and value stay distinct across the
+values and typed specs, so absent, null, and value stay distinct across the
 boundary.
 
 That suite proves this port computes the same answers as the others. What

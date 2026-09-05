@@ -34,7 +34,7 @@ so no chain can silently drop to a weaker store.
 
 The `sekreto` module carries the chain and the four kinds that read at
 most a local file: `env`, `memory`, `dotenv`, `file`. It reaches no HTTP
-client, no crypto and no child process. Every other kind is a plugin
+client, no crypto, and no child process. Every other kind is a plugin
 under `plugins/`, a [voxgig/plugin](https://github.com/voxgig/plugin)
 definition the calling project passes in — and a plugin a build does not
 name is not compiled, because zig analyses only what a root reaches:
@@ -62,7 +62,7 @@ defer secrets.deinit();
 
 `sekretoplugins` is whatever the build roots it at: `plugins/all.zig`
 for the full set (`plugins.ALL` — the CLI and the suite), or one plugin
-file — `-Msekretoplugins=plugins/hashicorp.zig` compiles hashicorp and
+file — `-Msekretoplugins=plugins/hashicorp.zig` compiles `hashicorp` and
 the shared `httpjson.zig` and nothing else. Either way `plugins.hashicorp`
 is the definition.
 
@@ -158,7 +158,7 @@ Two consequences worth knowing:
 | `src/provider.zig` | `Provider` (a vtable), `ProviderSpec`, the spec ↔ options bridge, `providerplugin` |
 | `src/builtins.zig` | the four built-in providers, `BUILTINS`, `KINDS` |
 | `src/addr.zig` | `checkaddr` |
-| `plugins/<kind>.zig` | one plugin each: hashicorp, boru, aws (two kinds), gcpsecrets, azuresecrets, onepassword, doppler, infisical, secretspec |
+| `plugins/<kind>.zig` | one plugin each: `hashicorp`, `boru`, `aws` (two kinds), `gcpsecrets`, `azuresecrets`, `onepassword`, `doppler`, `infisical`, `secretspec` |
 | `plugins/httpjson.zig` | one JSON round-trip over `std.http.Client`, and the helpers a plugin shares |
 | `plugins/sigv4.zig` | AWS Signature Version 4 |
 | `plugins/all.zig` | `ALL` |
@@ -205,19 +205,19 @@ all, so the library and the CLI compile on a machine with no omni checkout
   `connectTcpOptions` never reads it — in 0.16 the whole of
   `std/http/Client.zig` mentions `timeout` exactly once, at the field's own
   declaration. This README previously claimed the connect was bounded at
-  10s on the strength of passing that field; it was not, and the port had
-  no bound at all. Measured: still blocked at 35s against a server that
+  10 seconds on the strength of passing that field; it was not, and the port had
+  no bound at all. Measured: still blocked at 35 seconds against a server that
   accepted and went silent, where every other port gave up at 10.
 
   The two halves of a request need different machinery, because until the
   connect returns there is no socket to bound:
 
-  - **The connect** is raced against a 10s sleep, and the loser cancelled
+  - **The connect** is raced against a 10-second sleep, and the loser cancelled
     (`dial` in `plugins/httpjson.zig`). `Io.Threaded` signals a thread
     blocked in a cancelable syscall, so the cancel genuinely unblocks a
     stuck connect.
   - **Everything after it** is bounded by a watchdog thread that shuts the
-    socket down once 10s have passed.
+    socket down once 10 seconds have passed.
 
   Shutting the socket down is deliberate, and `SO_RCVTIMEO` is the obvious
   move that is wrong here: it makes `recv` return `EAGAIN`, which
@@ -229,7 +229,7 @@ all, so the library and the CLI compile on a machine with no omni checkout
   connection is up, not a per-read timer that a trickle of bytes resets.
   That makes this port and Go the only two of the twelve that cut a server
   which answers 200 and then dribbles its body one byte at a time —
-  measured at 10.05s here, against 30s-and-still-going for the other ten.
+  measured at 10.05 seconds here, against 30 seconds and still going for the other ten.
 
   The request is still built by hand rather than through `Client.fetch`,
   which gives no access to the connection at all.
@@ -281,4 +281,4 @@ so there is no separate linter.
 ## API
 
 See [DOCS.md](../DOCS.md) for the full API. Anything named differently in
-Zig is listed under "Notes on the translation" above.
+Zig is listed under "Notes on the translation", earlier on this page.

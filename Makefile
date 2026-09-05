@@ -11,6 +11,7 @@
 #   make clean        - clean build artifacts
 #   make spec         - recompile spec/*.json from spec/*.aon
 #   make spec-check   - fail if a committed spec/*.json is stale
+#   make scan-prose   - the prose gate over the reader-facing pages
 #
 # The conformance suite proves each port computes the same answers from
 # spec/sekreto.json. The integration run proves each port can actually fetch
@@ -37,7 +38,7 @@ LANGS = typescript javascript python ruby php perl go rust java csharp zig kotli
 print-langs:
 	@echo $(LANGS)
 
-.PHONY: all test build integration realstores inspect clean check spec spec-check omni-isolation print-langs
+.PHONY: all test build integration realstores inspect clean check spec spec-check omni-isolation print-langs scan-prose
 
 all: test integration
 
@@ -63,6 +64,10 @@ clean-%:
 	@$(MAKE) -C $* clean 2>/dev/null || true
 
 # ---- aggregate targets ----
+
+# The prose gate is part of `test`: a documentation page that fails it is
+# as much a defect as a port that fails the spec.
+test: scan-prose
 
 test:
 	@fail=""; \
@@ -120,7 +125,23 @@ omni-isolation:
 	@echo "-------- and the guard itself, mutation-tested --------"
 	python3 tools/omni_isolation_selftest.py
 
-check: test integration omni-isolation
+check: test integration omni-isolation scan-prose
+
+# The prose gate over the reader-facing pages (STYLE-GUIDE.md). Vale runs
+# where it is installed, over the page set tools/check_prose.py prints,
+# so both halves read the same files; check_prose always runs, because it
+# carries the house rules .vale.ini switches Google rules OFF in favour
+# of -- skipping it silently would widen what is allowed.
+scan-prose:
+	@echo "======== scan: prose (vale + check_prose) ========"
+	@if command -v vale >/dev/null 2>&1; then \
+	  vale sync >/dev/null && \
+	  vale --minAlertLevel=error $$(python3 tools/check_prose.py --files); \
+	else \
+	  echo "(vale not installed - skipping the Google/banned-list half;"; \
+	  echo " see .github/workflows/docs.yml for the pinned version)"; \
+	fi
+	@python3 tools/check_prose.py
 
 # spec/sekreto.json is a COMMITTED artifact compiled from spec/*.aon (and
 # spec/def/*.aon) by @voxgig/model. The aontu files are the source of

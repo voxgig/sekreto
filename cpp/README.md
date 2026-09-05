@@ -12,10 +12,10 @@ linked library, OpenSSL — `-lssl -lcrypto`, and the distribution's OpenSSL
 is the audit surface. C++ has no TLS, and cryptographic transport is the
 one thing this repository does not hand-roll, so this port binds the same
 library every C++ program that speaks https binds. It is bound directly
-rather than through Boost.Asio's SSL stream or cpp-httplib, because those
+rather than through the Boost Asio SSL stream or cpp-httplib, because those
 are HTTP frameworks and the framing has to stay in-tree. Everything else a
 standard library lacks is written here: JSON, HTTP/1.1, SHA-256, HMAC,
-base64 and PEM. Only the conformance suite needs voxgig/omni, and only on
+base64, and PEM. Only the conformance suite needs voxgig/omni, and only on
 its own include path.
 
 The optional lookup is `tryget`, since `try` is a keyword. A provider
@@ -86,7 +86,7 @@ OMNI_HOME=/path/to/omni make test
 
 `SekretoTest.cpp` carries the bridge between the two value models: omni's
 `Json` has an `Absent` case, this port's has not, and the conversion is
-written out so that absent, null and value stay distinct across the
+written out so that absent, null, and value stay distinct across the
 boundary. `specof` maps a spec entry onto a `ProviderSpec`, and every chain
 is built inside the subject, so a constructor refusal — `unsupported kv
 version` — reaches omni as a subject error rather than aborting the run.
