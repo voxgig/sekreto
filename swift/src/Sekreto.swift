@@ -202,7 +202,14 @@ public func parsedotenv(_ text: Any?) -> Ordered<String> {
 
   guard let body = text as? String else { return out }
 
-  for rawline in body.components(separatedBy: "\n") {
+  // CRLF FIRST, and not by dropping a suffix afterwards: in Swift "\r\n" is a
+  // single Character - one grapheme cluster - so `components(separatedBy: "\n")`
+  // does not split it at all, and a CRLF file arrives as ONE line whose value
+  // swallows every later key. The trailing-\r drop below only ever helped a
+  // lone \r, which is why the bug survived it.
+  for rawline in body.replacingOccurrences(of: "\r\n", with: "\n")
+    .components(separatedBy: "\n")
+  {
     let line = dropsuffix(rawline, "\r").trimmingCharacters(in: .whitespacesAndNewlines)
 
     if line.isEmpty || line.hasPrefix("#") { continue }

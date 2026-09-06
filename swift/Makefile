@@ -149,7 +149,13 @@ test: build check-core lean
 	$(MAKE) -C $(OMNI)/swift build
 	rm -f build/libOmni.a
 	ar rcs build/libOmni.a $(OMNI)/swift/.build/debug/Omni.build/*.o
-	$(SWIFTC) -I build -I $(OMNI)/swift/.build/debug -L build \
+	@# BOTH module paths: SwiftPM used to leave Omni.swiftmodule directly in
+	@# .build/debug and now writes it to .build/debug/Modules. Passing only
+	@# one makes the port depend on which SwiftPM the machine happens to
+	@# have, and it fails as `no such module 'Omni'` - which reads like a
+	@# missing checkout rather than a moved file.
+	$(SWIFTC) -I build -I $(OMNI)/swift/.build/debug \
+	  -I $(OMNI)/swift/.build/debug/Modules -L build \
 	  -lSekretoPlugins -lSekreto -lVoxgigPlugin -lOmni -lm \
 	  -o build/sekreto-test test/SekretoTest.swift
 	$(SWIFTC) -I build -L build -lSekretoPlugins -lSekreto -lVoxgigPlugin -lm \
