@@ -20,6 +20,7 @@ use Voxgig\Sekreto\SekretoError;
 
 use function Voxgig\Sekreto\checkaddr;
 use function Voxgig\Sekreto\providerplugin;
+use function Voxgig\Sekreto\writejson;
 
 /**
  * Infisical.
@@ -57,7 +58,7 @@ class InfisicalProvider implements Provider
             'POST',
             $addr . '/api/v1/auth/universal-auth/login',
             ['Content-Type: application/json'],
-            json_encode(['clientId' => $clientid, 'clientSecret' => $clientsecret])
+            writejson(['clientId' => $clientid, 'clientSecret' => $clientsecret])
         );
 
         $got = $body['accessToken'] ?? null;

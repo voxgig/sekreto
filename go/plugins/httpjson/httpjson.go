@@ -204,7 +204,7 @@ func ToString(value any) string {
 	case float64:
 		return strconv.FormatFloat(typed, 'f', -1, 64)
 	default:
-		text, err := json.Marshal(typed)
+		text, err := sekreto.WriteJSON(typed)
 		if nil != err {
 			return ""
 		}

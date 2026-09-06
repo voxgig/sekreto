@@ -209,6 +209,30 @@ statements in `test/integration.sh`.
   language's key order, not the spec's: Go's `encoding/json` sorts keys,
   Perl hashes are unordered, Java's `HashMap` is neither. Print from an
   ordered structure, or assemble the line field by field.
+- **THE BYTES ARE THE CONTRACT, AND THE LOCALE IS NOT A CONFIGURATION.**
+  Printing the right *characters* is not enough: every port must print the
+  same *bytes*, and it must do so however the process was started.
+  Measured across all of them, nine disagreed. Three chose different
+  escapes — Go's `encoding/json` escapes `<`, `>` and `&` unless
+  `SetEscapeHTML(false)`; PHP's `json_encode` escapes `/` and every
+  non-ASCII character without `JSON_UNESCAPED_SLASHES |
+  JSON_UNESCAPED_UNICODE`; Python's `json.dumps` escapes non-ASCII unless
+  `ensure_ascii=False`. Six more were not writer faults at all but
+  *output encoding*: the four JVM ports turned every non-ASCII character
+  into `?`, haskell died with `commitBuffer: invalid argument`, and
+  elixir emitted a raw latin1 byte and Erlang's `\x{2603}` notation, which
+  is neither JSON nor UTF-8. All of those come from the platform default,
+  so `LC_ALL=C.UTF-8` hides five of the six — which is why the check runs
+  under `env -i` with no locale at all. Each port now forces UTF-8 on its
+  own streams. `check_escapes` in `test/checks.sh` compares the whole
+  line across every port; the corpus cannot, because no spec entry takes
+  a writer as its subject and a chain never prints.
+- **A writer's output is what LEAVES the process.** `WriteJSON`,
+  `writejson` and their siblings are for a request body, a returned
+  secret, the CLI's line. A marshal whose bytes are parsed again without
+  ever being emitted — `SpecOf` and `OptionsOf` in the go port — needs no
+  such care, and saying so where it happens stops the next reader
+  "fixing" it.
 - **Booleans.** `validname` returns whatever the language calls true. The
   spec says JSON `true`, so adapt in the *test*, not by making the library
   hand back JSON booleans.

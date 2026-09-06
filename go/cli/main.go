@@ -269,7 +269,7 @@ func run() int {
 
 	// A struct, not a map: encoding/json sorts map keys, and every port must
 	// print the same bytes for test/integration.sh to compare them.
-	out, _ := json.Marshal(struct {
+	out, _ := sekreto.WriteJSON(struct {
 		Ok     bool   `json:"ok"`
 		Lang   string `json:"lang"`
 		Source string `json:"source"`

@@ -30,7 +30,7 @@ from pluginhome import pluginpath  # noqa: E402
 
 pluginpath()
 
-from voxgig_sekreto import Sekreto  # noqa: E402
+from voxgig_sekreto import Sekreto, writejson  # noqa: E402
 
 # THE FULL SET, passed to Sekreto. The CLI is asked for any provider kind
 # on the command line, so it is the one consumer that legitimately wants
@@ -210,15 +210,14 @@ def main():
         return 1
 
     print(
-        json.dumps(
+        writejson(
             {
                 'ok': True,
                 'lang': LANG,
                 'source': source,
                 'store': store,
                 'caller': body.get('caller'),
-            },
-            separators=(',', ':'),
+            }
         )
     )
 

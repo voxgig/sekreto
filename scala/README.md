@@ -219,6 +219,12 @@ plugin.
   the spec says it is not. Segment matching uses `Regex.matches` rather
   than an anchored find, because `$` in `java.util.regex` also matches
   before a final newline — and `api.token\n` is a spec case.
+- **stdout and stderr are opened as UTF-8, not left to the platform.**
+  `println` reaches `System.out`, which encodes with the default character
+  set; a process started with no `LANG` gets ASCII and every non-ASCII
+  character in a secret silently becomes `?`. The CLI prints through its
+  own `PrintStream` on `FileDescriptor.out`, so the output does not
+  depend on how the caller was started.
 
 ## API
 

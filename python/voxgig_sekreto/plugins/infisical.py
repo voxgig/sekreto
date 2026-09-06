@@ -1,10 +1,9 @@
 # The infisical plugin: Infisical. Needs HTTPS. A port of
 # typescript/plugins/infisical.ts.
-import json
 import time
 
 from ..addr import checkaddr
-from ..sekreto import SekretoError, envkey
+from ..sekreto import SekretoError, envkey, writejson
 from ..providers import Provider, providerplugin
 from .httpjson import fetchjson, tonumber, urlpart
 
@@ -37,9 +36,8 @@ class InfisicalProvider(Provider):
             'POST',
             addr + '/api/v1/auth/universal-auth/login',
             {'content-type': 'application/json'},
-            json.dumps(
-                {'clientId': self.opts['clientid'], 'clientSecret': self.opts['clientsecret']},
-                separators=(',', ':'),
+            writejson(
+                {'clientId': self.opts['clientid'], 'clientSecret': self.opts['clientsecret']}
             ),
         )
 

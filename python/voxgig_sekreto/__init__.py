@@ -43,6 +43,7 @@ from .sekreto import (
     sekreto,
     validname,
     vaultref,
+    writejson,
 )
 
 __all__ = [
@@ -68,4 +69,5 @@ __all__ = [
     'sekreto',
     'validname',
     'vaultref',
+    'writejson',
 ]

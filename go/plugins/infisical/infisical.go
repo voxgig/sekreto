@@ -3,7 +3,6 @@
 package infisical
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,7 +44,7 @@ func (provider *Provider) login(addr string) (string, error) {
 		return "", sekreto.Fail("sekreto: infisical: no token and no client credentials")
 	}
 
-	payload, _ := json.Marshal(struct {
+	payload, _ := sekreto.WriteJSON(struct {
 		ClientID     string `json:"clientId"`
 		ClientSecret string `json:"clientSecret"`
 	}{ClientID: provider.ClientID, ClientSecret: provider.ClientSecret})

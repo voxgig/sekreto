@@ -21,10 +21,12 @@ package sekreto;
 import com.voxgig.sekreto.Json;
 import com.voxgig.sekreto.Sekreto;
 import com.voxgig.sekreto.plugins.Plugins;
+import java.io.PrintStream;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
@@ -34,6 +36,22 @@ import java.util.Map;
 public final class Cli {
 
   private static final String LANG = "java";
+
+  // System.out encodes with the PLATFORM charset, and a service started
+  // with no LANG gets ASCII: every non-ASCII character in a secret or a
+  // caller silently becomes '?'. That is data loss, not a rendering
+  // quirk, and it is invisible until something non-ASCII shows up. Every
+  // other port emits UTF-8 whatever the environment says, so this one
+  // does too - the library's output must not depend on how the caller was
+  // started.
+  private static final PrintStream OUT =
+      new PrintStream(new java.io.FileOutputStream(java.io.FileDescriptor.out), true,
+          StandardCharsets.UTF_8);
+
+  // stderr carries a redacted store response, so it has the same problem.
+  private static final PrintStream ERR =
+      new PrintStream(new java.io.FileOutputStream(java.io.FileDescriptor.err), true,
+          StandardCharsets.UTF_8);
 
   private Cli() {}
 
@@ -221,7 +239,7 @@ public final class Cli {
     try {
       token = store.isEmpty() ? secrets.get("api.token") : secrets.getfrom(store, "api.token");
     } catch (RuntimeException err) {
-      System.err.println("sekreto-cli: " + err.getMessage());
+      ERR.println("sekreto-cli: " + err.getMessage());
       return 2;
     }
 
@@ -246,20 +264,20 @@ public final class Cli {
           .build();
       response = client.send(request, HttpResponse.BodyHandlers.ofString());
     } catch (Exception err) {
-      System.err.println("sekreto-cli: " + secrets.redact(String.valueOf(err.getMessage())));
+      ERR.println("sekreto-cli: " + secrets.redact(String.valueOf(err.getMessage())));
       return 1;
     }
 
     if (200 != response.statusCode()) {
       // Never print the token itself, even when the call fails.
-      System.err.println("sekreto-cli: " + secrets.redact(response.body()));
+      ERR.println("sekreto-cli: " + secrets.redact(response.body()));
       return 1;
     }
 
     Object body = Json.parse(response.body());
     Object caller = body instanceof Map ? ((Map<String, Object>) body).get("caller") : null;
 
-    System.out.println(
+    OUT.println(
         Json.stringify(
             spec("ok", Boolean.TRUE, "lang", LANG, "source", source, "store", store,
                 "caller", caller)));

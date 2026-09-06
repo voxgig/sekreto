@@ -223,4 +223,22 @@
             0))))))
 
 (defn -main [& args]
-  (System/exit (run args)))
+  ;; *out* and *err* wrap System/out with the PLATFORM charset, and a
+  ;; process started with no LANG gets ASCII: every non-ASCII character in
+  ;; a secret or a caller silently becomes '?'. That is data loss, not a
+  ;; rendering quirk, and it stays invisible until something non-ASCII
+  ;; shows up. Every other port emits UTF-8 whatever the environment says,
+  ;; so this one does too. Both streams are rebound, because the error
+  ;; paths print through *err*, and both are flushed before exit - a
+  ;; System/exit inside the binding would otherwise drop a buffered line.
+  (let [utf8 (fn [^java.io.FileDescriptor fd]
+               (java.io.PrintWriter.
+                 (java.io.OutputStreamWriter.
+                   (java.io.FileOutputStream. fd) "UTF-8")
+                 true))
+        out (utf8 java.io.FileDescriptor/out)
+        err (utf8 java.io.FileDescriptor/err)
+        code (binding [*out* out *err* err] (run args))]
+    (.flush out)
+    (.flush err)
+    (System/exit code)))

@@ -270,6 +270,13 @@ make build
   `redact` keeps its name, and `all` is `getall` for the same reason. A
   provider answers `IO (Maybe String)`, where `Nothing` is the miss that
   sends the chain on to the next store.
+- **`stdout` and `stderr` are set to `utf8` before anything prints.** A
+  handle's encoding follows the locale, and a process started with no
+  `LANG` gets ASCII: printing a secret with an accented character then
+  died with `commitBuffer: invalid argument (cannot encode character)`
+  rather than printing anything at all. `main` calls `hSetEncoding` on
+  both handles first, so the output does not depend on how the caller was
+  started.
 
 ## API
 

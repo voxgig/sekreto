@@ -4,7 +4,6 @@
 package hashicorp
 
 import (
-	"encoding/json"
 	"net/http"
 	"os"
 	"strconv"
@@ -88,12 +87,12 @@ func (provider *Provider) login() (string, error) {
 			}
 			jwt = strings.TrimSpace(string(raw))
 		}
-		payload, _ = json.Marshal(struct {
+		payload, _ = sekreto.WriteJSON(struct {
 			Role string `json:"role"`
 			Jwt  string `json:"jwt"`
 		}{Role: auth.Role, Jwt: jwt})
 	case "approle":
-		payload, _ = json.Marshal(struct {
+		payload, _ = sekreto.WriteJSON(struct {
 			RoleID   string `json:"role_id"`
 			SecretID string `json:"secret_id"`
 		}{RoleID: auth.RoleID, SecretID: auth.SecretID})

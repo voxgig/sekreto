@@ -75,6 +75,15 @@ extension beyond a default PHP build — `curl` is not required.
 | `test/included.php` | what one require costs, in a fresh interpreter |
 | `cli/sekreto-cli.php` | the app that needs a secret |
 
+## Notes
+
+- **`writejson`, not `json_encode`, for anything emitted.** `json_encode`
+  escapes `/` as `\/` and every non-ASCII character as `\uXXXX` unless
+  given `JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE`. The AWS plugin
+  had passed the first flag alone since it signs the body it sends; with
+  only the slashes turned off, a non-ASCII secret path still signed
+  different bytes from every other port.
+
 ## Testing
 
 The conformance suite runs [`spec/sekreto.json`](../spec/sekreto.json) —

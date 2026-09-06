@@ -365,6 +365,9 @@ func ProviderPlugin(kind string, make func(spec *ProviderSpec) (Provider, error)
 // the JSON shape OptionsOf produced, and the shape a config document
 // would.
 func SpecOf(options map[string]any) (*ProviderSpec, error) {
+	// json.Marshal, not WriteJSON: these bytes are unmarshalled on the next
+	// line and never leave the process, so HTML escaping cannot be observed
+	// - Unmarshal reads \u003c back as <. WriteJSON is for what is emitted.
 	text, err := json.Marshal(options)
 	if nil != err {
 		return nil, Fail("sekreto: unreadable provider options: " + err.Error())

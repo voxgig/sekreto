@@ -266,6 +266,15 @@ defmodule Sekreto.Cli do
 
   @doc "The escript entry point. Arguments arrive as charlists."
   def main(args) do
+    # An escript's io devices default to LATIN1, whatever the locale says -
+    # unlike the JVM ports, LC_ALL does not rescue this one. In latin1 mode
+    # Erlang writes a codepoint above 255 as the literal text \x{2603} and
+    # one in 128..255 as a single raw byte, so a secret or a caller with an
+    # accented character came out as invalid UTF-8 inside invalid JSON.
+    # Every other port emits UTF-8, so this one does too.
+    :io.setopts(:standard_io, encoding: :unicode)
+    :io.setopts(:standard_error, encoding: :unicode)
+
     code =
       try do
         run(Enum.map(args, &to_string/1))

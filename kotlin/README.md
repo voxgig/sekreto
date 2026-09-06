@@ -186,6 +186,12 @@ itself, and the core jar does not reach a plugin.
 - **A miss is not a failure.** A 404 from HashiCorp and boru's "no alias
   named" mean *this store does not hold it*, so the chain carries on. A
   locked vault, a rejected token or an unreachable host raises.
+- **stdout and stderr are opened as UTF-8, not left to the platform.**
+  `println` goes to `System.out`, which encodes with the default character
+  set; a process started with no `LANG` gets ASCII and every non-ASCII
+  character in a secret silently becomes `?`. The CLI prints through its
+  own `PrintStream` on `FileDescriptor.out`, so the output does not
+  depend on how the caller was started.
 
 ## API
 

@@ -152,7 +152,7 @@ func (provider *SecretsProvider) Lookup(name string) (string, bool, error) {
 		return "", false, err
 	}
 
-	payload, _ := json.Marshal(struct {
+	payload, _ := sekreto.WriteJSON(struct {
 		SecretID string `json:"SecretId"`
 	}{SecretID: ref.Path})
 
@@ -233,7 +233,7 @@ func (provider *ParamsProvider) Lookup(name string) (string, bool, error) {
 		return "", false, err
 	}
 
-	payload, _ := json.Marshal(struct {
+	payload, _ := sekreto.WriteJSON(struct {
 		Name           string `json:"Name"`
 		WithDecryption bool   `json:"WithDecryption"`
 	}{Name: param, WithDecryption: true})
