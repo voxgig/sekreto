@@ -81,6 +81,17 @@ none, resolved from the module proxy like any other.
 | `testutil/sekreto_test.go` | the conformance suite |
 | `cli/main.go` | the app that needs a secret |
 
+## Notes
+
+- **`sekreto.WriteJSON`, not `json.Marshal`, for anything emitted.**
+  `encoding/json` escapes `<`, `>` and `&` as `\u003c`, `\u003e` and
+  `\u0026` unless told otherwise — a defence for JSON pasted into an HTML
+  page, which this library never does. It made go the only port whose
+  request bodies and CLI line differed byte for byte from the rest.
+  `WriteJSON` turns that off and trims the newline `Encode` appends. The
+  two marshals in `SpecOf` and `OptionsOf` stay on `json.Marshal`: their
+  bytes are decoded again on the next line and never leave the process.
+
 ## Testing
 
 The conformance suite runs [`spec/sekreto.json`](../spec/sekreto.json) —

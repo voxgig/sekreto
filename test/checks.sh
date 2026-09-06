@@ -320,6 +320,55 @@ check() {
   return 1
 }
 
+# Every port must print the SAME BYTES for a value that needs escaping.
+#
+#   check_escapes <lang>
+#
+# The conformance corpus cannot see this. No spec entry takes a JSON writer
+# as its subject, and a chain never prints, so each port's writer and its
+# stdout encoding were 23 separate opinions until this check compared them.
+# Measured before it existed, nine ports disagreed: go escaped < > and &,
+# php escaped the slash, php and python escaped every non-ASCII character,
+# the four JVM ports replaced them with '?', haskell died on them, and
+# elixir emitted latin1 bytes and Erlang's own \\x{...} notation.
+#
+# The caller comes back from /whoami-escapes (see api/server.js) and passes
+# through the port's JSON reader and then its writer, so a round trip is
+# what is compared. The environment is stripped by `check`'s own env -i
+# and NO LANG is set on purpose: a library's output must not depend on how
+# the caller was started, and LC_ALL=C.UTF-8 is exactly what hid the JVM
+# and haskell faults.
+check_escapes() {
+  local lang=$1
+  local cmd
+  cmd=$(cli_cmd "$lang")
+
+  local caller="a<b>c&d\\\"e\\\\f/g\\u001fhéi☃j😀k"
+  local want="{\"ok\":true,\"lang\":\"$lang\",\"source\":\"env\",\"store\":\"\",\"caller\":\"$caller\"}"
+
+  local out rc
+  out=$(cd "$RUNDIR" && env -i \
+    PATH="$PATH" HOME="$HOME" \
+    JAVA_HOME="${JAVA_HOME:-}" DOTNET_CLI_TELEMETRY_OPTOUT=1 \
+    DOTNET_NOLOGO=1 \
+    API_TOKEN="$TOKEN" \
+    $cmd "$ESCAPES_URL" --source env 2>/dev/null)
+  rc=$?
+
+  if [ 0 -eq $rc ] && [ "$out" = "$want" ]; then
+    pass=$((pass + 1))
+    printf '   %s %-34s\n' "$(green ok)" "$lang/escapes byte-identical"
+    return 0
+  fi
+
+  fail=$((fail + 1))
+  FAILED+=("$lang/escapes")
+  printf '   %s %-34s rc=%s\n' "$(red FAIL)" "$lang/escapes byte-identical" "$rc"
+  printf '        want: %s\n' "$want"
+  printf '        got : %s\n' "$out"
+  return 1
+}
+
 # Record a check that could not be run, and say why.
 #
 #   noted_skip <label> <why>

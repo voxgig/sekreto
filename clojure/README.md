@@ -215,6 +215,12 @@ java -cp build/sekreto-cli.jar sekreto.Cli \
 - **One error type.** Every refusal is an `ex-info` carrying `:sekreto true`
   and the message the spec pins; `sekretoerror?` asks about one without
   catching by class.
+- **`*out*` and `*err*` are rebound to UTF-8 writers.** Each wraps its own
+  stream with the platform default character set, and a process started
+  with no `LANG` gets ASCII, where every non-ASCII character in a secret
+  silently becomes `?`. `-main` binds both to writers on the raw file
+  descriptors and flushes them before `System/exit`, which a buffered line
+  would otherwise not survive.
 
 ## API
 

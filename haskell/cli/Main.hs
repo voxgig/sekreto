@@ -26,7 +26,7 @@ import Providers (AuthSpec (..), ProviderSpec (..), emptyauth, emptyspec)
 import Sekreto (Options (..), Sekreto, emptyoptions, get, getfrom, redactall, sekreto)
 import System.Environment (getArgs, lookupEnv)
 import System.Exit (ExitCode (..), exitWith)
-import System.IO (hPutStrLn, stderr)
+import System.IO (hSetEncoding, hPutStrLn, stderr, stdout, utf8)
 
 lang :: String
 lang = "haskell"
@@ -245,6 +245,15 @@ flag args name = go args
 
 main :: IO ()
 main = do
+  -- The handle's encoding follows the LOCALE, and a service started with
+  -- no LANG gets ASCII: a secret or a caller with an accented character
+  -- then dies with "commitBuffer: invalid argument (cannot encode
+  -- character)" rather than printing. Every other port emits UTF-8
+  -- whatever the environment says, so this one does too - the library's
+  -- output must not depend on how the caller was started.
+  hSetEncoding stdout utf8
+  hSetEncoding stderr utf8
+
   args <- getArgs
 
   let url = case args of

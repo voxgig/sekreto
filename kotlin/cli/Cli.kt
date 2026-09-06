@@ -26,6 +26,10 @@
 
 package sekreto
 
+import java.io.FileDescriptor
+import java.io.FileOutputStream
+import java.io.PrintStream
+
 import com.voxgig.sekreto.AuthSpec
 import com.voxgig.sekreto.Json
 import com.voxgig.sekreto.ProviderSpec
@@ -38,6 +42,16 @@ import java.net.http.HttpResponse
 import kotlin.system.exitProcess
 
 private const val LANG = "kotlin"
+
+// System.out encodes with the PLATFORM charset, and a process started with
+// no LANG gets ASCII: every non-ASCII character in a secret or a caller
+// silently becomes '?'. That is data loss, not a rendering quirk, and it
+// stays invisible until something non-ASCII shows up. Every other port
+// emits UTF-8 whatever the environment says, so this one does too.
+private val OUT = PrintStream(FileOutputStream(FileDescriptor.out), true, Charsets.UTF_8)
+
+// stderr carries a redacted store response, so it has the same problem.
+private val ERR = PrintStream(FileOutputStream(FileDescriptor.err), true, Charsets.UTF_8)
 
 private fun envor(name: String, fallback: String): String {
     val value = System.getenv(name)
@@ -197,7 +211,7 @@ private fun run(args: Array<String>): Int {
     val token = try {
         if (store.isEmpty()) secrets.get("api.token") else secrets.getfrom(store, "api.token")
     } catch (err: RuntimeException) {
-        System.err.println("sekreto-cli: ${err.message}")
+        ERR.println("sekreto-cli: ${err.message}")
         return 2
     }
 
@@ -214,13 +228,13 @@ private fun run(args: Array<String>): Int {
             .build()
             .send(request, HttpResponse.BodyHandlers.ofString())
     } catch (err: Exception) {
-        System.err.println("sekreto-cli: " + secrets.redact(err.message ?: err.toString()))
+        ERR.println("sekreto-cli: " + secrets.redact(err.message ?: err.toString()))
         return 1
     }
 
     if (200 != response.statusCode()) {
         // Never print the token itself, even when the call fails.
-        System.err.println("sekreto-cli: " + secrets.redact(response.body()))
+        ERR.println("sekreto-cli: " + secrets.redact(response.body()))
         return 1
     }
 
@@ -236,7 +250,7 @@ private fun run(args: Array<String>): Int {
     line.append(",\"caller\":").append(if (null == caller) "null" else Json.stringify(caller))
     line.append("}")
 
-    println(line)
+    OUT.println(line)
 
     return 0
 }

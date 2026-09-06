@@ -85,6 +85,10 @@ SECRETSPEC=${SECRETSPEC:-$(command -v secretspec || true)}
 
 API_URL=http://127.0.0.1:$API_PORT/whoami
 
+# The same API, answering with a caller full of characters that every JSON
+# writer treats differently. See check_escapes in checks.sh.
+ESCAPES_URL=http://127.0.0.1:$API_PORT/whoami-escapes
+
 WORK=$(mktemp -d)
 PIDS=()
 
@@ -279,6 +283,10 @@ for lang in $LANGS; do
 
   # 1. The secret in an environment variable.
   check "$lang" env ok API_TOKEN="$TOKEN"
+
+  # 1a. The same call, but the API answers with a caller that needs
+  #     escaping: every port must print the same bytes for it.
+  check_escapes "$lang"
 
   # 2. The secret in a .env file. Note that API_TOKEN is NOT in the
   #    environment here, so a port that quietly falls back would fail.

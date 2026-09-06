@@ -25,6 +25,7 @@ use Voxgig\Sekreto\SekretoError;
 
 use function Voxgig\Sekreto\checkaddr;
 use function Voxgig\Sekreto\providerplugin;
+use function Voxgig\Sekreto\writejson;
 
 /** The `YYYYMMDDTHHMMSSZ` timestamp SigV4 wants, for now. */
 function awsnow(): string
@@ -80,9 +81,11 @@ function awscall(array $opts, string $service, string $target, array $payload): 
     checkaddr($addr);
 
     $url = preg_replace('#/$#', '', $addr) . '/';
-    // Unescaped slashes, so the body signed here is byte-identical to the
-    // canonical port's JSON.stringify output.
-    $body = json_encode($payload, JSON_UNESCAPED_SLASHES);
+    // writejson, so the body signed here is byte-identical to the canonical
+    // port's JSON.stringify output: unescaped slashes AND unescaped unicode.
+    // With only the slashes turned off, a non-ASCII secret path still signed
+    // different bytes from every other port.
+    $body = writejson($payload);
     $headers = [
         'content-type' => 'application/x-amz-json-1.1',
         'x-amz-target' => $target,

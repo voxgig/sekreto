@@ -35,6 +35,7 @@ require_once __DIR__ . '/../src/Sekreto.php';
 require_once __DIR__ . '/../plugins/plugins.php';
 require_once __DIR__ . '/../plugins/httpjson.php';
 
+use function Voxgig\Sekreto\writejson;
 use function Voxgig\Sekreto\Plugins\allplugins;
 use function Voxgig\Sekreto\Plugins\httpget;
 
@@ -200,11 +201,11 @@ function main(array $argv): int
 
     if (200 !== $status) {
         // Never print the token itself, even when the call fails.
-        fwrite(STDERR, 'sekreto-cli: ' . $secrets->redact(json_encode($body)) . "\n");
+        fwrite(STDERR, 'sekreto-cli: ' . $secrets->redact(writejson($body)) . "\n");
         return 1;
     }
 
-    echo json_encode([
+    echo writejson([
         'ok' => true,
         'lang' => LANG,
         'source' => $source,

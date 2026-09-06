@@ -9,7 +9,7 @@ import os
 import time
 
 from ..addr import checkaddr
-from ..sekreto import SekretoError, awsparam, vaultref
+from ..sekreto import SekretoError, awsparam, vaultref, writejson
 from ..providers import Provider, providerplugin
 from .httpjson import fetchjson
 from .sigv4 import sigv4
@@ -53,7 +53,7 @@ def awscall(opts, service, target, payload):
     checkaddr(addr)
 
     url = addr.rstrip('/') + '/'
-    body = json.dumps(payload, separators=(',', ':'))
+    body = writejson(payload)
     headers = {
         'content-type': 'application/x-amz-json-1.1',
         'x-amz-target': target,

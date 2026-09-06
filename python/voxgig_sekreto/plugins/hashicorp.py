@@ -1,11 +1,10 @@
 # The hashicorp plugin: HashiCorp Vault, and OpenBao. Needs HTTPS, and
 # the filesystem for a kubernetes service-account JWT. A port of
 # typescript/plugins/hashicorp.ts.
-import json
 import time
 
 from ..addr import checkaddr
-from ..sekreto import SekretoError, vaultref
+from ..sekreto import SekretoError, vaultref, writejson
 from ..providers import Provider, providerplugin
 from .httpjson import fetchjson, tonumber
 
@@ -86,7 +85,7 @@ class HashicorpProvider(Provider):
             )
 
         status, resbody = fetchjson(
-            'POST', url, self.baseheaders(), json.dumps(body, separators=(',', ':'))
+            'POST', url, self.baseheaders(), writejson(body)
         )
 
         got = ((resbody or {}).get('auth') or {}).get('client_token')

@@ -21,6 +21,7 @@ use Voxgig\Sekreto\SekretoError;
 
 use function Voxgig\Sekreto\checkaddr;
 use function Voxgig\Sekreto\providerplugin;
+use function Voxgig\Sekreto\writejson;
 
 /**
  * HashiCorp Vault.
@@ -121,7 +122,7 @@ class HashicorpProvider implements Provider
             );
         }
 
-        [$status, $answer] = fetchjson('POST', $url, $this->baseheaders(), json_encode($body));
+        [$status, $answer] = fetchjson('POST', $url, $this->baseheaders(), writejson($body));
 
         $got = $answer['auth']['client_token'] ?? null;
         if (200 !== $status || !$got) {

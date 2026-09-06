@@ -83,6 +83,15 @@ The library itself searches no path.
 | `tests/test_plugins.py` | the plugin seam, from both sides |
 | `cli/sekreto_cli.py` | the app that needs a secret |
 
+## Notes
+
+- **`writejson`, not `json.dumps`, for anything emitted.** `json.dumps`
+  defaults to `ensure_ascii=True`, which renders every non-ASCII character
+  as `\uXXXX`, and to a space after each comma and colon. Neither is
+  wrong, and both made python's request bodies and CLI line differ byte
+  for byte from the other ports, which emit a secret's accented or
+  non-Latin characters as the UTF-8 they already are.
+
 ## Testing
 
 The conformance suite runs [`spec/sekreto.json`](../spec/sekreto.json) —

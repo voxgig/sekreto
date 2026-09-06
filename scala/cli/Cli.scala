@@ -18,6 +18,9 @@
 
 package sekreto
 
+import java.io.FileDescriptor
+import java.io.FileOutputStream
+import java.io.PrintStream
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -38,6 +41,24 @@ import com.voxgig.sekreto.plugins.Plugins
 object Cli:
 
   private val LANG = "scala"
+
+
+  // System.out encodes with the PLATFORM charset, and a process started
+
+  // with no LANG gets ASCII: every non-ASCII character in a secret or a
+
+  // caller silently becomes '?'. That is data loss, not a rendering quirk,
+
+  // and it stays invisible until something non-ASCII shows up. Every other
+
+  // port emits UTF-8 whatever the environment says, so this one does too.
+
+  private val OUT = PrintStream(FileOutputStream(FileDescriptor.out), true, "UTF-8")
+
+
+  // stderr carries a redacted store response, so it has the same problem.
+
+  private val ERR = PrintStream(FileOutputStream(FileDescriptor.err), true, "UTF-8")
 
   private def env(name: String): Option[String] = Option(System.getenv(name))
 
@@ -197,7 +218,7 @@ object Cli:
         else secrets.getfrom(store, "api.token")
       catch
         case NonFatal(err) =>
-          System.err.println(s"sekreto-cli: ${err.getMessage}")
+          ERR.println(s"sekreto-cli: ${err.getMessage}")
           return 2
 
     val request = HttpRequest
@@ -217,14 +238,14 @@ object Cli:
           .send(request, HttpResponse.BodyHandlers.ofString())
       catch
         case NonFatal(err) =>
-          System.err.println(
+          ERR.println(
             "sekreto-cli: " + secrets.redact(Option(err.getMessage).getOrElse(err.toString)),
           )
           return 1
 
     if 200 != response.statusCode() then
       // Never print the token itself, even when the call fails.
-      System.err.println("sekreto-cli: " + secrets.redact(response.body()))
+      ERR.println("sekreto-cli: " + secrets.redact(response.body()))
       return 1
 
     val caller = Json.parse(response.body()).dig("caller")
@@ -239,7 +260,7 @@ object Cli:
     line.append(",\"caller\":").append(caller.map(Json.stringify).getOrElse("null"))
     line.append("}")
 
-    println(line.toString)
+    OUT.println(line.toString)
 
     0
 

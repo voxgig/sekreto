@@ -74,6 +74,18 @@ hash function or a child process.
 the CLI from. A lean consumer takes `build/core` and the plugin classes
 it named, and nothing else.
 
+## Notes
+
+- **stdout and stderr are opened as UTF-8, not left to the platform.**
+  `System.out` encodes with the default character set, and a process
+  started with no `LANG` — a container, a systemd unit — gets ASCII,
+  where every
+  non-ASCII character in a secret or a store's reply silently becomes
+  `?`. That is data loss, not a rendering quirk, and it stays invisible
+  until something non-ASCII shows up. The CLI prints through its own
+  `PrintStream` on `FileDescriptor.out` instead, so the output does not
+  depend on how the caller was started.
+
 ## Testing
 
 The conformance suite runs [`spec/sekreto.json`](../spec/sekreto.json) —

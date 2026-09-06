@@ -241,6 +241,13 @@ build/sekreto-cli http://127.0.0.1:8099/whoami --source hashicorp
   id are held in a `Sekreto.Cell` — an Agent, linked to whoever built the
   provider. No I/O runs inside it: a read that took the full transport
   bound would outlive the Agent's own call timeout.
+- **Standard output and standard error are set to `:unicode`.** An
+  escript's `:standard_io` defaults to latin1 whatever the locale says —
+  unlike the JVM ports, `LC_ALL` does not rescue this one. In latin1 mode
+  Erlang writes a code point greater than 255 as the literal text
+  `\x{2603}`, and one in 128..255 as a single raw byte, so a secret with an
+  accented character came out as invalid UTF-8 inside invalid JSON. `main`
+  calls `setopts/2` on both devices first.
 
 ## API
 

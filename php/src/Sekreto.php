@@ -173,6 +173,27 @@ final class Name
 }
 
 /**
+ * JSON text for a value that LEAVES the process.
+ *
+ * Two of `json_encode`'s defaults have to be turned off. It escapes `/` as
+ * `\/`, a defence for JSON pasted inside an HTML script tag, and it escapes
+ * every non-ASCII character as `\uXXXX`. Neither is wrong, and both made
+ * php one of only three ports whose bytes differed: the rest emit a
+ * secret's accented or non-Latin characters as the UTF-8 they already are,
+ * and a slash as a slash. The writer's output is part of what the ports
+ * agree on - the CLI line is compared byte for byte across all of them -
+ * so php matches the rest.
+ *
+ * Use this for a request body, a returned secret, the CLI's line. A
+ * `json_encode` whose text is decoded again without ever being emitted
+ * needs no such care.
+ */
+function writejson($value): string
+{
+    return json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+}
+
+/**
  * Parse `.env` text into a map of raw keys to values.
  *
  * Deliberately small: `KEY=value`, optional `export`, `#` comments on their
