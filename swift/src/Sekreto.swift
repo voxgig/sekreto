@@ -425,6 +425,60 @@ public final class Sekreto: CustomStringConvertible {
   /// Eager and in chain order, so a chain that cannot be built says so at
   /// once. Construction contacts nothing: the first network call is the
   /// first lookup.
+  /// ONE CHAIN, EITHER KIND OF ENTRY.
+  ///
+  /// A chain is ORDERED, and the two kinds interleave: the canonical
+  /// TypeScript port takes a single `providers` list and dispatches per
+  /// entry on whether it has a `lookup`. This port had two mutually
+  /// exclusive initialisers instead, so a caller holding a live Provider
+  /// (an in-memory store for an explicitly supplied credential, say) could
+  /// not ALSO configure specs — which is exactly what a generated SDK
+  /// needs, with the explicit credential first and the configured chain
+  /// behind it. Two arrays would not do either: that loses the interleaving
+  /// the order carries.
+  public enum ChainItem {
+    /// A provider already built. `name` overrides the store name it
+    /// answers to; nil takes the name from the provider itself.
+    case provider(Provider, name: String?)
+    /// A provider to be built from the catalog, as `specs:` does.
+    case spec(ProviderSpec)
+
+    public static func provider(_ p: Provider) -> ChainItem {
+      .provider(p, name: nil)
+    }
+  }
+
+  /// The general initialiser. The two below stay as they are rather than
+  /// delegating to it: `providers:` does not throw, and routing it through
+  /// a throwing initialiser would change its signature for every existing
+  /// caller to buy nothing.
+  public init(
+    chain: [ChainItem],
+    plugins: [Definition] = [],
+    cache docache: Bool = true
+  ) throws {
+    self.docache = docache
+
+    do {
+      self.catalog = try makeCatalog(BUILTINS + plugins)
+    } catch {
+      throw unwrap(error)
+    }
+
+    self.host = makeHost(HostOptions(catalog: self.catalog))
+
+    for item in chain {
+      switch item {
+      case .spec(let spec):
+        entries.append(try declare(spec))
+      case .provider(let provider, let name):
+        var store = name ?? ""
+        if store.isEmpty { store = storename(provider) }
+        entries.append(Entry(store: store, ref: "", provider: provider))
+      }
+    }
+  }
+
   public init(
     specs: [ProviderSpec] = [],
     plugins: [Definition] = [],
