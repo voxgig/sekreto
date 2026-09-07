@@ -31,12 +31,12 @@ def safeaddr (addr : String) : String :=
   match indexOfText addr "://" with
   | none => addr
   | some mark =>
-    let rest := addr.drop (mark + 3)
+    let rest := (addr.drop (mark + 3)).toString
     let stop := (indexWhere rest (fun ch => '/' == ch || '?' == ch || '#' == ch)).getD rest.length
-    let authority := rest.take stop
+    let authority := (rest.take stop).toString
     match lastIndexOfChar authority '@' with
     | none => addr
-    | some at' => addr.take (mark + 3) ++ "[redacted]" ++ addr.drop (mark + 3 + at')
+    | some at' => (addr.take (mark + 3)).toString ++ "[redacted]" ++ (addr.drop (mark + 3 + at')).toString
 
 /-- The four literal spellings of the local machine. Nothing is
 normalised: `0177.0.0.1`, `2130706433`, `127.0.0.2` and
@@ -60,9 +60,9 @@ def checkaddr (addr : String) : Except String Unit := do
   if scheme.isEmpty then
     throw ("sekreto: not an http(s) address: " ++ safeaddr addr)
 
-  let rest := addr.drop scheme.length
+  let rest := (addr.drop scheme.length).toString
   let stop := (indexWhere rest (fun ch => '/' == ch || '?' == ch || '#' == ch)).getD rest.length
-  let authority := rest.take stop
+  let authority := (rest.take stop).toString
 
   -- Userinfo is refused outright rather than parsed around, and on https
   -- as well as http. No store this library speaks authenticates by
@@ -86,7 +86,7 @@ def checkaddr (addr : String) : Except String Unit := do
   let host := asciilower (
     if authority.startsWith "[" then
       match indexOfChar authority ']' with
-      | some close => authority.take (close + 1)
+      | some close => (authority.take (close + 1)).toString
       | none => authority
     else takeWhile authority (fun ch => ':' != ch))
 

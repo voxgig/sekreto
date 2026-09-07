@@ -158,7 +158,7 @@ def make (providers : List Provider) (names : List (Option String) := [])
   let (host, catalog) ← freshhost []
   let entries := (List.range providers.length).map (fun index =>
     let provider := providers.getD index { lookup := fun _ => pure none, describe := "" }
-    let named := (names.get? index).join.filter (fun value => !value.isEmpty)
+    let named := (names[index]?).join.filter (fun value => !value.isEmpty)
     ({ store := named.getD (storename provider), ref := "", provider := provider } : Entry))
   return {
     host := host, catalog := catalog,

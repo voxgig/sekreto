@@ -53,7 +53,26 @@ deps:
 	fi
 
 LEAN ?= lean
-LEANC ?= leanc
+# LEANC, AND WHY IT CARRIES A LIBRARY PATH AND A COMPILER.
+#
+# `leanc` links with the toolchain's own `Scrt1.o`, and lean v4.32.1's still
+# references `__libc_csu_init` / `__libc_csu_fini` - symbols glibc REMOVED in
+# 2.34. On any distribution newer than that (Ubuntu 22.04 and up), the default
+# link fails with "undefined symbol: __libc_csu_init" before a line of this
+# port is at fault.
+#
+# Handing leanc the system compiler driver via LEAN_CC uses the system's C
+# runtime, which has those symbols - but then lean's OWN libraries (`-lc++`,
+# `-lc++abi`, `-luv`) are no longer on the search path, so the path to them
+# goes back on explicitly. Both halves are needed; either alone fails.
+#
+# Override LEANC wholesale if a toolchain ever needs neither.
+# `lean --print-prefix` and not `dirname $(command -v lean)`: on an elan
+# install the latter finds the SHIM's directory, not the toolchain's.
+LEANLIB := $(shell $(LEAN) --print-prefix 2>/dev/null)/lib
+LEAN_CC ?= cc
+export LEAN_CC
+LEANC ?= leanc $(if $(wildcard $(LEANLIB)),-L$(LEANLIB),)
 
 B := build
 HOSTLIB := $(B)/host
@@ -101,6 +120,18 @@ PLUGINMODULES := SekretoPlugins.Httpjson SekretoPlugins.Proc \
 # wants `round` for the same reason. Anything else in that position is an
 # `@[extern]` somebody added to the core.
 FOREIGN := floor
+
+# WHAT "FOREIGN" MEANS HERE: a call this port made, not one its toolchain
+# emitted. Lean's own naming (`l_`, `lean_`, `initialize_`) was enough until
+# the toolchain moved to v4.32.1, which puts its bundled allocator
+# (`mi_malloc_small` and friends) and the stack protector
+# (`__stack_chk_fail`) into every object it compiles. Neither is a platform
+# call in the sense this check exists to police - the core reaching for
+# curl, a clock or a process is - and neither is anything a port can choose
+# not to emit. Excluding them keeps the check aimed at what it is for; the
+# `$(PROCSYMS)` and forbidden-name legs below are unaffected and still name
+# the real platform calls exactly.
+TOOLCHAINSYMS := ^(l_|lean_|initialize_|mi_|__|_GLOBAL_OFFSET_TABLE_)
 
 # The two prefix families `check-core` denies outright, and the one it
 # allows. Prefixes, so that a reach nobody thought to name is still
@@ -313,8 +344,8 @@ check-core: $(PLIB)/.stamp $(B)/sekreto-core
 	    echo "$$linked" >&2; exit 1; \
 	  fi; \
 	  echo "== the core reaches outside Lean's own naming for $(FOREIGN) and nothing else"; \
-	  { grep -vE '^(l_|lean_|initialize_)' $(B)/core.syms || true; } | sort -u > $(B)/core.foreign; \
-	  { grep -vE '^(l_|lean_|initialize_)' $(B)/plugin.undef || true; } | sort -u > $(B)/plugin.foreign; \
+	  { grep -vE '$(TOOLCHAINSYMS)' $(B)/core.syms || true; } | sort -u > $(B)/core.foreign; \
+	  { grep -vE '$(TOOLCHAINSYMS)' $(B)/plugin.undef || true; } | sort -u > $(B)/plugin.foreign; \
 	  test -s $(B)/plugin.foreign || { \
 	    echo "check-core: no foreign symbol on the plugin side either - nm read nothing" >&2; exit 1; }; \
 	  sed 's/^/  plugin: /' $(B)/plugin.foreign; \

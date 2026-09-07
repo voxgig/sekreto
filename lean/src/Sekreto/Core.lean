@@ -118,9 +118,9 @@ private partial def unescape (chars : List Char) (out : String) : String :=
 
 private def unquote (value : String) : String :=
   if 2 ≤ value.length && value.startsWith "\"" && value.endsWith "\"" then
-    unescape (value.drop 1 |>.dropRight 1 |>.toList) ""
+    unescape (value.drop 1 |>.dropEnd 1 |>.toString.toList) ""
   else if 2 ≤ value.length && value.startsWith "'" && value.endsWith "'" then
-    value.drop 1 |>.dropRight 1
+    (value.drop 1 |>.dropEnd 1).toString
   else value
 
 /-- Parse `.env` text into ordered raw keys and values.
@@ -135,14 +135,14 @@ def parsedotenv (text : String) : Pairs String :=
     let line := (dropsuffix rawline "\r").trim
     if line.isEmpty || line.startsWith "#" then out
     else
-      let entry := if line.startsWith "export " then (line.drop 7).trim else line
+      let entry := if line.startsWith "export " then (line.drop 7).trim.toString else line
       match indexOfChar entry '=' with
       | none => out
       -- `eq <= 0` skips both "no `=`" and "empty key".
       | some 0 => out
       | some eq =>
-        let key := (entry.take eq).trim
-        let value := (entry.drop (eq + 1)).trim
+        let key := (entry.take eq).trim.toString
+        let value := (entry.drop (eq + 1)).trim.toString
         Pairs.put out key (unquote value)) []
 
 /-- Replace known secret values in text with `[redacted]`.

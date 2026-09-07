@@ -61,7 +61,8 @@ def canonicalquery (query : String) : String :=
       match indexOfChar pair '=' with
       | none => (uriescape (uridecode pair), "")
       | some eq =>
-        (uriescape (uridecode (pair.take eq)), uriescape (uridecode (pair.drop (eq + 1)))))
+        (uriescape (uridecode (pair.take eq).toString),
+         uriescape (uridecode (pair.drop (eq + 1)).toString)))
     let ordered := pairs.mergeSort (fun left right =>
       left.1 < right.1 || (left.1 == right.1 && left.2 ≤ right.2))
     String.intercalate "&" (ordered.map (fun pair => pair.1 ++ "=" ++ pair.2))
@@ -78,35 +79,36 @@ def splitsigurl (url : String) : String × String × String :=
     if url.startsWith "https://" then "https://"
     else if url.startsWith "http://" then "http://"
     else ""
-  let rest := url.drop scheme.length
+  let rest := (url.drop scheme.length).toString
   let stop := (indexWhere rest (fun ch => '/' == ch || '?' == ch || '#' == ch)).getD rest.length
-  let authority := rest.take stop
-  let tail := rest.drop stop
+  let authority := (rest.take stop).toString
+  let tail := (rest.drop stop).toString
 
   let hostport := match lastIndexOfChar authority '@' with
-    | some mark => authority.drop (mark + 1)
+    | some mark => (authority.drop (mark + 1)).toString
     | none => authority
 
   let (bare, port) :=
     if hostport.startsWith "[" then
       match indexOfChar hostport ']' with
       | some close =>
-        let after := hostport.drop (close + 1)
-        (hostport.take (close + 1), if after.startsWith ":" then after.drop 1 else "")
+        let after := (hostport.drop (close + 1)).toString
+        ((hostport.take (close + 1)).toString,
+         if after.startsWith ":" then (after.drop 1).toString else "")
       | none => (hostport, "")
     else
       match indexOfChar hostport ':' with
-      | some mark => (hostport.take mark, hostport.drop (mark + 1))
+      | some mark => ((hostport.take mark).toString, (hostport.drop (mark + 1)).toString)
       | none => (hostport, "")
 
   let defaultport := if "https://" == scheme then "443" else "80"
   let host := asciilower bare ++ (if port.isEmpty || port == defaultport then "" else ":" ++ port)
 
   let hashless := match indexOfChar tail '#' with
-    | some mark => tail.take mark
+    | some mark => (tail.take mark).toString
     | none => tail
   let (path, query) := match indexOfChar hashless '?' with
-    | some mark => (hashless.take mark, hashless.drop (mark + 1))
+    | some mark => ((hashless.take mark).toString, (hashless.drop (mark + 1)).toString)
     | none => (hashless, "")
 
   (host, if path.isEmpty then "/" else path, query)
@@ -129,7 +131,7 @@ in that order - the spec compares the result as a JSON object, and
 callers print it field by field. -/
 def sigv4 (input : Signing) : Pairs String :=
   let (host, path, query) := splitsigurl input.url
-  let date := input.datetime.take 8
+  let date := (input.datetime.take 8).toString
 
   -- Every header that will be signed: the caller's extras first, then
   -- host and x-amz-date (and the session token when present) OVER them,

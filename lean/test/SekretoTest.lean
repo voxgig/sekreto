@@ -262,7 +262,7 @@ def EVERY : List String :=
 def importsof (path : String) : IO (List String) := do
   let text ← IO.FS.readFile path
   return ((text.splitOn "\n").filter (fun line => line.startsWith "import ")).map
-    (fun line => (line.drop 7).trim)
+    (fun line => (line.drop 7).trim.toString)
 
 -- The full set holds every kind, and the core's own list of what ships as
 -- a plugin says the same. That list is what tells a typo from a plugin
@@ -485,7 +485,7 @@ def seamPluginImports : IO Fault := do
     wants "every kind has a module of its own" (joined (sorted PLUGINS))
       (joined (sorted (← PLUGINS.filterM (fun kind => do
         let module := if kind.startsWith "aws" then "Aws"
-                      else asciiupper (kind.take 1) ++ kind.drop 1
+                      else asciiupper (kind.take 1).toString ++ kind.drop 1
         System.FilePath.pathExists
           (System.FilePath.mk ("plugins/SekretoPlugins/" ++ module ++ ".lean"))))))]
 
