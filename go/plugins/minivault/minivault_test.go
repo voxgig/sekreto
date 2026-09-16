@@ -53,14 +53,14 @@ func fresh(t *testing.T) *minivault.Vault {
 	return vault
 }
 
-// fixture copies the committed vault, so that a test which writes cannot
+// fixture copies a committed vault, so that a test which writes cannot
 // edit the bytes the format contract is made of.
-func fixture(t *testing.T) string {
+func fixture(t *testing.T, name string) string {
 	t.Helper()
 
 	dir := "."
 	for step := 0; step < 8; step++ {
-		cand := filepath.Join(dir, "test", "fixture", "minivault.skmv")
+		cand := filepath.Join(dir, "test", "fixture", name)
 		if raw, err := os.ReadFile(cand); nil == err {
 			mine := vaultpath(t)
 			if err := os.WriteFile(mine, raw, 0o600); nil != err {
@@ -71,7 +71,7 @@ func fixture(t *testing.T) string {
 		dir = filepath.Join(dir, "..")
 	}
 
-	t.Fatal("sekreto: fixture vault not found")
+	t.Fatal("sekreto: fixture vault not found: " + name)
 	return ""
 }
 
@@ -602,8 +602,21 @@ func TestCreateMakesTheFileWhenAsked(t *testing.T) {
 
 // --- the format, across ports ------------------------------------------
 
+// BOTH DIRECTIONS, and the first one is the point. A suite that only
+// reads a vault its own port wrote proves the reader agrees with the
+// writer beside it - which a port whose serializer and parser share a
+// mistake satisfies perfectly. `minivault.skmv` was written by the
+// canonical port, so reading it here is this port checking somebody
+// else's bytes; `minivault-go.skmv` is this port's own, and the
+// canonical suite reads it.
 func TestTheCommittedFixtureReads(t *testing.T) {
-	file := fixture(t)
+	for _, name := range []string{"minivault.skmv", "minivault-go.skmv"} {
+		t.Run(name, func(t *testing.T) { readfixture(t, name) })
+	}
+}
+
+func readfixture(t *testing.T, name string) {
+	file := fixture(t, name)
 
 	vault, err := minivault.Open(&minivault.Options{File: file, Passphrase: "fixture-master"})
 	if nil != err {
@@ -652,6 +665,218 @@ func TestTheCommittedFixtureReads(t *testing.T) {
 	}
 	if value, _ := get(t, vault, "db.pass"); "written by this port" != value {
 		t.Fatalf("db.pass: %q", value)
+	}
+}
+
+// --- what a handle must not let a caller do ----------------------------
+
+// A READ-ONLY KEY MUST STAY READ-ONLY. Set asks Info.Write whether this
+// key may write, so handing the caller the value that answer lives in
+// let it flip its own permission: a key minted without Write overwrote a
+// granted secret.
+func TestTheKeyInformationACallerGetsIsACopy(t *testing.T) {
+	vault := fresh(t)
+
+	set(t, vault, "api.token", "tok01")
+	if err := vault.Grant(&minivault.GrantSpec{
+		Key: "ro", Passphrase: "ro-pass", Names: []string{"api.token"}, Iterations: rounds,
+	}); nil != err {
+		t.Fatal(err)
+	}
+
+	readonly, _ := minivault.Open(&minivault.Options{
+		File: vault.File(), Key: "ro", Passphrase: "ro-pass"})
+
+	info, err := readonly.Info()
+	if nil != err {
+		t.Fatal(err)
+	}
+	if info.Write {
+		t.Fatal("a read-only key reported Write")
+	}
+
+	info.Write = true
+	info.Master = true
+	info.Grants = append(info.Grants, "db.pass")
+
+	refuses(t, readonly.Set("api.token", "escalated"),
+		"sekreto: minivault: key ro is read-only")
+
+	_, err = readonly.Keys()
+	if nil == err {
+		t.Fatal("a restricted key listed the keys")
+	}
+
+	if value, _ := get(t, vault, "api.token"); "tok01" != value {
+		t.Fatalf("api.token: %q", value)
+	}
+
+	// ...and the next reading of it is unaffected by what was done to
+	// the last one.
+	again, err := readonly.Info()
+	if nil != err {
+		t.Fatal(err)
+	}
+	if again.Write || again.Master {
+		t.Fatalf("info: %+v", again)
+	}
+	same(t, again.Grants, "api.token")
+}
+
+// REVOKING BARS THE LIVE FILE, which is what this library says it does.
+// A handle that derived its keys once and never looked at the file again
+// kept answering from memory, so the promise held only for a handle
+// opened after the revoke.
+func TestARevokedKeyStopsReadingFromAnOpenHandle(t *testing.T) {
+	vault := fresh(t)
+
+	set(t, vault, "api.token", "tok01")
+	if err := vault.Grant(&minivault.GrantSpec{
+		Key: "ci", Passphrase: "ci-pass", Names: []string{"api.token"}, Iterations: rounds,
+	}); nil != err {
+		t.Fatal(err)
+	}
+
+	ci, _ := minivault.Open(&minivault.Options{
+		File: vault.File(), Key: "ci", Passphrase: "ci-pass"})
+	if value, _ := get(t, ci, "api.token"); "tok01" != value {
+		t.Fatalf("api.token: %q", value)
+	}
+
+	if err := vault.Revoke("ci"); nil != err {
+		t.Fatal(err)
+	}
+
+	_, _, err := ci.Get("api.token")
+	refuses(t, err, "sekreto: minivault: no such key: ci")
+
+	_, err = ci.List()
+	refuses(t, err, "sekreto: minivault: no such key: ci")
+}
+
+// The same id, re-granted under a different passphrase, is a different
+// key wearing the name. A cached ring would have kept the old one
+// working; the file's ring is what decides.
+func TestAReGrantedKeyIdRefusesTheOldPassphrase(t *testing.T) {
+	vault := fresh(t)
+
+	set(t, vault, "api.token", "tok01")
+	if err := vault.Grant(&minivault.GrantSpec{
+		Key: "ci", Passphrase: "first", Names: []string{"api.token"}, Iterations: rounds,
+	}); nil != err {
+		t.Fatal(err)
+	}
+
+	ci, _ := minivault.Open(&minivault.Options{
+		File: vault.File(), Key: "ci", Passphrase: "first"})
+	if value, _ := get(t, ci, "api.token"); "tok01" != value {
+		t.Fatalf("api.token: %q", value)
+	}
+
+	if err := vault.Revoke("ci"); nil != err {
+		t.Fatal(err)
+	}
+	if err := vault.Grant(&minivault.GrantSpec{
+		Key: "ci", Passphrase: "second", Names: []string{"api.token"}, Iterations: rounds,
+	}); nil != err {
+		t.Fatal(err)
+	}
+
+	_, _, err := ci.Get("api.token")
+	refuses(t, err, "sekreto: minivault: wrong passphrase for key ci, or a damaged vault")
+
+	next, _ := minivault.Open(&minivault.Options{
+		File: vault.File(), Key: "ci", Passphrase: "second"})
+	if value, _ := get(t, next, "api.token"); "tok01" != value {
+		t.Fatalf("api.token: %q", value)
+	}
+}
+
+// A length the format cannot record. `small` writes one byte, so a
+// longer id wrapped it and the writer appended the whole thing anyway:
+// every field after it shifted, and a Grant replaced a working vault
+// with an unreadable one without saying so.
+func TestAKeyIdLongerThanTheFormatAllows(t *testing.T) {
+	long := strings.Repeat("k", 256)
+
+	_, err := minivault.Create(&minivault.Options{
+		File: vaultpath(t), Key: long, Passphrase: master, Iterations: rounds})
+	if nil == err || !strings.Contains(err.Error(), "key id is longer than 255 bytes") {
+		t.Fatalf("create: %v", err)
+	}
+
+	vault := fresh(t)
+	set(t, vault, "api.token", "tok01")
+
+	err = vault.Grant(&minivault.GrantSpec{Key: long, Passphrase: "p", Iterations: rounds})
+	if nil == err || !strings.Contains(err.Error(), "key id is longer than 255 bytes") {
+		t.Fatalf("grant: %v", err)
+	}
+
+	// The vault it would have destroyed is untouched.
+	if value, _ := get(t, vault, "api.token"); "tok01" != value {
+		t.Fatalf("api.token: %q", value)
+	}
+
+	// 255 BYTES, not 255 characters.
+	err = vault.Grant(&minivault.GrantSpec{
+		Key: strings.Repeat("é", 128), Passphrase: "p", Iterations: rounds})
+	if nil == err || !strings.Contains(err.Error(), "key id is longer than 255 bytes") {
+		t.Fatalf("grant multibyte: %v", err)
+	}
+}
+
+// TWO HANDLES ON ONE FILE SHARE A LOCK. Each Vault has its own mutex, so
+// two of them did not coordinate: both read a snapshot, both wrote, and
+// the second rename discarded the first one's change while reporting
+// success. Run under -race, which is how this port's suite runs.
+func TestTwoHandlesOnOneFileSerializeTheirWrites(t *testing.T) {
+	vault := fresh(t)
+	file := vault.File()
+
+	const writers = 4
+	const each = 10
+
+	done := make(chan error, writers)
+
+	for index := 0; index < writers; index++ {
+		go func(index int) {
+			handle, err := minivault.Open(&minivault.Options{File: file, Passphrase: master})
+			if nil != err {
+				done <- err
+				return
+			}
+			for round := 0; round < each; round++ {
+				name := "w" + strconv.Itoa(index) + ".v"
+				if err := handle.Set(name, strconv.Itoa(round)); nil != err {
+					done <- err
+					return
+				}
+			}
+			done <- nil
+		}(index)
+	}
+
+	for index := 0; index < writers; index++ {
+		if err := <-done; nil != err {
+			t.Fatal(err)
+		}
+	}
+
+	// EVERY writer's name survives. A lost update drops one entirely,
+	// because the losing rename carries a snapshot taken before it.
+	names, err := vault.List()
+	if nil != err {
+		t.Fatal(err)
+	}
+	if writers != len(names) {
+		t.Fatalf("names: %v", names)
+	}
+	for index := 0; index < writers; index++ {
+		value, has, err := vault.Get("w" + strconv.Itoa(index) + ".v")
+		if nil != err || !has || strconv.Itoa(each-1) != value {
+			t.Fatalf("w%d.v: %q %v %v", index, value, has, err)
+		}
 	}
 }
 
@@ -809,6 +1034,44 @@ func TestTwoVaultsAreTwoStores(t *testing.T) {
 	}
 	if two.File() != named.File() {
 		t.Fatalf("file: %q", named.File())
+	}
+}
+
+// NAMING A STORE THAT IS NOT THERE RAISES, which is the rule the whole
+// library follows. Host().Exports falls back to the unqualified alias
+// when an exact ref misses, so asking for `minivault` in a chain whose
+// only vault is named `app` used to hand back the `app` vault - and then
+// write to it.
+func TestAnExplicitStoreNameMustExist(t *testing.T) {
+	vault := fresh(t)
+	set(t, vault, "api.token", "first")
+
+	sek, err := sekreto.New(&sekreto.Options{
+		Plugins: []plugin.Definition{minivault.Plugin},
+		Providers: []*sekreto.ProviderSpec{
+			{Kind: "minivault", Name: "app", File: vault.File(), Passphrase: master},
+		},
+	})
+	if nil != err {
+		t.Fatal(err)
+	}
+
+	_, err = minivault.VaultOf(sek, "minivault")
+	refuses(t, err, "sekreto: minivault: no minivault store named minivault in this chain")
+
+	_, err = minivault.VaultOf(sek, "nosuchstore")
+	refuses(t, err, "sekreto: minivault: no minivault store named nosuchstore in this chain")
+
+	// The omitted argument still uses the alias, which is the whole point
+	// of having one.
+	for _, store := range []string{"", "app"} {
+		found, err := minivault.VaultOf(sek, store)
+		if nil != err {
+			t.Fatal(err)
+		}
+		if vault.File() != found.File() {
+			t.Fatalf("%q: %s", store, found.File())
+		}
 	}
 }
 

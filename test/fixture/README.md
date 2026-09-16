@@ -1,9 +1,19 @@
-# Fixture vault
+# Fixture vaults
 
-`minivault.skmv` is a mini vault written by the canonical typescript
-port. Every port that ships the `minivault` kind reads it in its own
-suite, so the on-disk format is pinned by bytes rather than by agreement
-between implementations.
+Mini vaults written by one port and read by every other, so the on-disk
+format is pinned by bytes rather than by agreement between
+implementations.
+
+| file | written by |
+|---|---|
+| `minivault.skmv` | typescript, the canonical port |
+| `minivault-go.skmv` | go |
+
+**One file per writing port, and every port reads all of them.** A suite
+that reads only what its own port wrote proves the reader agrees with the
+writer beside it, which a port whose serializer and parser share a
+mistake satisfies perfectly. A port joins this directory by adding its
+own file and reading the others.
 
 A format two implementations merely agree about is a format that drifts,
 and nothing else in either suite would notice: each port can write and
@@ -12,10 +22,13 @@ about where a length prefix goes.
 
 ## What is in it
 
+Both files hold the same keys and the same secrets, so a suite asserts
+the same values whichever it reads.
+
 Written with 1000 PBKDF2 rounds rather than the library default of
-210000, so that reading it costs a test nothing. **These passphrases are
-published, and the file holds no real secret.** Regenerate it only when
-the format version changes, and with the canonical port.
+210000, so that reading them costs a test nothing. **These passphrases
+are published, and the files hold no real secret.** Regenerate them only
+when the format version changes, each with the port named above.
 
 | key | passphrase | reads |
 |---|---|---|

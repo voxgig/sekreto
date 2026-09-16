@@ -94,6 +94,29 @@ func fail(text string) error {
 	return sekreto.Fail("sekreto: minivault: " + text)
 }
 
+// idMax is the largest key id the format can record.
+//
+// `small` writes a length in ONE byte. A longer id wrapped that byte and
+// the writer then appended the whole thing, so every field after it
+// shifted: a Grant with a 300-character id replaced a working vault with
+// an unreadable one, and said nothing. Checked where an id is ACCEPTED,
+// so the refusal names the id rather than the file.
+const idMax = 255
+
+func checkid(id string, what string) error {
+	if "" == id {
+		return fail(what)
+	}
+	if idMax < len(id) {
+		cut := id
+		if 32 < len(cut) {
+			cut = cut[:32]
+		}
+		return fail("key id is longer than " + strconv.Itoa(idMax) + " bytes: " + cut + "...")
+	}
+	return nil
+}
+
 // --- keys ------------------------------------------------------------
 
 func mac(key []byte, text string) []byte {
@@ -274,17 +297,32 @@ type reader struct {
 	err   error
 }
 
-func (read *reader) take(length int) []byte {
+// take reads `length` bytes, or records the refusal.
+//
+// The bound is checked as a UINT64 against what is left, never by adding
+// it to `at` in int arithmetic. On a 32-bit target a damaged vault can
+// encode a length at or above 0x80000000, which becomes a NEGATIVE int:
+// the slice bound goes backwards and the process panics instead of
+// reporting the damaged file this function exists to report.
+func (read *reader) take64(length uint64) []byte {
 	if nil != read.err {
 		return nil
 	}
-	if len(read.bytes) < read.at+length {
+	if uint64(len(read.bytes)-read.at) < length {
 		read.err = fail("the vault file is truncated")
 		return nil
 	}
-	out := read.bytes[read.at : read.at+length]
-	read.at += length
+	out := read.bytes[read.at : read.at+int(length)]
+	read.at += int(length)
 	return out
+}
+
+func (read *reader) take(length int) []byte {
+	if 0 > length {
+		read.err = fail("the vault file is truncated")
+		return nil
+	}
+	return read.take64(uint64(length))
 }
 
 func (read *reader) u8() int {
@@ -295,6 +333,8 @@ func (read *reader) u8() int {
 	return int(out[0])
 }
 
+// u32 is only ever a COUNT, which the caller bounds against the input
+// before it allocates. A length goes through u32len instead.
 func (read *reader) u32() int {
 	out := read.take(4)
 	if nil == out {
@@ -303,8 +343,16 @@ func (read *reader) u32() int {
 	return int(binary.BigEndian.Uint32(out))
 }
 
+func (read *reader) u32len() uint64 {
+	out := read.take(4)
+	if nil == out {
+		return 0
+	}
+	return uint64(binary.BigEndian.Uint32(out))
+}
+
 func (read *reader) small() []byte { return read.take(read.u8()) }
-func (read *reader) large() []byte { return read.take(read.u32()) }
+func (read *reader) large() []byte { return read.take64(read.u32len()) }
 
 func (read *reader) sealed() *sealed {
 	return &sealed{IV: read.small(), Blob: read.large()}
@@ -340,7 +388,14 @@ func readfile(raw []byte) (*vaultFile, error) {
 
 	file := &vaultFile{Keys: []*keyRecord{}, Entries: []*entryRecord{}}
 
+	// A COUNT IS BOUNDED BY WHAT IS LEFT. Each record carries at least a
+	// few bytes, so a file claiming four billion of them is damaged; the
+	// loop would find that out one truncation at a time, and a caller
+	// that preallocated would not.
 	keycount := read.u32()
+	if len(raw)-read.at < keycount {
+		return nil, fail("the vault file is truncated")
+	}
 	for index := 0; index < keycount && nil == read.err; index++ {
 		file.Keys = append(file.Keys, &keyRecord{
 			ID:    string(read.small()),
@@ -352,6 +407,9 @@ func readfile(raw []byte) (*vaultFile, error) {
 	}
 
 	entrycount := read.u32()
+	if len(raw)-read.at < entrycount {
+		return nil, fail("the vault file is truncated")
+	}
 	for index := 0; index < entrycount && nil == read.err; index++ {
 		file.Entries = append(file.Entries, &entryRecord{
 			ID:    read.small(),

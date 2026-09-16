@@ -905,8 +905,22 @@ bound what a reader learns, not what a writer can wreck. Filesystem
 permissions are what stop that, and the vault is written with owner-only
 mode.
 
-Revoking a key bars it from the live file. It does not reach a copy
-somebody already took, so `rotate` is what takes a secret back: it draws
+**Writes are serialized within one process** — every handle on one file
+shares a lock, so two of them cannot each read a snapshot and then
+overwrite the other. Across processes they are not. A reader is always
+handed one whole vault, because a new one is created under `O_EXCL` and
+an update lands by atomic rename, but two processes writing at once can
+still lose an update. A vault is a single-writer store, and a deployment
+that needs more than that wants a vault server.
+
+A key id is at most **255 bytes**, which is what the format records it
+in.
+
+Revoking a key bars it from the live file, including for a handle that
+has already read: every call rechecks that its key record is still there
+and still the same, so a revoked handle stops rather than answering from
+what it derived earlier. It does not reach a copy somebody already took,
+so `rotate` is what takes a secret back: it draws
 a new root key, re-encrypts every value under it, and **drops every other
 key**, because their rings are sealed under passphrases the rotating
 process does not have. Re-grant afterwards.

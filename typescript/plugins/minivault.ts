@@ -114,6 +114,25 @@ function fail(text: string): never {
   throw new SekretoError('sekreto: minivault: ' + text)
 }
 
+/** The largest key id the format can record.
+ *
+ * `small` writes a length in ONE byte. A longer id wrapped that byte and
+ * the writer then appended the whole thing, so every field after it
+ * shifted: a `grant` with a 300-character id replaced a working vault
+ * with an unreadable one, and said nothing. Checked where an id is
+ * ACCEPTED, so the refusal names the id rather than the file. */
+const IDMAX = 255
+
+function checkid(id: string, what: string): string {
+  if ('string' !== typeof id || '' === id) {
+    fail(what)
+  }
+  if (IDMAX < Buffer.byteLength(id, 'utf8')) {
+    fail('key id is longer than ' + IDMAX + ' bytes: ' + id.substring(0, 32) + '...')
+  }
+  return id
+}
+
 
 // --- keys ------------------------------------------------------------
 
@@ -327,6 +346,17 @@ function writefile(vault: VaultFile): Buffer {
 
 // --- what a key is ---------------------------------------------------
 
+/** A detached copy, so that what a caller is handed cannot become what
+ * this vault believes. */
+function copyinfo(info: VaultKeyInfo): VaultKeyInfo {
+  return {
+    key: info.key,
+    master: info.master,
+    write: info.write,
+    grants: [...info.grants],
+  }
+}
+
 /** What a key may do. `grants` is empty for a master key, which reads
  * and writes every name there is. */
 export type VaultKeyInfo = {
@@ -439,19 +469,22 @@ function newvault(keyid: string, passphrase: string, iterations: number): VaultF
   }
 }
 
-/** Write a vault file that is not there yet.
+/** Write a vault file that is not there yet, and REFUSE one that is.
  *
- * `wx` on the temporary file and `rename` onto the target: two processes
- * racing to create one vault leave one vault, and the loser's secrets
- * are not silently discarded because it never had any yet. */
+ * Straight to the target under `wx` — `O_CREAT|O_EXCL` — rather than
+ * through a temporary and a rename. `rename` REPLACES its destination,
+ * so two processes creating the same vault both succeeded and the
+ * second discarded the first one's secrets; `existsSync` beforehand
+ * only narrows that window. There is nothing to lose by writing the
+ * target directly here, because there is no file to damage: either this
+ * call creates it or the call fails. */
 function putnew(file: string, vault: VaultFile): void {
-  const node = fs()
-  const temp = file + '.' + process.pid + '.tmp'
-
   try {
-    node.writeFileSync(temp, writefile(vault), { mode: 0o600, flag: 'wx' })
-    node.renameSync(temp, file)
+    fs().writeFileSync(file, writefile(vault), { mode: 0o600, flag: 'wx' })
   } catch (err: any) {
+    if ('EEXIST' === err.code) {
+      fail('vault file already exists: ' + file)
+    }
     fail('cannot write ' + file + ': ' + err.message)
   }
 }
@@ -475,6 +508,16 @@ type Opened = {
   /** The per-name keys this key was granted. Empty for a master, which
    * derives them from the root key instead. */
   grants: Record<string, Buffer>
+  /** THE SEALED RING THIS WAS DERIVED FROM, kept so that every later
+   * call can check the file still says the same thing. A handle that
+   * cached its keys and never looked again kept reading a vault after
+   * its key was revoked, which is the one thing `revoke` promises. */
+  ring: Sealed
+}
+
+/** Is this the same sealed blob, byte for byte? */
+function sameseal(left: Sealed, right: Sealed): boolean {
+  return 0 === Buffer.compare(left.iv, right.iv) && 0 === Buffer.compare(left.blob, right.blob)
 }
 
 /** Open a vault file as one key.
@@ -495,6 +538,7 @@ export function openvault(options: VaultOptions): MiniVault {
   if ('string' !== typeof passphrase || '' === passphrase) {
     fail('a vault needs a passphrase')
   }
+  checkid(keyid, 'a vault needs a key id')
 
   let opened: Opened | undefined
 
@@ -521,14 +565,22 @@ export function openvault(options: VaultOptions): MiniVault {
   const load = (): { vault: VaultFile, open: Opened } => {
     const vault = readfile(bytes())
 
-    if (undefined !== opened) {
-      return { vault, open: opened }
-    }
-
     const record = vault.keys.find((k) => k.id === keyid)
     if (undefined === record) {
+      // REVOKED, or never there. Either way this handle is finished, and
+      // dropping what it derived is what stops the next call answering
+      // from memory.
+      opened = undefined
       fail('no such key: ' + keyid)
     }
+
+    // The file still holds this key, and holds the SAME ring: a key
+    // revoked and re-granted under another passphrase is a different key
+    // wearing the id, and re-deriving is what refuses it.
+    if (undefined !== opened && sameseal(opened.ring, record.ring)) {
+      return { vault, open: opened }
+    }
+    opened = undefined
 
     const plain = unseal(kek(passphrase, record.salt, record.iters), record.ring,
       AAD_RING + keyid, 'wrong passphrase for key ' + keyid + ', or a damaged vault')
@@ -549,6 +601,7 @@ export function openvault(options: VaultOptions): MiniVault {
       },
       root: undefined === ring.root ? undefined : unb64(ring.root, 'the root key'),
       grants,
+      ring: record.ring,
     }
 
     return { vault, open: opened }
@@ -602,13 +655,20 @@ export function openvault(options: VaultOptions): MiniVault {
 
   /** Read, change, and REPLACE - never edit in place. The rename is what
    * makes a concurrent reader see either the old file or the new one, so
-   * a write interrupted halfway leaves a vault rather than wreckage. */
+   * a write interrupted halfway leaves a vault rather than wreckage.
+   *
+   * THE TEMPORARY IS RANDOM AND EXCLUSIVE. `<vault>.<pid>.tmp` is a name
+   * anyone can predict, so anyone who can write the vault's directory
+   * could put a symlink there and have the next save truncate whatever
+   * it pointed at. `wx` is `O_CREAT|O_EXCL`, which POSIX refuses on a
+   * symlink, and the random suffix stops two writers in one process
+   * colliding on the path. */
   const save = (vault: VaultFile): void => {
-    const temp = file + '.' + process.pid + '.tmp'
     const node = fs()
+    const temp = file + '.' + random(8).toString('hex') + '.tmp'
 
     try {
-      node.writeFileSync(temp, writefile(vault), { mode: 0o600 })
+      node.writeFileSync(temp, writefile(vault), { mode: 0o600, flag: 'wx' })
       node.renameSync(temp, file)
     } catch (err: any) {
       try {
@@ -624,7 +684,14 @@ export function openvault(options: VaultOptions): MiniVault {
   const self: MiniVault = {
     file: () => file,
     key: () => keyid,
-    open: () => load().open.info,
+
+    // A COPY. `set` reads `info.write` to decide whether this key may
+    // write, so handing the caller the object itself let it flip its own
+    // permission: `vault.open().write = true` turned a read-only key
+    // into a writing one. Authorization state does not leave this
+    // closure.
+    open: () => copyinfo(load().open.info),
+
     close: () => { opened = undefined },
 
     list: () => {
@@ -746,9 +813,7 @@ export function openvault(options: VaultOptions): MiniVault {
       const { vault, open } = load()
       const root = rootof(open, 'granting a key')
 
-      if (null == spec || 'string' !== typeof spec.key || '' === spec.key) {
-        fail('a grant needs a key id')
-      }
+      checkid(null == spec ? '' : spec.key, 'a grant needs a key id')
       if ('string' !== typeof spec.passphrase || '' === spec.passphrase) {
         fail('a grant needs a passphrase')
       }
@@ -810,17 +875,21 @@ export function openvault(options: VaultOptions): MiniVault {
 
       const record = vault.keys.find((k) => k.id === keyid) as KeyRecord
 
+      const fresh = sealkey(root, keyid, passphrase, record.iters,
+        { v: FORMAT, write: true, root: b64(root) },
+        { v: FORMAT, master: true, write: true, grants: [] })
+
       // SAVE FIRST, adopt second. A handle holding the new root over a
       // file that still holds the old one reads nothing and says the
       // vault is damaged, which is the wrong story about a failed write.
-      save({
-        keys: [sealkey(root, keyid, passphrase, record.iters,
-          { v: FORMAT, write: true, root: b64(root) },
-          { v: FORMAT, master: true, write: true, grants: [] })],
-        entries,
-      })
+      save({ keys: [fresh], entries })
 
-      opened = { info: { key: keyid, master: true, write: true, grants: [] }, root, grants: {} }
+      opened = {
+        info: { key: keyid, master: true, write: true, grants: [] },
+        root,
+        grants: {},
+        ring: fresh.ring,
+      }
     },
   }
 
@@ -841,10 +910,11 @@ export function createvault(options: VaultOptions): MiniVault {
   if ('string' !== typeof opts.passphrase || '' === opts.passphrase) {
     fail('a vault needs a passphrase')
   }
-  if (fs().existsSync(opts.file)) {
-    fail('vault file already exists: ' + opts.file)
-  }
+  checkid(opts.key || MASTERKEY, 'a vault needs a key id')
 
+  // No `existsSync` first: the check and the write would be two steps,
+  // and `putnew` refuses an existing file in ONE, which is what makes
+  // two processes racing to create a vault leave one vault.
   putnew(opts.file, newvault(opts.key || MASTERKEY, opts.passphrase, opts.iterations || ITERATIONS))
 
   return openvault(opts)
@@ -936,12 +1006,26 @@ export const minivault: Definition = {
  * chain resolves whatever it is called, and two raise rather than
  * picking one. */
 export function vaultof(secrets: { host: any }, store?: string): MiniVault {
-  const ref = undefined === store || 'minivault' === store ? 'minivault' : 'minivault$' + store
-  const found = secrets.host.exports(ref + '/' + VAULT_EXPORT)
-
-  if (undefined === found) {
-    fail('no minivault store' + (undefined === store ? '' : ' named ' + store) + ' in this chain')
+  if (undefined === store) {
+    const found = secrets.host.exports('minivault/' + VAULT_EXPORT)
+    if (undefined === found) {
+      fail('no minivault store in this chain')
+    }
+    return found as MiniVault
   }
 
-  return found as MiniVault
+  // A NAMED STORE MUST EXIST, and the alias must not stand in for it.
+  // `host.exports` falls back to the alias when the exact ref misses, so
+  // asking for `minivault` in a chain whose only vault is named `app`
+  // used to hand back the `app` vault - and then write to it. Naming a
+  // store that is not there raises, which is the rule the whole library
+  // follows: `try` already means "may not have it", so it cannot also
+  // mean "may not exist".
+  const ref = 'minivault' === store ? 'minivault' : 'minivault$' + store
+
+  if (undefined === secrets.host.instance(ref)) {
+    fail('no minivault store named ' + store + ' in this chain')
+  }
+
+  return secrets.host.exports(ref + '/' + VAULT_EXPORT) as MiniVault
 }

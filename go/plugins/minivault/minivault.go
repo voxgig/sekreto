@@ -23,16 +23,51 @@ package minivault
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"os"
+	"path/filepath"
 	"sort"
-	"strconv"
 	"sync"
 
 	plugin "github.com/voxgig/plugin/go/plugin"
 
 	"github.com/voxgig/sekreto/go/sekreto"
 )
+
+// THE WRITE LOCK IS PER FILE, NOT PER HANDLE.
+//
+// Each Vault has its own mutex, and two handles on the same file have
+// two of them, so they did not coordinate: both read a snapshot, both
+// wrote, and the second rename discarded the first one's change while
+// reporting success. Keyed by the absolute path, so two handles spelled
+// differently still meet.
+//
+// This is a guarantee WITHIN one process. Two processes still race, and
+// the format's answer to that is the exclusive create and the atomic
+// rename: a reader sees one whole vault or the other, never half of one.
+var (
+	locksmu sync.Mutex
+	locks   = map[string]*sync.Mutex{}
+)
+
+func lockfor(file string) *sync.Mutex {
+	key, err := filepath.Abs(file)
+	if nil != err {
+		key = file
+	}
+
+	locksmu.Lock()
+	defer locksmu.Unlock()
+
+	lock, has := locks[key]
+	if !has {
+		lock = &sync.Mutex{}
+		locks[key] = lock
+	}
+
+	return lock
+}
 
 // KeyInfo is what a key may do. Grants is empty for a master key, which
 // reads and writes every name there is.
@@ -121,6 +156,30 @@ type Vault struct {
 	info   *KeyInfo
 	root   []byte
 	grants map[string][]byte
+	// THE SEALED RING THIS WAS DERIVED FROM, kept so that every later
+	// call can check the file still says the same thing. A handle that
+	// cached its keys and never looked again kept reading a vault after
+	// its key was revoked, which is the one thing Revoke promises.
+	ring *sealed
+
+	// write serializes this handle's writes with every other handle on
+	// the same file in this process.
+	write *sync.Mutex
+}
+
+// copyinfo is a detached copy, so that what a caller is handed cannot
+// become what this vault believes.
+func copyinfo(info *KeyInfo) *KeyInfo {
+	return &KeyInfo{
+		Key:    info.Key,
+		Master: info.Master,
+		Write:  info.Write,
+		Grants: append([]string{}, info.Grants...),
+	}
+}
+
+func sameseal(left *sealed, right *sealed) bool {
+	return bytes.Equal(left.IV, right.IV) && bytes.Equal(left.Blob, right.Blob)
 }
 
 // Open a vault file as one key.
@@ -146,12 +205,17 @@ func Open(options *Options) (*Vault, error) {
 		iterations = Iterations
 	}
 
+	if err := checkid(key, "a vault needs a key id"); nil != err {
+		return nil, err
+	}
+
 	return &Vault{
 		file:       options.File,
 		key:        key,
 		passphrase: options.Passphrase,
 		iterations: iterations,
 		create:     options.Create,
+		write:      lockfor(options.File),
 	}, nil
 }
 
@@ -166,10 +230,9 @@ func Create(options *Options) (*Vault, error) {
 		return nil, err
 	}
 
-	if _, err := os.Stat(vault.file); nil == err {
-		return nil, fail("vault file already exists: " + vault.file)
-	}
-
+	// No os.Stat first: the check and the write would be two steps, and
+	// putnew refuses an existing file in ONE, which is what makes two
+	// processes racing to create a vault leave one vault.
 	fresh, err := newvault(vault.key, vault.passphrase, vault.iterations)
 	if nil != err {
 		return nil, err
@@ -189,12 +252,21 @@ func (vault *Vault) File() string { return vault.file }
 func (vault *Vault) Key() string { return vault.key }
 
 // Info derives the key and reads the file NOW rather than at first use.
+//
+// A COPY. Set asks Info.Write whether this key may write, so handing the
+// caller the value that answer lives in let it flip its own permission:
+// `info, _ := v.Info(); info.Write = true` turned a read-only key into a
+// writing one. Authorization state does not leave this struct.
 func (vault *Vault) Info() (*KeyInfo, error) {
 	vault.mu.Lock()
 	defer vault.mu.Unlock()
 
 	_, info, err := vault.load()
-	return info, err
+	if nil != err {
+		return nil, err
+	}
+
+	return copyinfo(info), nil
 }
 
 // Close forgets the derived keys. The next call opens again.
@@ -205,6 +277,7 @@ func (vault *Vault) Close() {
 	vault.info = nil
 	vault.root = nil
 	vault.grants = nil
+	vault.ring = nil
 }
 
 // --- reading the file ------------------------------------------------
@@ -252,14 +325,22 @@ func (vault *Vault) load() (*vaultFile, *KeyInfo, error) {
 		return nil, nil, err
 	}
 
-	if nil != vault.info {
-		return file, vault.info, nil
-	}
-
 	record := file.key(vault.key)
 	if nil == record {
+		// REVOKED, or never there. Either way this handle is finished,
+		// and dropping what it derived is what stops the next call
+		// answering from memory.
+		vault.info, vault.root, vault.grants, vault.ring = nil, nil, nil, nil
 		return nil, nil, fail("no such key: " + vault.key)
 	}
+
+	// The file still holds this key, and holds the SAME ring: a key
+	// revoked and re-granted under another passphrase is a different key
+	// wearing the id, and re-deriving is what refuses it.
+	if nil != vault.info && nil != vault.ring && sameseal(vault.ring, record.Ring) {
+		return file, vault.info, nil
+	}
+	vault.info, vault.root, vault.grants, vault.ring = nil, nil, nil, nil
 
 	plain, err := unseal(kek(vault.passphrase, record.Salt, record.Iters), record.Ring,
 		aadRing+vault.key, "wrong passphrase for key "+vault.key+", or a damaged vault")
@@ -293,6 +374,7 @@ func (vault *Vault) load() (*vaultFile, *KeyInfo, error) {
 
 	vault.root = root
 	vault.grants = grants
+	vault.ring = record.Ring
 	vault.info = &KeyInfo{
 		Key:    vault.key,
 		Master: nil != root,
@@ -322,10 +404,34 @@ func (vault *Vault) keyfor(name string) []byte {
 // save replaces the file rather than editing it in place. The rename is
 // what makes a concurrent reader see either the old file or the new one,
 // so a write interrupted halfway leaves a vault rather than wreckage.
+//
+// THE TEMPORARY IS RANDOM AND EXCLUSIVE. `<vault>.<pid>.tmp` is a name
+// anyone can predict, and os.WriteFile FOLLOWS a symlink, so anyone who
+// could write the vault's directory could point that name at another
+// file and have the next save truncate it. O_EXCL refuses an existing
+// path and will not follow a symlink to create one, and the random
+// suffix stops two writers colliding on the name.
 func (vault *Vault) save(file *vaultFile) error {
-	temp := vault.file + "." + strconv.Itoa(os.Getpid()) + ".tmp"
+	suffix, err := random(8)
+	if nil != err {
+		return err
+	}
 
-	if err := os.WriteFile(temp, writefile(file), 0o600); nil != err {
+	temp := vault.file + "." + hex.EncodeToString(suffix) + ".tmp"
+
+	handle, err := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if nil != err {
+		return fail("cannot write " + vault.file + ": " + err.Error())
+	}
+
+	if _, err := handle.Write(writefile(file)); nil != err {
+		handle.Close()
+		os.Remove(temp)
+		return fail("cannot write " + vault.file + ": " + err.Error())
+	}
+
+	if err := handle.Close(); nil != err {
+		os.Remove(temp)
 		return fail("cannot write " + vault.file + ": " + err.Error())
 	}
 
@@ -430,6 +536,11 @@ func (vault *Vault) Set(name string, value string) error {
 		return err
 	}
 
+	// Every write on this file, from any handle in this process,
+	// serializes here; see lockfor.
+	vault.write.Lock()
+	defer vault.write.Unlock()
+
 	vault.mu.Lock()
 	defer vault.mu.Unlock()
 
@@ -481,6 +592,11 @@ func (vault *Vault) Remove(name string) error {
 	if err := sekreto.CheckName(name); nil != err {
 		return err
 	}
+
+	// Every write on this file, from any handle in this process,
+	// serializes here; see lockfor.
+	vault.write.Lock()
+	defer vault.write.Unlock()
 
 	vault.mu.Lock()
 	defer vault.mu.Unlock()
@@ -563,6 +679,11 @@ func (vault *Vault) Keys() ([]*KeyInfo, error) {
 
 // Grant mints a restricted key. Master only.
 func (vault *Vault) Grant(spec *GrantSpec) error {
+	// Every write on this file, from any handle in this process,
+	// serializes here; see lockfor.
+	vault.write.Lock()
+	defer vault.write.Unlock()
+
 	vault.mu.Lock()
 	defer vault.mu.Unlock()
 
@@ -576,8 +697,11 @@ func (vault *Vault) Grant(spec *GrantSpec) error {
 		return err
 	}
 
-	if nil == spec || "" == spec.Key {
+	if nil == spec {
 		return fail("a grant needs a key id")
+	}
+	if err := checkid(spec.Key, "a grant needs a key id"); nil != err {
+		return err
 	}
 	if "" == spec.Passphrase {
 		return fail("a grant needs a passphrase")
@@ -620,6 +744,11 @@ func (vault *Vault) Grant(spec *GrantSpec) error {
 // so revoking bars future reads of the LIVE file and Rotate is what
 // takes a secret back.
 func (vault *Vault) Revoke(key string) error {
+	// Every write on this file, from any handle in this process,
+	// serializes here; see lockfor.
+	vault.write.Lock()
+	defer vault.write.Unlock()
+
 	vault.mu.Lock()
 	defer vault.mu.Unlock()
 
@@ -658,6 +787,11 @@ func (vault *Vault) Revoke(key string) error {
 // passphrases this process does not have, so there is no way to hand
 // them keys they can unwrap. Re-grant afterwards.
 func (vault *Vault) Rotate() error {
+	// Every write on this file, from any handle in this process,
+	// serializes here; see lockfor.
+	vault.write.Lock()
+	defer vault.write.Unlock()
+
 	vault.mu.Lock()
 	defer vault.mu.Unlock()
 
@@ -780,32 +914,31 @@ func newvault(keyid string, passphrase string, iterations int) (*vaultFile, erro
 	return &vaultFile{Keys: []*keyRecord{record}, Entries: []*entryRecord{}}, nil
 }
 
-// putnew writes a vault file that is not there yet.
+// putnew writes a vault file that is not there yet, and REFUSES one that
+// is.
 //
-// O_EXCL on the temporary file and a rename onto the target: two
-// processes racing to create one vault leave one vault, and the loser's
-// secrets are not discarded because it never had any yet.
+// Straight to the target under O_EXCL rather than through a temporary
+// and a rename. Rename REPLACES its destination, so two processes
+// creating the same vault both succeeded and the second discarded the
+// first one's secrets; an os.Stat beforehand only narrows that window.
+// There is nothing to lose by writing the target directly here, because
+// there is no file to damage: either this call creates it or it fails.
 func putnew(file string, vault *vaultFile) error {
-	temp := file + "." + strconv.Itoa(os.Getpid()) + ".tmp"
-
-	handle, err := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	handle, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if nil != err {
+		if os.IsExist(err) {
+			return fail("vault file already exists: " + file)
+		}
 		return fail("cannot write " + file + ": " + err.Error())
 	}
 
 	if _, err := handle.Write(writefile(vault)); nil != err {
 		handle.Close()
-		os.Remove(temp)
+		os.Remove(file)
 		return fail("cannot write " + file + ": " + err.Error())
 	}
 
 	if err := handle.Close(); nil != err {
-		os.Remove(temp)
-		return fail("cannot write " + file + ": " + err.Error())
-	}
-
-	if err := os.Rename(temp, file); nil != err {
-		os.Remove(temp)
 		return fail("cannot write " + file + ": " + err.Error())
 	}
 
@@ -926,9 +1059,32 @@ func wrap(inst *plugin.Inst, err error) error {
 // chain resolves whatever it is called, and two raise rather than
 // picking one.
 func VaultOf(sek *sekreto.Sekreto, store string) (*Vault, error) {
+	if "" == store {
+		found, err := sek.Host().Exports("minivault/" + VaultExport)
+		if nil != err {
+			return nil, err
+		}
+		vault, is := found.(*Vault)
+		if !is {
+			return nil, fail("no minivault store in this chain")
+		}
+		return vault, nil
+	}
+
+	// A NAMED STORE MUST EXIST, and the alias must not stand in for it.
+	// Host().Exports falls back to the alias when the exact ref misses,
+	// so asking for `minivault` in a chain whose only vault is named
+	// `app` used to hand back the `app` vault - and then write to it.
+	// Naming a store that is not there raises, which is the rule the
+	// whole library follows: Try already means "may not have it", so it
+	// cannot also mean "may not exist".
 	ref := "minivault"
-	if "" != store && "minivault" != store {
+	if "minivault" != store {
 		ref = "minivault$" + store
+	}
+
+	if live, err := sek.Host().Instance(ref); nil != err || nil == live {
+		return nil, fail("no minivault store named " + store + " in this chain")
 	}
 
 	found, err := sek.Host().Exports(ref + "/" + VaultExport)
@@ -938,11 +1094,7 @@ func VaultOf(sek *sekreto.Sekreto, store string) (*Vault, error) {
 
 	vault, is := found.(*Vault)
 	if !is {
-		named := ""
-		if "" != store {
-			named = " named " + store
-		}
-		return nil, fail("no minivault store" + named + " in this chain")
+		return nil, fail("no minivault store named " + store + " in this chain")
 	}
 
 	return vault, nil

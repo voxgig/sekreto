@@ -39,13 +39,13 @@ function fresh(): MiniVault {
   return createvault({ file: vaultpath(), passphrase: MASTER, iterations: ROUNDS })
 }
 
-/** The committed vault, copied so that a test which writes cannot edit
- * the bytes the format contract is made of. */
-function fixture(): string {
+/** A committed vault, copied so that a test which writes cannot edit the
+ * bytes the format contract is made of. */
+function fixture(name: string): string {
   let dir = __dirname
 
   for (let step = 0; step < 8; step++) {
-    const cand = join(dir, 'test', 'fixture', 'minivault.skmv')
+    const cand = join(dir, 'test', 'fixture', name)
     if (existsSync(cand)) {
       const mine = vaultpath()
       copyFileSync(cand, mine)
@@ -54,7 +54,7 @@ function fixture(): string {
     dir = join(dir, '..')
   }
 
-  throw new Error('sekreto: fixture vault not found')
+  throw new Error('sekreto: fixture vault not found: ' + name)
 }
 
 describe('minivault', () => {
@@ -391,8 +391,15 @@ describe('minivault', () => {
 
   // --- the format, across ports ---------------------------------------
 
-  test('the committed fixture reads, key by key', () => {
-    const file = fixture()
+  // BOTH DIRECTIONS, and the second one is the point. A suite that only
+  // reads a vault its own port wrote proves the reader agrees with the
+  // writer beside it — which a port whose serializer and parser share a
+  // mistake satisfies perfectly. `minivault-go.skmv` was written by the
+  // go port, so reading it here is the canonical checking somebody
+  // else's bytes.
+  for (const name of ['minivault.skmv', 'minivault-go.skmv']) {
+  test('the committed fixture reads, key by key: ' + name, () => {
+    const file = fixture(name)
 
     const master = openvault({ file, passphrase: 'fixture-master' })
     assert.deepEqual(master.list(), ['api.token', 'db.pass', 'deep.nested.name'])
@@ -415,6 +422,7 @@ describe('minivault', () => {
     writer.set('db.pass', 'written by this port')
     assert.equal(master.get('db.pass'), 'written by this port')
   })
+  }
 
   // --- the chain ------------------------------------------------------
 
@@ -540,6 +548,34 @@ describe('minivault', () => {
     assert.equal(vaultof(secrets, 'ops').file(), two.file())
   })
 
+  // NAMING A STORE THAT IS NOT THERE RAISES, which is the rule the whole
+  // library follows. `host.exports` falls back to the unqualified alias
+  // when an exact ref misses, so asking for `minivault` in a chain whose
+  // only vault is named `app` used to hand back the `app` vault — and
+  // then write to it.
+  test('an explicit store name must exist rather than falling back', () => {
+    const vault = fresh()
+    vault.set('api.token', 'first')
+
+    const secrets = new Sekreto({
+      plugins: [minivault],
+      providers: [{ kind: 'minivault', name: 'app', file: vault.file(), passphrase: MASTER }],
+    })
+
+    assert.throws(() => vaultof(secrets, 'minivault'),
+      {
+        name: 'SekretoError',
+        message: 'sekreto: minivault: no minivault store named minivault in this chain',
+      })
+    assert.throws(() => vaultof(secrets, 'nosuchstore'),
+      { message: 'sekreto: minivault: no minivault store named nosuchstore in this chain' })
+
+    // The omitted argument still uses the alias, which is the whole
+    // point of having one.
+    assert.equal(vaultof(secrets).file(), vault.file())
+    assert.equal(vaultof(secrets, 'app').file(), vault.file())
+  })
+
   test('a chain that has no vault says so', () => {
     const secrets = new Sekreto({ providers: [{ kind: 'memory', values: {} }] })
 
@@ -589,6 +625,110 @@ describe('minivault', () => {
 
     await assert.rejects(() => secrets.get('api.token'),
       { name: 'SekretoError', message: 'sekreto: minivault: no vault file: ' + file })
+  })
+
+  // --- what a handle must not let a caller do -------------------------
+
+  // A READ-ONLY KEY MUST STAY READ-ONLY. `set` asks `info.write` whether
+  // this key may write, so handing a caller the object that answer lives
+  // in let it flip its own permission: `vault.open().write = true` and a
+  // key minted without write overwrote a granted secret.
+  test('the key information a caller gets cannot change what the key may do', () => {
+    const vault = fresh()
+
+    vault.set('api.token', 'tok01')
+    vault.grant({ key: 'ro', passphrase: 'ro-pass', names: ['api.token'], iterations: ROUNDS })
+
+    const readonly = openvault({ file: vault.file(), key: 'ro', passphrase: 'ro-pass' })
+
+    const info = readonly.open()
+    assert.equal(info.write, false)
+
+    info.write = true
+    info.master = true
+    info.grants.push('db.pass')
+
+    assert.throws(() => readonly.set('api.token', 'escalated'),
+      { message: 'sekreto: minivault: key ro is read-only' })
+    assert.throws(() => readonly.keys(),
+      { message: /needs a master key/ })
+    assert.equal(vault.get('api.token'), 'tok01')
+
+    // ...and the next reading of it is unaffected by what was done to the
+    // last one.
+    assert.deepEqual(readonly.open(),
+      { key: 'ro', master: false, write: false, grants: ['api.token'] })
+  })
+
+  // REVOKING BARS THE LIVE FILE, which is what this library tells people
+  // it does. A handle that derived its keys once and never looked at the
+  // file again kept answering from memory, so the promise held only for
+  // a handle opened after the revoke.
+  test('a revoked key stops reading, even from a handle that already read', () => {
+    const vault = fresh()
+
+    vault.set('api.token', 'tok01')
+    vault.grant({ key: 'ci', passphrase: 'ci-pass', names: ['api.token'], iterations: ROUNDS })
+
+    const ci = openvault({ file: vault.file(), key: 'ci', passphrase: 'ci-pass' })
+    assert.equal(ci.get('api.token'), 'tok01')
+
+    vault.revoke('ci')
+
+    assert.throws(() => ci.get('api.token'),
+      { message: 'sekreto: minivault: no such key: ci' })
+    assert.throws(() => ci.list(),
+      { message: 'sekreto: minivault: no such key: ci' })
+  })
+
+  // The same id, re-granted under a different passphrase, is a different
+  // key wearing the name. A cached ring would have kept the old one
+  // working; the file's ring is what decides.
+  test('a re-granted key id does not keep the old passphrase working', () => {
+    const vault = fresh()
+
+    vault.set('api.token', 'tok01')
+    vault.grant({ key: 'ci', passphrase: 'first', names: ['api.token'], iterations: ROUNDS })
+
+    const ci = openvault({ file: vault.file(), key: 'ci', passphrase: 'first' })
+    assert.equal(ci.get('api.token'), 'tok01')
+
+    vault.revoke('ci')
+    vault.grant({ key: 'ci', passphrase: 'second', names: ['api.token'], iterations: ROUNDS })
+
+    assert.throws(() => ci.get('api.token'),
+      { message: 'sekreto: minivault: wrong passphrase for key ci, or a damaged vault' })
+
+    assert.equal(
+      openvault({ file: vault.file(), key: 'ci', passphrase: 'second' }).get('api.token'), 'tok01')
+  })
+
+  // A length the format cannot record. `small` writes one byte, so a
+  // longer id wrapped it and the writer appended the whole thing anyway:
+  // every field after it shifted, and a `grant` replaced a working vault
+  // with an unreadable one without saying so.
+  test('a key id longer than the format allows is refused', () => {
+    const long = 'k'.repeat(256)
+
+    assert.throws(
+      () => createvault({ file: vaultpath(), key: long, passphrase: MASTER, iterations: ROUNDS }),
+      { message: /key id is longer than 255 bytes/ })
+
+    const vault = fresh()
+    vault.set('api.token', 'tok01')
+
+    assert.throws(
+      () => vault.grant({ key: long, passphrase: 'p', names: [], iterations: ROUNDS }),
+      { message: /key id is longer than 255 bytes/ })
+
+    // The vault it would have destroyed is untouched.
+    assert.equal(vault.get('api.token'), 'tok01')
+
+    // 255 bytes is the limit, not 255 characters: a multi-byte id counts
+    // its bytes.
+    assert.throws(
+      () => vault.grant({ key: 'é'.repeat(128), passphrase: 'p', names: [], iterations: ROUNDS }),
+      { message: /key id is longer than 255 bytes/ })
   })
 
   test('close forgets the derived keys and the next call opens again', () => {
