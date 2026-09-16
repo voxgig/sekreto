@@ -118,11 +118,37 @@ type Options struct {
 
 // ring is what a key holds, as it is stored: EITHER a root key (master)
 // OR a fixed set of derived per-secret keys (restricted).
+//
+// GRANTS IS A POINTER, AND THAT IS THE WHOLE OF A FORMAT BUG THIS ONCE
+// HAD. The asymmetry is the format: a master's ring carries `root` and no
+// `grants`, and a restricted key's carries `grants` - POSSIBLY EMPTY - and
+// no `root`. A plain map with `omitempty` gets the first half right and
+// the second half wrong, because `omitempty` drops an empty map as
+// readily as a nil one: a key granted nothing wrote
+// `{"v":1,"write":false}` where the canonical writes
+// `{"v":1,"write":false,"grants":{}}`, a vault 12 bytes shorter than
+// every other port's for the same input.
+//
+// It read back identically everywhere, because an absent `grants` parses
+// as empty - which is why no round trip saw it and why the fixtures could
+// not: none of them has a key granted nothing. The bytes are the
+// contract, so the pointer makes the empty map survive while nil omits.
 type ring struct {
-	V      int               `json:"v"`
-	Write  bool              `json:"write"`
-	Root   string            `json:"root,omitempty"`
-	Grants map[string]string `json:"grants,omitempty"`
+	V      int                `json:"v"`
+	Write  bool               `json:"write"`
+	Root   string             `json:"root,omitempty"`
+	Grants *map[string]string `json:"grants,omitempty"`
+}
+
+// orempty is the read side of that pointer: an absent `grants` and an
+// empty one mean the same thing to a reader, and only the writer has to
+// tell them apart.
+func orempty(held *map[string]string) *map[string]string {
+	if nil != held {
+		return held
+	}
+	empty := map[string]string{}
+	return &empty
 }
 
 // meta is what a master recorded about a key when it minted it, sealed
@@ -355,7 +381,8 @@ func (vault *Vault) load() (*vaultFile, *KeyInfo, error) {
 
 	grants := map[string][]byte{}
 	names := []string{}
-	for name, key := range held.Grants {
+	held.Grants = orempty(held.Grants)
+	for name, key := range *held.Grants {
 		raw, err := unb64(key, "a granted key")
 		if nil != err {
 			return nil, nil, err
@@ -727,7 +754,7 @@ func (vault *Vault) Grant(spec *GrantSpec) error {
 	}
 
 	record, err := sealkey(root, spec.Key, spec.Passphrase, iterations,
-		&ring{V: format, Write: spec.Write, Grants: grants},
+		&ring{V: format, Write: spec.Write, Grants: &grants},
 		&meta{V: format, Master: false, Write: spec.Write, Grants: names})
 	if nil != err {
 		return err

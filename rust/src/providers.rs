@@ -148,6 +148,17 @@ pub struct ProviderSpec {
     /// infisical: the environment slug and secret path.
     pub environment: String,
     pub path: String,
+    /// minivault: the passphrase that unwraps `vaultkey`.
+    pub passphrase: String,
+    /// minivault: which key in the vault file to open with, defaulting to
+    /// `master`. Named apart from `key` and `keyid` because those already
+    /// mean a secret name and an AWS access key id.
+    pub vaultkey: String,
+    /// minivault: PBKDF2 rounds, used only when a key is created (0 means
+    /// the default).
+    pub iterations: u32,
+    /// minivault: make the vault file if it is not there.
+    pub create: bool,
 
     /// A provider already built, joining the chain as it is - `kind`
     /// empty. This is how a custom provider that is not a plugin gets in.
@@ -491,6 +502,10 @@ pub fn specof(options: &Value) -> ProviderSpec {
         config: gettext(options, "config"),
         environment: gettext(options, "environment"),
         path: gettext(options, "path"),
+        passphrase: gettext(options, "passphrase"),
+        vaultkey: gettext(options, "vaultkey"),
+        iterations: options.get("iterations").as_num().unwrap_or(0.0) as u32,
+        create: matches!(options.get("create"), Value::Bool(true)),
         provider: None,
     }
 }
@@ -563,6 +578,16 @@ pub fn optionsof(spec: &ProviderSpec) -> Value {
     puttext(&mut out, "config", &spec.config);
     puttext(&mut out, "environment", &spec.environment);
     puttext(&mut out, "path", &spec.path);
+    puttext(&mut out, "passphrase", &spec.passphrase);
+    puttext(&mut out, "vaultkey", &spec.vaultkey);
+
+    if 0 != spec.iterations {
+        out.set("iterations", Value::Num(spec.iterations as f64));
+    }
+
+    if spec.create {
+        out.set("create", Value::Bool(true));
+    }
 
     out
 }
@@ -618,9 +643,9 @@ pub const BUILTIN_KINDS: [&str; 4] = ["env", "memory", "dotenv", "file"];
 /// from a plugin that was not passed in.
 ///
 /// The core names the KINDS, which are spec, and links none of the crates
-/// that implement them - the list is ten strings, and a string reaches
+/// that implement them - the list is eleven strings, and a string reaches
 /// nothing.
-pub const PLUGIN_KINDS: [&str; 10] = [
+pub const PLUGIN_KINDS: [&str; 11] = [
     "hashicorp",
     "boru",
     "awssecrets",
@@ -631,4 +656,5 @@ pub const PLUGIN_KINDS: [&str; 10] = [
     "doppler",
     "infisical",
     "secretspec",
+    "minivault",
 ];

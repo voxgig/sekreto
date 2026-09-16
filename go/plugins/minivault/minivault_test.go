@@ -675,6 +675,46 @@ func TestCreateMakesTheFileWhenAsked(t *testing.T) {
 // hard-coded list is one more place to edit when a port lands, and the
 // edit that gets forgotten is the one that makes this suite stop checking
 // the port that just arrived.
+// A RESTRICTED KEY GRANTED NOTHING STILL WRITES A GRANTS MAP, and the
+// only evidence is the file's length.
+//
+// The asymmetry is the format: a master's ring carries `root` and no
+// `grants`, a restricted key's carries `grants` - possibly empty - and no
+// `root`. Go's `omitempty` drops an empty map as readily as a nil one, so
+// this vault used to be 12 bytes shorter than the canonical's for the same
+// input: `{"v":1,"write":false}` where every other port writes
+// `{"v":1,"write":false,"grants":{}}`.
+//
+// It read back identically everywhere, because an absent `grants` parses
+// as empty, so no round trip could see it and the fixtures could not
+// either - none of them has a key granted nothing. Every length in the
+// format is fixed or derived, so the size IS deterministic for a given
+// input, and 401 is what typescript writes.
+func TestAKeyGrantedNothingStillWritesAGrantsMap(t *testing.T) {
+	vault := fresh(t)
+
+	if err := vault.Grant(&minivault.GrantSpec{
+		Key: "ci", Passphrase: "ci-phrase", Names: []string{}, Iterations: rounds}); nil != err {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(vault.File())
+	if nil != err {
+		t.Fatal(err)
+	}
+	if 401 != info.Size() {
+		t.Fatalf("vault is %d bytes, canonical writes 401", info.Size())
+	}
+
+	// ...and it is still a usable handle that reaches nothing.
+	ci, err := minivault.Open(&minivault.Options{
+		File: vault.File(), Key: "ci", Passphrase: "ci-phrase"})
+	if nil != err {
+		t.Fatal(err)
+	}
+	same(t, list(t, ci))
+}
+
 func TestTheCommittedFixtureReads(t *testing.T) {
 	names := fixtures(t)
 	if 0 == len(names) {

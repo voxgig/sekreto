@@ -1,0 +1,35 @@
+# the mini vault: a store this library owns outright
+#
+# One plugin, one crate: `cargo tree -p voxgig_sekreto_minivault` is the
+# honest answer to "what does this kind actually link?", and the core links
+# none of it (docs/design/plugin-providers.md, AGENTS.md rule 4).
+#
+# RING, AND WHY IT IS NOT A NEW DEPENDENCY. AGENTS.md rule 3's exception is
+# the audited cryptography a port already links, and this port already
+# links ring: `plugins/httpjson` takes rustls with its `ring` feature, so
+# `ring` has been in Cargo.lock since TLS arrived. Naming it here adds an
+# edge to a crate already in the closure rather than a crate to it - and a
+# consumer that takes this kind and no HTTPS one pays for ring alone, not
+# for rustls, which is what the split is for.
+#
+# It carries all four primitives the format is built from: AES-256-GCM,
+# PBKDF2-HMAC-SHA256, HMAC-SHA256 and the entropy under them. The in-tree
+# SHA-256 and HMAC in `plugins/aws/src/crypto.rs` stay where they are, as
+# the widened rule says: they work, a SigV4 signature is a chain of them so
+# one wrong bit fails the published vectors loudly, and rewriting them buys
+# nothing.
+[package]
+name = "voxgig_sekreto_minivault"
+version = "0.1.0"
+edition = "2021"
+description = "sekreto: the mini vault, a local encrypted store"
+license = "MIT"
+
+[dependencies]
+voxgig_sekreto = { path = "../.." }
+voxgig_plugin = { path = "../../.plugin/rust" }
+ring = "0.17"
+
+[lib]
+name = "voxgig_sekreto_minivault"
+path = "src/lib.rs"
