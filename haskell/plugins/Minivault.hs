@@ -109,21 +109,19 @@ import Providers
     specof,
     takeprovider,
   )
+import Foreign.C.String (withCString)
 import System.Directory (removeFile, renameFile)
 import System.IO.Unsafe (unsafePerformIO)
 import System.IO (hClose)
-import System.Posix.Files (ownerReadMode, ownerWriteMode, unionFileModes)
-import System.Posix.IO
-  ( OpenFileFlags (..),
-    OpenMode (WriteOnly),
-    defaultFileFlags,
-    fdToHandle,
-    openFd,
-  )
+import System.Posix.IO (fdToHandle)
+import System.Posix.Types (Fd (..))
 import Types (details2, raise)
 import Value (Value (..), asNum, isNum, vget)
 
 -- --------------------------------------------------------- the primitives
+
+foreign import ccall unsafe "sekreto_mv_open"
+  c_open :: Ptr CChar -> CInt -> IO CInt
 
 foreign import ccall unsafe "sekreto_mv_random"
   c_random :: Ptr CChar -> CInt -> IO CInt
@@ -533,25 +531,24 @@ slurp path = do
 -- follow a symlink to make one, which is what makes the temporary below
 -- safe to name in a directory somebody else can write.
 --
--- @openFd@ rather than @B.writeFile@, because the standard library has no
--- way to ask for either.
+-- @open(2)@ through the C binding rather than @B.writeFile@, because the
+-- standard library has no way to ask for either - and rather than the
+-- @unix@ package's @openFd@, whose arity changed at unix-2.8. See
+-- @sekreto_mv_open@ in plugins\/minivault.c.
 spill :: String -> B.ByteString -> Bool -> IO ()
 spill path raw exclusive = do
-  fd <-
-    openFd
-      path
-      WriteOnly
-      (Just (unionFileModes ownerReadMode ownerWriteMode))
-      defaultFileFlags {exclusive = exclusive, trunc = not exclusive}
-
-  -- THROUGH A HANDLE, AND `B.hPut`. `fdWrite` in this package takes a
-  -- String and encodes it with the process locale, which under the wiped
-  -- environment the integration suite uses is C - and every byte above
-  -- 0x7f in a sealed blob would come out as a question mark. `B.hPut`
-  -- writes the bytes.
-  handle <- fdToHandle fd
-  B.hPut handle raw
-  hClose handle
+  fd <- withCString path (\cpath -> c_open cpath (if exclusive then 1 else 0))
+  if 0 > fd
+    then mvfail ("cannot write " ++ path)
+    else do
+      -- THROUGH A HANDLE, AND `B.hPut`. `fdWrite` in the unix package
+      -- takes a String and encodes it with the process locale, which
+      -- under the wiped environment the integration suite uses is C - and
+      -- every byte above 0x7f in a sealed blob would come out as a
+      -- question mark. `B.hPut` writes the bytes.
+      handle <- fdToHandle (Fd fd)
+      B.hPut handle raw
+      hClose handle
 
 hex :: B.ByteString -> String
 hex = concatMap (\byte -> [digit (byte `shiftR` 4), digit (byte .&. 0x0f)]) . B.unpack

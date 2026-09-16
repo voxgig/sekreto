@@ -23,7 +23,10 @@
  * vault is full of NULs, so nothing here may be measured with `strlen`.
  */
 
+#include <fcntl.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
@@ -144,4 +147,27 @@ int sekreto_mv_unseal(const unsigned char *key, const unsigned char *iv,
   EVP_CIPHER_CTX_free(ctx);
 
   return ok ? cut : -1;
+}
+
+/* Open a vault file for writing: owner-only, created if it is not there,
+ * and EXCLUSIVE when asked. Answers the descriptor, or -1.
+ *
+ * HERE RATHER THAN IN HASKELL, and that is the interesting part. The
+ * `unix` package is the only way GHC offers to ask for a file mode or for
+ * O_EXCL, and `openFd` CHANGED ARITY at unix-2.8: the mode moved out of
+ * its own argument and into a field of `OpenFileFlags`. This port
+ * compiles with `ghc --make` and no cabal, so it has no
+ * `MIN_VERSION_unix` macro to branch on, and either spelling fails to
+ * compile against the other half of the versions in use. `open(2)` is the
+ * call underneath both and has not changed since it was written.
+ *
+ * Owner-only at CREATION, not afterwards: a chmod after the write leaves
+ * a window in which another local user can open the file and keep the
+ * descriptor. The mode is subject to the umask, which is what every port
+ * that calls open(2) gets. */
+int sekreto_mv_open(const char *path, int exclusive)
+{
+  int flags = O_WRONLY | O_CREAT | (exclusive ? O_EXCL : O_TRUNC);
+
+  return open(path, flags, S_IRUSR | S_IWUSR);
 }
