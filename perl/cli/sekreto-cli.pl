@@ -51,6 +51,20 @@ use Voxgig::Sekreto::Plugins qw(allplugins);
 
 my $LANG = 'perl';
 
+# One environment variable, as text. Bytes that are not UTF-8 are handed
+# back as they are: they came from the environment, so they go on as they
+# arrived rather than becoming replacement characters.
+sub decoded {
+    my ($raw) = @_;
+
+    return $raw if !defined $raw;
+
+    my $copy = $raw;
+    utf8::decode($copy);
+
+    return $copy;
+}
+
 sub chainfor {
     my ($source) = @_;
 
@@ -151,11 +165,17 @@ sub chainfor {
 
     # The mini vault, read-only here: the CLI is an app that needs a
     # secret, and writing one is a separate act with its own API.
+    #
+    # DECODED HERE, because `%ENV` hands back bytes and the vault takes
+    # text. A passphrase with a non-ASCII character in it would otherwise
+    # be encoded twice and open nothing, while reading perfectly well on
+    # every other port. Decoding is the boundary's job, and this is the
+    # boundary.
     my $minivaultspec = {
         kind       => 'minivault',
         file       => $ENV{SEKRETO_VAULT_FILE} || '',
-        vaultkey   => $ENV{SEKRETO_VAULT_KEY},
-        passphrase => $ENV{SEKRETO_VAULT_PASSPHRASE} || '',
+        vaultkey   => decoded( $ENV{SEKRETO_VAULT_KEY} ),
+        passphrase => decoded( $ENV{SEKRETO_VAULT_PASSPHRASE} ) || '',
     };
 
     my $infisicalspec = {

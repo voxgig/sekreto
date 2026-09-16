@@ -17,7 +17,7 @@ use warnings;
 use File::Basename qw(dirname);
 use File::Path     qw(mkpath rmtree);
 use File::Spec;
-use Test::More tests => 37;
+use Test::More tests => 38;
 
 use PluginHome ();
 
@@ -823,6 +823,59 @@ subtest 'two handles writing in turn both land' => sub {
 
     is_deeply( openas( $vault->file, undef, $MASTER )->list,
         \@want, 'nothing is lost' );
+};
+
+# A NON-ASCII PASSPHRASE OR VALUE IS UTF-8 ON DISK, or this port writes
+# vaults nobody else can open.
+#
+# THE VAULT TAKES TEXT, and text in perl is characters. The same string
+# lives as Latin-1 bytes or as UTF-8 depending on what has happened to it,
+# and `utf8::upgrade` moves it between the two without changing it - so a
+# conversion that read `utf8::is_utf8` would hash one passphrase two ways.
+# That is what these first two cases pin.
+#
+# The other side of the contract is the boundary: a scalar that is already
+# UTF-8 bytes, which is what `%ENV` hands back, is decoded before it gets
+# here, and `cli/sekreto-cli.pl` is where that happens.
+subtest 'a non-ascii passphrase and value are utf-8 on disk' => sub {
+    plan tests => 5;
+
+    my $phrase = "p\x{e4}ssw\x{f6}rd";
+    my $value  = "v\x{e4}lue-\x{fc}";
+
+    my $file = vaultpath();
+    my $made = createvault(
+        { file => $file, passphrase => $phrase, iterations => $ROUNDS } );
+    $made->set( 'api.token', $value );
+
+    is( $made->get('api.token'), $value, 'it round trips' );
+
+    # THE SAME STRING, held the other way. `upgrade` changes the internal
+    # representation and nothing else, so it must be the same passphrase.
+    my $upgraded = $phrase;
+    utf8::upgrade($upgraded);
+    is( openvault( { file => $file, passphrase => $upgraded } )->get('api.token'),
+        $value, 'and the upgraded form is the same passphrase' );
+
+    # ...and so is the downgraded one, from the other direction.
+    my $downgraded = $upgraded;
+    utf8::downgrade($downgraded);
+    is( openvault( { file => $file, passphrase => $downgraded } )->get('api.token'),
+        $value, 'and so is the downgraded form' );
+
+    # The value comes back as characters, as JSON::PP hands a provider its
+    # values, rather than as the bytes the file holds.
+    ok( utf8::is_utf8( $made->get('api.token') ), 'and comes back decoded' );
+
+    # THE BOUNDARY, as the CLI crosses it: UTF-8 bytes, decoded, are the
+    # same passphrase. Undecoded they are a different one, which is why the
+    # CLI decodes.
+    my $bytes = $phrase;
+    utf8::encode($bytes);
+    utf8::decode($bytes);
+
+    is( openvault( { file => $file, passphrase => $bytes } )->get('api.token'),
+        $value, 'and utf-8 bytes decoded at the boundary are too' );
 };
 
 # --- the committed format --------------------------------------------------

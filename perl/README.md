@@ -136,6 +136,23 @@ for the mini vault`. It is loaded at the FIRST SEAL and never at compile
 time, so `allplugins` costs nothing on a Perl without it, and a chain that
 configures no vault runs as before.
 
+**The vault takes text, and stores its UTF-8 encoding.** That is what the
+other twenty ports store, so a passphrase, a key id, or a value that reached
+a KDF or a cipher as anything else would produce a vault none of them
+could open. Perl holds the same string of characters as Latin-1 bytes or as
+UTF-8 depending on what has happened to it, and `utf8::upgrade` moves it
+between the two without changing the string — so the conversion is
+unconditional rather than a test of `utf8::is_utf8`, which would hash one
+passphrase two ways. ASCII is unchanged by it, which is every passphrase
+in the fixtures and most in the world.
+
+The other side of that contract is the boundary: a scalar that is already
+UTF-8 bytes, which is what `%ENV` and a file hand back, is decoded before
+it reaches the vault. `cli/sekreto-cli.pl` does that for the three vault
+environment variables, and a program reading a passphrase from a file
+should do the same. Values come back decoded, as `JSON::PP` hands a
+provider its values.
+
 **No lock, and for a reason that is not the usual one.** Every port that
 can reach one file from two threads keys a lock by the vault's absolute
 path. Perl's interpreter threads copy rather than share: `threads->create`

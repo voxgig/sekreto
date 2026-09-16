@@ -119,12 +119,63 @@ sub IDMAX { return 255 }
 
 sub fail { return Voxgig::Sekreto::fail( 'sekreto: minivault: ' . $_[0] ) }
 
+# --- characters in, UTF-8 bytes on disk --------------------------------
+#
+# THE VAULT TAKES TEXT, and the format stores its UTF-8 encoding, because
+# that is what the other twenty ports store: a passphrase, a key id or a
+# value that reaches a KDF or a cipher as anything else produces a vault
+# none of them can open.
+#
+# UNCONDITIONALLY, AND NOT ON `utf8::is_utf8`. That flag is an internal
+# representation, not a meaning: perl holds the same string of characters
+# as Latin-1 bytes or as UTF-8 depending on what has happened to it, and
+# `utf8::upgrade` changes it without changing the string. A conversion
+# that reads the flag therefore hashes one passphrase two ways, which is
+# the defect this replaced. Encoding a copy every time is
+# representation-neutral, which is the property that matters, and ASCII -
+# every passphrase in the fixtures, and most in the world - is unchanged
+# by it.
+#
+# The cost is the other direction: a scalar that is ALREADY UTF-8 bytes,
+# which is what `%ENV` and a file hand back, is encoded twice. So the
+# boundary decodes - `cli/sekreto-cli.pl` does it for the three vault
+# environment variables - and the library works in characters throughout,
+# which is the layering perl asks for anyway.
+
+sub bytesof {
+    my ($text) = @_;
+
+    return $text if !defined $text;
+
+    my $copy = $text;
+    utf8::encode($copy);
+
+    return $copy;
+}
+
+# ...and the other way, for what comes back out of the vault: a decoded
+# string, as JSON::PP hands a provider its values. Bytes that are not
+# UTF-8 are handed back as they are rather than mangled into replacement
+# characters - the vault stored them, so it returns them.
+sub textof {
+    my ($raw) = @_;
+
+    return $raw if !defined $raw;
+
+    my $copy = $raw;
+    return $copy if utf8::decode($copy);
+
+    return $raw;
+}
+
 sub checkid {
     my ( $id, $what ) = @_;
 
     fail($what) if !defined $id || ref($id) || '' eq $id;
+
+    # BYTES, because that is what the one length byte counts.
     fail( 'key id is longer than ' . IDMAX() . ' bytes: ' . substr( $id, 0, 32 ) . '...' )
-      if IDMAX() < length($id);
+      if IDMAX() < length( bytesof($id) );
 
     return $id;
 }
@@ -175,7 +226,7 @@ sub cryptx {
 sub mac {
     my ( $key, $text ) = @_;
     cryptx();
-    return Crypt::Mac::HMAC::hmac( 'SHA256', $key, $text );
+    return Crypt::Mac::HMAC::hmac( 'SHA256', $key, bytesof($text) );
 }
 
 # The key-encryption key a passphrase unwraps a ring with.
@@ -185,7 +236,8 @@ sub kek {
     fail( 'unusable round count: ' . $iters ) if 1 > $iters;
     cryptx();
 
-    return Crypt::KeyDerivation::pbkdf2( $passphrase, $salt, $iters, 'SHA256', KEYLEN() );
+    return Crypt::KeyDerivation::pbkdf2( bytesof($passphrase), $salt, $iters, 'SHA256',
+        KEYLEN() );
 }
 
 # The key one named secret's value is encrypted with.
@@ -224,7 +276,8 @@ sub seal {
 
     my $iv = randombytes( IVLEN() );
     my ( $body, $tag ) =
-      Crypt::AuthEnc::GCM::gcm_encrypt_authenticate( 'AES', $key, $iv, $aad, $plain );
+      Crypt::AuthEnc::GCM::gcm_encrypt_authenticate( 'AES', $key, $iv, bytesof($aad),
+        bytesof($plain) );
 
     fail('cannot seal') if !defined $body || !defined $tag || TAGLEN() != length($tag);
 
@@ -248,7 +301,7 @@ sub unseal {
     my $tag  = substr( $sealed->{blob}, -TAGLEN() );
 
     my $plain = Crypt::AuthEnc::GCM::gcm_decrypt_verify( 'AES', $key, $sealed->{iv},
-        $aad, $body, $tag );
+        bytesof($aad), $body, $tag );
 
     fail($what) if !defined $plain;
 
@@ -263,13 +316,13 @@ sub unseal {
 # reproducibility one. `canonical` sorts the keys, and the sort changes no
 # byte count: the ring is SEALED, so the length is what the fixtures pin.
 sub jsonof {
-    return JSON::PP->new->canonical->encode( $_[0] );
+    return JSON::PP->new->canonical->utf8->encode( $_[0] );
 }
 
 sub parsejson {
     my ( $plain, $what ) = @_;
 
-    my $out = eval { JSON::PP->new->decode($plain) };
+    my $out = eval { JSON::PP->new->utf8->decode($plain) };
 
     fail( 'unreadable ' . $what ) if !defined $out || 'HASH' ne ref($out);
 
@@ -366,7 +419,7 @@ sub readfile {
     for ( 1 .. $keycount ) {
         push @{ $vault->{keys} },
           {
-            id    => $read->small,
+            id    => textof( $read->small ),
             salt  => $read->small,
             iters => $read->u32,
             ring  => $read->sealed,
@@ -403,7 +456,7 @@ sub writefile {
     $out .= pack( 'N', scalar @{ $vault->{keys} } );
 
     for my $record ( @{ $vault->{keys} } ) {
-        $out .= $small->( $record->{id} );
+        $out .= $small->( bytesof( $record->{id} ) );
         $out .= $small->( $record->{salt} );
         $out .= pack( 'N', $record->{iters} );
         $out .= $sealed->( $record->{ring} );
@@ -668,9 +721,13 @@ sub copyinfo {
 
             return [
                 sort map {
-                    Voxgig::Sekreto::Plugins::Minivault::unseal( $namekey, $_->{name},
-                        Voxgig::Sekreto::Plugins::Minivault::AAD_NAME(),
-                        'a secret name is damaged' )
+                    Voxgig::Sekreto::Plugins::Minivault::textof(
+                        Voxgig::Sekreto::Plugins::Minivault::unseal(
+                            $namekey, $_->{name},
+                            Voxgig::Sekreto::Plugins::Minivault::AAD_NAME(),
+                            'a secret name is damaged'
+                        )
+                    )
                 } @{ $vault->{entries} }
             ];
         }
@@ -707,9 +764,13 @@ sub copyinfo {
         my $entry = $self->findentry( $vault, $key );
         return undef if !defined $entry;
 
-        return Voxgig::Sekreto::Plugins::Minivault::unseal( $key, $entry->{value},
-            Voxgig::Sekreto::Plugins::Minivault::AAD_SECRET() . $name,
-            'the value of ' . $name . ' is damaged' );
+        return Voxgig::Sekreto::Plugins::Minivault::textof(
+            Voxgig::Sekreto::Plugins::Minivault::unseal(
+                $key, $entry->{value},
+                Voxgig::Sekreto::Plugins::Minivault::AAD_SECRET() . $name,
+                'the value of ' . $name . ' is damaged'
+            )
+        );
     }
 
     # Write a value. A master writes any name; a restricted key holding
@@ -797,14 +858,16 @@ sub copyinfo {
         for my $record ( @{ $vault->{keys} } ) {
             my $meta = $self->metaof( $opened, $record );
 
+            my $id = $record->{id};
+
             if ( !defined $meta ) {
                 push @out,
-                  { key => $record->{id}, master => 0, write => 0, grants => [] };
+                  { key => $id, master => 0, write => 0, grants => [] };
             }
             else {
                 push @out,
                   {
-                    key    => $record->{id},
+                    key    => $id,
                     master => $meta->{master} ? 1 : 0,
                     write  => $meta->{write}  ? 1 : 0,
                     grants => [ sort @{ $meta->{grants} || [] } ],
@@ -825,6 +888,7 @@ sub copyinfo {
         $spec ||= {};
         Voxgig::Sekreto::Plugins::Minivault::checkid( $spec->{key},
             'a grant needs a key id' );
+
 
         Voxgig::Sekreto::Plugins::Minivault::fail('a grant needs a passphrase')
           if !defined $spec->{passphrase}
