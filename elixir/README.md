@@ -36,6 +36,50 @@ provider's `values`, a JSON object, and the headers SigV4 signs. Elixir
 maps have no order at all once they grow past a handful of keys, and a
 payload's field order is signed.
 
+## The mini vault
+
+`plugins/minivault.ex` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the port's
+worked example of a definition publishing an API beside its provider.
+
+```elixir
+alias Sekreto.Plugins.Minivault, as: MV
+
+vault = MV.createvault(%{"file" => "app.skmv", "passphrase" => master})
+MV.set(vault, "api.token", "tok01")
+MV.grant(vault, %{"key" => "ci", "passphrase" => ci, "names" => ["api.token"]})
+
+secrets =
+  Sekreto.new(
+    [%Sekreto.ProviderSpec{kind: "minivault", file: "app.skmv",
+                           vaultkey: "ci", passphrase: ci}],
+    plugins: [MV.minivault()]
+  )
+
+Sekreto.get(secrets, "api.token")    # the chain reads
+MV.list(MV.vaultof(secrets))         # ['api.token'] — as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off the chain's host. Erlang's `:crypto` carries all four primitives, so
+nothing here is hand-rolled. What each key may do, what the file holds,
+and what the whole thing does and does not protect are in
+[DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
+
+**The handle is a process.** Every other port keeps the derived keys in a
+closure or a field and replaces them in place; a vault handle here is an
+`Agent`, because a handle that caches what it derived and a handle that
+notices a revoked key are the same handle, and there is no other way to be
+both. The upside is the authorization defect the review round found in the
+canonical — a caller flipping its own `write` bit on the record it was
+handed — cannot happen where a map is a value.
+
+Ports carrying this kind read each other's files, which
+`test/minivault_test.exs` checks against every committed vault in
+`test/fixture/`, including the one this port wrote.
+
 ## Layout
 
 Four provider kinds are **built in** — `env`, `memory`, `dotenv` and
@@ -51,6 +95,7 @@ constructor. Nothing under `src/` names anything under `plugins/`.
 | `src/json.ex` | the JSON value model, reader and writer |
 | `src/provider.ex` | the provider shape, and the cell a provider keeps state in |
 | `plugins/<kind>.ex` | one plugin kind each: `hashicorp`, `boru`, `gcpsecrets`, `azuresecrets`, `onepassword`, `doppler`, `infisical`, `secretspec` — and `aws`, which holds both AWS stores because they share a signer |
+| `plugins/minivault.ex` | the mini vault: the format, the keys, the API, the definition |
 | `plugins/plugins.ex` | `Sekreto.Plugins.all/0`, the full set |
 | `plugins/http.ex` | the HTTP/1.1 client, the TLS binding, and the URL functions |
 | `plugins/httpjson.ex` | one JSON round-trip, and token renewal |
@@ -58,6 +103,7 @@ constructor. Nothing under `src/` names anything under `plugins/`.
 | `plugins/proc.ex` | the child process the two CLI-backed kinds run |
 | `test/sekreto_test.exs` | the conformance suite |
 | `test/plugins_test.exs` | the plugin seam, which the conformance suite cannot see |
+| `test/minivault_test.exs` | the mini vault, and the committed files every port reads |
 | `tool/escript.exs` | packs the compiled modules into the escript |
 | `tool/checkcore.exs` | compiles `src/` alone, and reads the beams back |
 | `cli/cli.ex` | the app that needs a secret |

@@ -33,14 +33,14 @@ defmodule PluginsTest do
   @moduledoc "The plugin-seam suite for the Elixir port."
 
   @plugins ~w(awsparams awssecrets azuresecrets boru doppler gcpsecrets
-              hashicorp infisical onepassword secretspec)
+              hashicorp infisical minivault onepassword secretspec)
 
   @builtin ~w(dotenv env file memory)
 
-  @doc "The ten plugin kinds, sorted."
+  @doc "The eleven plugin kinds, sorted."
   def plugins, do: @plugins
 
-  @doc "All fourteen kinds, sorted."
+  @doc "All fifteen kinds, sorted."
   def every, do: Enum.sort(@builtin ++ @plugins)
 
   # ------------------------------------------------------------ the checks
@@ -227,7 +227,7 @@ fullset = fn ->
 
   # Two kinds, one module: aws ships both stores because they share a
   # signer, so the list is ten definitions from nine modules.
-  PluginsTest.same(10, length(Plugins.all()), "length(Plugins.all/0)")
+  PluginsTest.same(11, length(Plugins.all()), "length(Plugins.all/0)")
 
   PluginsTest.same(Sekreto.kinds().builtin, Enum.map(Sekreto.builtins(), & &1["name"]), "builtins")
   PluginsTest.same(PluginsTest.plugins(), Enum.sort(Sekreto.kinds().plugin), "kinds().plugin")
@@ -238,13 +238,17 @@ end
 everykindbuilds = fn ->
   chain =
     Enum.map(PluginsTest.every(), fn kind ->
+      # One spec that satisfies every kind's configuration check. The
+      # vault's file is not opened here: its handle is lazy, and nothing
+      # reaches a store until a lookup.
       %ProviderSpec{
         kind: kind,
         addr: "http://127.0.0.1:8200",
         token: "t",
         dir: "/tmp",
         file: "/tmp/.env",
-        values: []
+        values: [],
+        passphrase: "p"
       }
     end)
 

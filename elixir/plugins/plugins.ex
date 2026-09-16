@@ -41,11 +41,12 @@ defmodule Sekreto.Plugins do
   alias Sekreto.Plugins.Gcpsecrets
   alias Sekreto.Plugins.Hashicorp
   alias Sekreto.Plugins.Infisical
+  alias Sekreto.Plugins.Minivault
   alias Sekreto.Plugins.Onepassword
   alias Sekreto.Plugins.Secretspec
 
   @doc """
-  Every plugin kind this library ships: ten definitions from nine
+  Every plugin kind this library ships: eleven definitions from ten
   modules, since the two aws stores share a signer and travel together.
   """
   def all do
@@ -59,7 +60,8 @@ defmodule Sekreto.Plugins do
       Onepassword.onepassword(),
       Doppler.doppler(),
       Infisical.infisical(),
-      Secretspec.secretspec()
+      Secretspec.secretspec(),
+      Minivault.minivault()
     ]
   end
 end

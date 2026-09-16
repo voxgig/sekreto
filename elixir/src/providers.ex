@@ -138,7 +138,18 @@ defmodule Sekreto.ProviderSpec do
             config: "",
             # infisical: the environment slug and secret path.
             environment: "",
-            path: ""
+            path: "",
+            # minivault: the passphrase that unwraps `vaultkey`.
+            passphrase: "",
+            # minivault: which key in the vault file to open with,
+            # defaulting to `master`. Named apart from `key` and `keyid`
+            # because those already mean a secret name and an AWS access
+            # key id.
+            vaultkey: "",
+            # minivault: PBKDF2 rounds, used only when a key is created.
+            iterations: nil,
+            # minivault: make the vault file if it is not there.
+            create: false
 end
 
 # Printed without its credentials. See the AuthSpec implementation: the
@@ -523,7 +534,8 @@ defmodule Sekreto.Providers do
         "onepassword",
         "doppler",
         "infisical",
-        "secretspec"
+        "secretspec",
+        "minivault"
       ]
     }
   end
