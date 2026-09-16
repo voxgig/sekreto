@@ -36,12 +36,13 @@ require_relative 'plugins/onepassword'
 require_relative 'plugins/doppler'
 require_relative 'plugins/infisical'
 require_relative 'plugins/secretspec'
+require_relative 'plugins/minivault'
 
 module VoxgigSekreto
   module Plugins
     ALL = [
       HASHICORP, BORU, AWSSECRETS, AWSPARAMS, GCPSECRETS, AZURESECRETS,
-      ONEPASSWORD, DOPPLER, INFISICAL, SECRETSPEC
+      ONEPASSWORD, DOPPLER, INFISICAL, SECRETSPEC, MINIVAULT
     ].freeze
   end
 end

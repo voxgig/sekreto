@@ -71,6 +71,44 @@ then the usual places (`test/pluginhome.rb`) for both the tests and the CLI.
 which is what `npm install` and `go mod download` do for the other ports.
 The library itself searches no path.
 
+## The mini vault
+
+`lib/voxgig_sekreto/plugins/minivault.rb` is a store this port owns
+outright rather than a client for a server somebody else runs: every
+secret, encrypted, in one binary file. It has a master key and restricted
+keys, and it is the port's worked example of a definition publishing an
+API beside its provider.
+
+```ruby
+require 'voxgig_sekreto'
+require 'voxgig_sekreto/plugins/minivault'
+
+vault = VoxgigSekreto.createvault('file' => 'app.skmv', 'passphrase' => master)
+vault.set('api.token', 'tok01')
+vault.grant('key' => 'ci', 'passphrase' => ci, 'names' => ['api.token'])
+
+secrets = VoxgigSekreto::Sekreto.new(
+  'plugins' => [VoxgigSekreto::Plugins::MINIVAULT],
+  'providers' => [{ 'kind' => 'minivault', 'file' => 'app.skmv',
+                    'vaultkey' => 'ci', 'passphrase' => ci }]
+)
+
+secrets.get('api.token')            # the chain reads
+VoxgigSekreto.vaultof(secrets).list # ['api.token'] — as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `secrets.host`. OpenSSL is ruby's standard library, so all four
+primitives come from it and nothing here is hand-rolled. What each key may
+do, what the file holds, and what the whole thing does and does not
+protect are in
+[DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
+
+Ports carrying this kind read each other's files, which
+`test/test_minivault.rb` checks against every committed vault in
+`test/fixture/`, including the one this port wrote.
+
 ## Layout
 
 | | |
@@ -80,9 +118,11 @@ The library itself searches no path.
 | `lib/voxgig_sekreto/addr.rb` | `checkaddr`, the plaintext-address guard — pure, and on the spec |
 | `lib/voxgig_sekreto/plugins/<name>.rb` | one plugin each; `aws.rb` carries `sigv4.rb` beside it |
 | `lib/voxgig_sekreto/plugins/httpjson.rb` | the bounded, redirect-refusing HTTP round-trip every wire plugin shares |
+| `lib/voxgig_sekreto/plugins/minivault.rb` | the mini vault: the format, the keys, the API, the definition |
 | `lib/voxgig_sekreto/plugins.rb` | the full set |
 | `test/test_sekreto.rb` | the conformance suite |
 | `test/test_plugins.rb` | the plugin seam, from both sides |
+| `test/test_minivault.rb` | the mini vault, and the committed files every port reads |
 | `cli/sekreto_cli.rb` | the app that needs a secret |
 
 ## Testing

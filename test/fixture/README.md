@@ -9,6 +9,7 @@ implementations.
 | `minivault.skmv` | typescript, the canonical port |
 | `minivault-go.skmv` | go |
 | `minivault-js.skmv` | javascript |
+| `minivault-rb.skmv` | ruby |
 
 **One file per writing port, and every port reads all of them.** A suite
 that reads only what its own port wrote proves the reader agrees with the

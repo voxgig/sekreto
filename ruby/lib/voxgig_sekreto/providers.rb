@@ -201,7 +201,7 @@ module VoxgigSekreto
     'builtin' => %w[env memory dotenv file].freeze,
     'plugin' => %w[
       hashicorp boru awssecrets awsparams gcpsecrets azuresecrets
-      onepassword doppler infisical secretspec
+      onepassword doppler infisical secretspec minivault
     ].freeze
   }.freeze
 end
