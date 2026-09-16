@@ -18,6 +18,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,24 +56,59 @@ func fresh(t *testing.T) *minivault.Vault {
 
 // fixture copies a committed vault, so that a test which writes cannot
 // edit the bytes the format contract is made of.
-func fixture(t *testing.T, name string) string {
+// Where the committed vaults live, found by walking up.
+func fixturedir(t *testing.T) string {
 	t.Helper()
 
 	dir := "."
 	for step := 0; step < 8; step++ {
-		cand := filepath.Join(dir, "test", "fixture", name)
-		if raw, err := os.ReadFile(cand); nil == err {
-			mine := vaultpath(t)
-			if err := os.WriteFile(mine, raw, 0o600); nil != err {
-				t.Fatal(err)
-			}
-			return mine
+		cand := filepath.Join(dir, "test", "fixture")
+		if _, err := os.Stat(filepath.Join(cand, "minivault.skmv")); nil == err {
+			return cand
 		}
 		dir = filepath.Join(dir, "..")
 	}
 
-	t.Fatal("sekreto: fixture vault not found: " + name)
+	t.Fatal("sekreto: the fixture directory was not found")
 	return ""
+}
+
+// Every committed vault, sorted.
+func fixtures(t *testing.T) []string {
+	t.Helper()
+
+	held, err := os.ReadDir(fixturedir(t))
+	if nil != err {
+		t.Fatal(err)
+	}
+
+	names := []string{}
+	for _, entry := range held {
+		if strings.HasSuffix(entry.Name(), ".skmv") {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+
+	return names
+}
+
+// A committed vault, copied so that a case which writes cannot edit the
+// bytes the format contract is made of.
+func fixture(t *testing.T, name string) string {
+	t.Helper()
+
+	raw, err := os.ReadFile(filepath.Join(fixturedir(t), name))
+	if nil != err {
+		t.Fatal(err)
+	}
+
+	mine := vaultpath(t)
+	if err := os.WriteFile(mine, raw, 0o600); nil != err {
+		t.Fatal(err)
+	}
+
+	return mine
 }
 
 func set(t *testing.T, vault *minivault.Vault, name string, value string) {
@@ -609,8 +645,17 @@ func TestCreateMakesTheFileWhenAsked(t *testing.T) {
 // canonical port, so reading it here is this port checking somebody
 // else's bytes; `minivault-go.skmv` is this port's own, and the
 // canonical suite reads it.
+// EVERY committed vault, read off disk rather than listed here. A
+// hard-coded list is one more place to edit when a port lands, and the
+// edit that gets forgotten is the one that makes this suite stop checking
+// the port that just arrived.
 func TestTheCommittedFixtureReads(t *testing.T) {
-	for _, name := range []string{"minivault.skmv", "minivault-go.skmv"} {
+	names := fixtures(t)
+	if 0 == len(names) {
+		t.Fatal("sekreto: no committed vault was found")
+	}
+
+	for _, name := range names {
 		t.Run(name, func(t *testing.T) { readfixture(t, name) })
 	}
 }

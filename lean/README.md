@@ -36,7 +36,7 @@ Loading is explicit and never a side effect of importing: the set of
 stores an app can reach is decided where the chain is written, and a kind
 that was not passed in is refused with a message that names the fix.
 `SekretoPlugins` is the whole set in one import, for a caller that wants
-all ten — the CLI does, because `--source` is a run-time argument.
+all eleven — the CLI does, because `--source` is a run-time argument.
 
 **Lean's own module resolution is the boundary.** A module name's first
 component resolves to one directory on `LEAN_PATH` and every submodule
@@ -150,6 +150,80 @@ miss that sends the chain on to the next store. The two spec fields whose
 names are Lean keywords, `prefix` and `namespace`, keep those names
 through Lean's `«…»` quoting rather than being renamed.
 
+## The mini vault
+
+`plugins/SekretoPlugins/Minivault.lean` is a store this port owns
+outright rather than a client for a server somebody else runs: every
+secret, encrypted, in one binary file. It has a master key and restricted
+keys, and it is the port's worked example of a definition publishing an
+API beside its provider.
+
+```lean
+import Sekreto
+import SekretoPlugins.Minivault
+
+open Sekreto
+
+def main : IO Unit := do
+  let vault ← createvault { file := "app.skmv", passphrase := master }
+  vaultset vault "api.token" "tok01"
+  vaultgrant vault { key := "ci", passphrase := ci, names := ["api.token"] }
+
+  let secrets ← sekreto {
+    plugins := [minivault],
+    providers := [
+      { kind := "minivault", file := "app.skmv", vaultkey := "ci", passphrase := ci }] }
+
+  let _ ← secrets.get "api.token"              -- the chain reads
+  let _ ← vaultlist (← vaultof secrets)        -- ["api.token"]
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off the chain's host. Both exports are numbers, because voxgig/plugin's
+values are numbers and strings and neither a provider nor a vault is
+data, and both are dropped by the definition's `close` — so a chain that
+was torn down and a chain whose construction was refused hand their
+vaults back alike, which `test/MinivaultTest.lean` reads off the table.
+The slot a `close` has to drop is kept in the instance's state as well as
+in its exports, because `InstApi` offers `exportValue` and no getter.
+
+`VaultKeyInfo` is a structure over a list, so the defect the review round
+found in the canonical — a caller flipping its own `write` bit on the
+record it was handed — does not compile. `with` makes a new value and
+changes nothing the vault reads.
+
+**Where the crypto comes from, and why there is a third C file.** Lean's
+standard library has no cryptographic digest and no cipher, and the
+no-new-package rule stands, so the five primitives come from the OpenSSL
+this port already links: `ffi/sekreto_vault.c` is AES-256-GCM,
+PBKDF2-HMAC-SHA256, HMAC-SHA256 and the entropy under them, and nothing
+else. `plugins/SekretoPlugins/Crypto.lean` writes SHA-256 and
+HMAC-SHA256 out in Lean beside that linked libcrypto, which reads as a
+contradiction and is not one: the dependency rule used to confine the
+exception to cryptographic *transport*, and now covers cryptography,
+because a block cipher protecting secrets **at rest** has properties no
+known-answer vector can check. Those two stay where they are — they work,
+a SigV4 signature is a chain of them so one wrong bit fails the published
+vectors loudly, and rewriting them buys nothing.
+
+Two things this port cannot ask the platform for, said here rather than
+implied. `IO.FS.writeBinFile` has no exclusive-create mode, so creating a
+vault is check-then-write and two processes racing to create the same
+file is a race the format cannot arbitrate; and it has no file mode
+either, so a new vault lands under the process umask rather than
+owner-only. Both are the same call in every other port and neither is a
+secrecy claim this port makes.
+
+Ports carrying this kind read each other's files, which
+`test/MinivaultTest.lean` checks against every committed vault in
+`test/fixture/`, including the one this port wrote:
+
+```sh
+make vaulttest                             # all of it
+./build/sekreto-vaulttest restricted       # one case
+```
+
 ## Layout
 
 | | |
@@ -168,10 +242,13 @@ through Lean's `«…»` quoting rather than being renamed.
 | `plugins/SekretoPlugins/Crypto.lean` | SHA-256 and HMAC-SHA256 |
 | `plugins/SekretoPlugins/Clock.lean` | the wall clock SigV4 stamps |
 | `plugins/SekretoPlugins/Sigv4.lean` | AWS request signing |
-| `plugins/SekretoPlugins/Hashicorp.lean` | one file per kind, and nine more beside it |
+| `plugins/SekretoPlugins/Hashicorp.lean` | one file per kind, and ten more beside it |
+| `plugins/SekretoPlugins/Minivault.lean` | the mini vault: the SKMV format and the key model |
 | `ffi/sekreto_curl.c` | the TLS transport binding |
 | `ffi/sekreto_clock.c` | `time()`, and nothing else |
+| `ffi/sekreto_vault.c` | the vault's five primitives, and the port's second OpenSSL edge |
 | `test/SekretoTest.lean` | the conformance suite, and the plugin seam |
+| `test/MinivaultTest.lean` | the mini vault, and every committed fixture |
 | `test/CoreOnly.lean` | the program `check-core` links without libcurl |
 | `cli/Cli.lean` | the app that needs a secret |
 
@@ -239,7 +316,7 @@ After the fourteen groups come eleven seam checks, named `plugins/…`,
 which the spec cannot see: it hands every plugin to every chain it builds,
 so it can never notice a consumer passing the wrong ones. They pin the
 full set against the core's list of what ships as a plugin, that every
-kind builds from a spec, that the CLI passes all ten, that one plugin is
+kind builds from a spec, that the CLI passes all eleven, that one plugin is
 enough for a chain naming only it, how a repeated store name is numbered,
 that a refusal raised inside `define` comes back byte for byte, and which
 modules each file imports.
@@ -344,7 +421,8 @@ here rather than a staging post.
 The core/plugin split narrows that question without answering it. A Lean
 consumer that wants the four built-in kinds now links no libcurl, no
 OpenSSL and no child process, and `make check-core` is what says so; the
-ten kinds that do are there for the consumer that asks for one by name.
+eleven kinds that do are there for the consumer that asks for one by
+name.
 What this port is **for** is still worth someone stating, and nothing here
 should be read as having settled it.
 

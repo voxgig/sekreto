@@ -253,7 +253,7 @@ def sorted (values : List String) : List String :=
 
 def PLUGINS : List String := [
   "awsparams", "awssecrets", "azuresecrets", "boru", "doppler", "gcpsecrets",
-  "hashicorp", "infisical", "onepassword", "secretspec"]
+  "hashicorp", "infisical", "minivault", "onepassword", "secretspec"]
 
 def EVERY : List String :=
   sorted (["dotenv", "env", "file", "memory"] ++ PLUGINS)
@@ -281,7 +281,7 @@ def seamEveryKind : IO Fault := do
     plugins := allplugins,
     providers := EVERY.map (fun kind =>
       { kind := kind, addr := "http://127.0.0.1:8200", token := "t",
-        dir := "/tmp", file := "/tmp/.env" }) }
+        dir := "/tmp", file := "/tmp/.env", passphrase := "p" }) }
 
   return firstfault [
     wants "stores" (joined EVERY) (joined (← secrets.stores)),
@@ -289,7 +289,7 @@ def seamEveryKind : IO Fault := do
     wants "instances" (joined (EVERY.map (fun kind => kind ++ "=live"))) (← refs secrets)]
 
 -- THE CONSUMER'S LIST IS THE BLIND SPOT THE CORPUS CANNOT SEE: a CLI that
--- passes one plugin instead of ten leaves all fourteen groups green and
+-- passes one plugin instead of eleven leaves all fourteen groups green and
 -- fails nine integration checks. Matched through the NEXT FIELD, so that
 -- `plugins := allplugins.take 1` cannot satisfy a prefix of it.
 def seamCli : IO Fault := do

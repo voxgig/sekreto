@@ -10,7 +10,7 @@ Usage: build/sekreto-cli <api-url> [--source <source>] [--store <name>]
 
 Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
          gcpsecrets azuresecrets onepassword doppler infisical
-         secretspec chain
+         secretspec minivault chain
 
 Each source's configuration arrives in the environment variables its own
 ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed in
@@ -21,10 +21,10 @@ needs nothing on disk beside itself: the binary is statically linked
 against the library and carries no module path of its own.
 
 IT PASSES THE WHOLE PLUGIN SET, because `--source` can name any of the
-fourteen kinds and the source is a run-time argument. That is the one
+fifteen kinds and the source is a run-time argument. That is the one
 thing about this split the conformance suite cannot see: it hands every
 plugin to every chain it builds, so a CLI passing one plugin instead of
-ten would leave all fourteen groups green and fail nine integration
+eleven would leave all fourteen groups green and fail nine integration
 checks. `test/SekretoTest.lean` pins the call site below instead.
 -/
 
@@ -113,6 +113,13 @@ def chainfor (source : String) : IO (List ProviderSpec) := do
     file := ← getenv "SECRETSPEC_FILE", profile := ← getenv "SECRETSPEC_PROFILE",
     backend := ← getenv "SECRETSPEC_PROVIDER", reason := ← getenv "SECRETSPEC_REASON" }
 
+  -- The mini vault, read-only here: the CLI is an app that needs a
+  -- secret, and writing one is a separate act with its own API.
+  let minivaultspec : ProviderSpec := {
+    kind := "minivault", file := ← getenv "SEKRETO_VAULT_FILE",
+    vaultkey := ← getenv "SEKRETO_VAULT_KEY",
+    passphrase := ← getenv "SEKRETO_VAULT_PASSPHRASE" }
+
   let infisicalspec : ProviderSpec := {
     kind := "infisical", addr := ← getenv "INFISICAL_ADDR",
     token := ← getenv "INFISICAL_TOKEN", clientid := ← getenv "INFISICAL_CLIENT_ID",
@@ -134,6 +141,7 @@ def chainfor (source : String) : IO (List ProviderSpec) := do
   if "doppler" == source then return [dopplerspec]
   if "infisical" == source then return [infisicalspec]
   if "secretspec" == source then return [secretspecspec]
+  if "minivault" == source then return [minivaultspec]
 
   -- The default: the chain an app would actually ship with - local
   -- overrides first, shared vaults last.

@@ -1,8 +1,8 @@
 /-
 THE FULL SET - every plugin this library ships, in one import.
 
-It exists for the callers that genuinely want all ten kinds: the CLI, the
-conformance suite, an app whose chain is decided at run time.
+It exists for the callers that genuinely want all eleven kinds: the
+CLI, the conformance suite, an app whose chain is decided at run time.
 
     import SekretoPlugins
 
@@ -41,6 +41,7 @@ import SekretoPlugins.Azuresecrets
 import SekretoPlugins.Onepassword
 import SekretoPlugins.Doppler
 import SekretoPlugins.Infisical
+import SekretoPlugins.Minivault
 
 namespace Sekreto
 
@@ -52,6 +53,7 @@ handed it share nothing: `Options.plugins` is copied into each chain's
 own catalog. -/
 def allplugins : List Plugin.Definition := [
   hashicorp, boru, awssecrets, awsparams, gcpsecrets,
-  azuresecrets, onepassword, doppler, infisical, secretspec]
+  azuresecrets, onepassword, doppler, infisical, secretspec,
+  minivault]
 
 end Sekreto
