@@ -145,11 +145,11 @@ static const char *refusal(sek_options *opts) {
 
 static const char *KINDS =
     "hashicorp boru awssecrets awsparams gcpsecrets azuresecrets onepassword "
-    "doppler infisical secretspec";
+    "doppler infisical secretspec minivault";
 
 static const char *EVERY =
     "awsparams awssecrets azuresecrets boru doppler dotenv env file gcpsecrets "
-    "hashicorp infisical memory onepassword secretspec";
+    "hashicorp infisical memory minivault onepassword secretspec";
 
 static const char *thefullsetholdseverykind(void) {
   Definition **all;
@@ -215,12 +215,13 @@ static const char *thefullsetholdseverykind(void) {
  * fail to build. Construction is what the CLI does before any network. */
 static const char *everykindbuildsfromaspec(void) {
   static const char *const ALL[] = {
-      "awsparams", "awssecrets", "azuresecrets", "boru",     "doppler",
+      "awsparams", "awssecrets", "azuresecrets", "boru",       "doppler",
       "dotenv",    "env",        "file",         "gcpsecrets", "hashicorp",
-      "infisical", "memory",     "onepassword",  "secretspec", NULL};
+      "infisical", "memory",     "minivault",    "onepassword", "secretspec",
+      NULL};
 
   sek_options *opts = options();
-  sek_spec *chain = (sek_spec *)sek_alloc(POOL, 14 * sizeof(sek_spec));
+  sek_spec *chain = (sek_spec *)sek_alloc(POOL, 15 * sizeof(sek_spec));
   sek_sekreto *secrets = NULL;
   sek_err err;
   size_t index;
@@ -232,10 +233,14 @@ static const char *everykindbuildsfromaspec(void) {
     chain[index].dir = "/tmp";
     chain[index].file = "/tmp/.env";
     chain[index].values = sek_map_new(POOL);
+    /* minivault refuses a chain entry with no passphrase, at
+     * construction. Nothing here reaches a file: every provider is lazy,
+     * and this case only builds the chain. */
+    chain[index].passphrase = "p";
   }
 
   opts->providers = chain;
-  opts->count = 14;
+  opts->count = 15;
   opts->plugincount = sek_allplugins(&opts->plugins);
 
   err = sek_new(POOL, opts, &secrets);
@@ -253,7 +258,7 @@ static const char *everykindbuildsfromaspec(void) {
     const char **refs;
     size_t count = vkeys(list, &refs);
 
-    if (14 != count) {
+    if (15 != count) {
       return sek_fmt(POOL, "host holds %d instances", (int)count);
     }
 
@@ -905,6 +910,8 @@ static sek_err echo_make(sek_pool *pool, const sek_spec *spec, sek_provider **ou
                  sek_orempty(spec->metadataaddr), sek_orempty(spec->apiversion));
   sek_buf_addfmt(&got, "|%s|%s|%s", sek_orempty(spec->config), sek_orempty(spec->environment),
                  sek_orempty(spec->path));
+  sek_buf_addfmt(&got, "|%s|%s|%d|%d", sek_orempty(spec->passphrase), sek_orempty(spec->vaultkey),
+                 spec->iterations, spec->create);
   sek_buf_addfmt(&got, "|%s", NULL == spec->values ? "-" : sek_map_get(spec->values, "K"));
   sek_buf_addfmt(&got, "|%s|%s|%s|%s|%s|%s|%s", NULL == auth ? "-" : sek_orempty(auth->method),
                  NULL == auth ? "-" : sek_orempty(auth->mount),
@@ -967,6 +974,10 @@ static const char *everyspecfieldsurvives(void) {
   ROUNDTRIP.config = "aconfig";
   ROUNDTRIP.environment = "anenvironment";
   ROUNDTRIP.path = "apath";
+  ROUNDTRIP.passphrase = "apassphrase";
+  ROUNDTRIP.vaultkey = "avaultkey";
+  ROUNDTRIP.iterations = 7;
+  ROUNDTRIP.create = 1;
   ROUNDTRIP.values = values1("K", "V");
   ROUNDTRIP.auth = &auth;
 
@@ -989,6 +1000,7 @@ static const char *everyspecfieldsurvives(void) {
               "|aproject|avault|atenant|aclientid|aclientsecret"
               "|aloginaddr|animdsaddr|ametadataaddr|anapiversion"
               "|aconfig|anenvironment|apath"
+              "|apassphrase|avaultkey|7|1"
               "|V"
               "|kubernetes|authmount|therole|thejwt|thejwtfile|theroleid|thesecretid",
               SEEN, "the round trip");
@@ -1089,6 +1101,7 @@ static const char *onepluginneedsonlyitself(void) {
       "sek_plugin_boru",     "sek_plugin_awssecrets",   "sek_plugin_awsparams",
       "sek_plugin_doppler",  "sek_plugin_gcpsecrets",   "sek_plugin_azuresecrets",
       "sek_plugin_onepassword", "sek_plugin_infisical", "sek_plugin_secretspec",
+      "sek_plugin_minivault",
       "sek_sigv4",           "sek_sha256",              "sek_hmac_sha256",
       "sek_sha256hex",       "sek_hex",                 "sek_runcmd",
       NULL};

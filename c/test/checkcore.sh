@@ -32,7 +32,8 @@
 #      happens to need nothing new.
 #   5. Per-plugin links, with their negative controls: a store that signs
 #      nothing must not carry SHA-256, a store that spawns nothing must
-#      not carry the child launcher - and the aws link MUST carry the
+#      not carry the child launcher, the mini vault must carry an AEAD
+#      and reach no network at all - and the aws link MUST carry the
 #      digest, or the first half was measuring nothing.
 #   6. A source grep for the one thing a symbol table cannot see: a core
 #      file that INCLUDES a plugins header. Preprocessor lines are code,
@@ -173,7 +174,8 @@ fork vfork clone posix_spawn posix_spawnp
 execv execve execvp execvpe execl execlp execle popen pclose system
 waitpid wait4 pipe pipe2 dup2 dlopen dlsym
 SSL_new SSL_connect SSL_read SSL_write SSL_CTX_new d2i_X509
-EVP_DigestInit_ex EVP_Digest HMAC SHA256"
+EVP_DigestInit_ex EVP_Digest EVP_EncryptInit_ex EVP_DecryptInit_ex
+HMAC SHA256 PKCS5_PBKDF2_HMAC RAND_bytes"
 
 # ...and the library's own plugin-side surface, by exact name. A core that
 # called any of these would be a core that had a plugin linked into it.
@@ -184,7 +186,8 @@ sek_tls_open sek_tls_read sek_tls_write sek_tls_close sek_tls_available
 sek_allplugins
 sek_plugin_hashicorp sek_plugin_boru sek_plugin_awssecrets sek_plugin_awsparams
 sek_plugin_gcpsecrets sek_plugin_azuresecrets sek_plugin_onepassword
-sek_plugin_doppler sek_plugin_infisical sek_plugin_secretspec"
+sek_plugin_doppler sek_plugin_infisical sek_plugin_secretspec sek_plugin_minivault
+sek_vault_open sek_vault_create sek_vault_get sek_vault_set sek_vaultof"
 
 reached=""
 for name in $PLATFORM $OURS; do
@@ -246,14 +249,31 @@ if has sek_sha256 "$got"; then fail "the secretspec binary carries SHA-256"; fi
 has sek_runcmd "$got" || fail "the secretspec binary has no child launcher - the read is wrong"
 echo "lean: secretspec - a child process, no digest"
 
+# The mini vault is a LOCAL store. It is the only plugin that encrypts
+# anything and the only one that opens nothing, so both halves are worth
+# reading off the link: no socket, no TLS, no child process and none of
+# the in-tree SigV4 digest - and the AEAD, without which the first four
+# would be a binary that does no cryptography at all.
+lean minivault
+got=$(symbols build/lean/minivault)
+for name in socket connect getaddrinfo SSL_connect SSL_new; do
+  if has "$name" "$got"; then fail "the minivault binary reaches the network ($name)"; fi
+done
+if has sek_runcmd "$got"; then fail "the minivault binary carries the child-process launcher"; fi
+if has sek_sha256 "$got"; then fail "the minivault binary carries the in-tree SHA-256"; fi
+if has sek_sigv4 "$got"; then fail "the minivault binary carries SigV4"; fi
+has EVP_EncryptInit_ex "$got" || fail "the minivault binary has no AEAD - the read is wrong"
+has PKCS5_PBKDF2_HMAC "$got" || fail "the minivault binary has no PBKDF2 - the read is wrong"
+echo "lean: minivault - an AEAD and a KDF, no socket, no child process, no SigV4"
+
 # THE NEGATIVE CONTROL for the whole of (5). aws is the one kind that
-# signs, so its binary MUST carry the digest; if it does not, the six
+# signs, so its binary MUST carry the digest; if it does not, the seven
 # checks above were measuring nothing.
 lean awssecrets
 got=$(symbols build/lean/awssecrets)
 has sek_sha256 "$got" || fail "the awssecrets binary has no SHA-256 - the read has no teeth"
 has sek_sigv4 "$got" || fail "the awssecrets binary has no SigV4 - the read has no teeth"
-echo "lean: awssecrets - carries the digest, so the six above mean something"
+echo "lean: awssecrets - carries the digest, so the seven above mean something"
 
 # ---------------------------------------------------------------- (6)
 

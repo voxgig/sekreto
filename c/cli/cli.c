@@ -9,7 +9,7 @@
  *
  * Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
  *          gcpsecrets azuresecrets onepassword doppler infisical
- *          secretspec chain
+ *          secretspec minivault chain
  *
  * Each source's configuration arrives in the environment variables its own
  * ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed in
@@ -85,6 +85,7 @@ static size_t chainfor(sek_pool *pool, const char *source, sek_spec *specs) {
   sek_spec dopplerspec = sek_spec_new("doppler");
   sek_spec infisicalspec = sek_spec_new("infisical");
   sek_spec secretspecspec = sek_spec_new("secretspec");
+  sek_spec minivaultspec = sek_spec_new("minivault");
 
   (void)pool;
 
@@ -171,6 +172,12 @@ static size_t chainfor(sek_pool *pool, const char *source, sek_spec *specs) {
   secretspecspec.backend = env("SECRETSPEC_PROVIDER");
   secretspecspec.reason = env("SECRETSPEC_REASON");
 
+  /* The mini vault, read-only here: the CLI is an app that needs a
+   * secret, and writing one is a separate act with its own API. */
+  minivaultspec.file = env("SEKRETO_VAULT_FILE");
+  minivaultspec.vaultkey = env("SEKRETO_VAULT_KEY");
+  minivaultspec.passphrase = env("SEKRETO_VAULT_PASSPHRASE");
+
   if (0 == strcmp(source, "env")) {
     specs[0] = envspec;
     return 1;
@@ -225,6 +232,10 @@ static size_t chainfor(sek_pool *pool, const char *source, sek_spec *specs) {
   }
   if (0 == strcmp(source, "secretspec")) {
     specs[0] = secretspecspec;
+    return 1;
+  }
+  if (0 == strcmp(source, "minivault")) {
+    specs[0] = minivaultspec;
     return 1;
   }
 

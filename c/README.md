@@ -64,12 +64,13 @@ includes a header under `plugins/` or names a symbol defined there, so
 | `src/json.c` | the JSON value model, parser and writer |
 | `src/util.c` | the arena, the buffer, the ordered map and list, the local-file read |
 | `src/internal.h` | what the library's files share and a consumer never reaches |
-| `plugins/sekretoplugins.h` | the ten definitions, the full set, the transport and SigV4 |
+| `plugins/sekretoplugins.h` | the eleven definitions, the full set, the mini vault's API, the transport and SigV4 |
 | `plugins/support.h` | what the plugins share and the core must never link |
 | `plugins/hashicorp.c` … | one translation unit per kind; `aws.c` carries both AWS kinds |
-| `plugins/all.c` | `sek_allplugins`, and the only object that names all ten |
+| `plugins/all.c` | `sek_allplugins`, and the only object that names all eleven |
 | `plugins/httpjson.c` | sockets, HTTP/1.1 framing, `sek_fetch` |
-| `plugins/tls.c` | the OpenSSL binding, the only file that names it, and the PEM reader |
+| `plugins/tls.c` | the OpenSSL binding for TLS, and the PEM reader |
+| `plugins/minivault.c` | the mini vault: the SKMV format, the key model, and the second and last file that names OpenSSL |
 | `plugins/sha256.c` | SHA-256, HMAC-SHA256, hex — pulled in by `aws.c` and nothing else |
 | `plugins/encode.c` | strict base64 and RFC 3986 escaping, with the transport not the signer |
 | `plugins/sigv4.c` | AWS request signing |
@@ -77,6 +78,7 @@ includes a header under `plugins/` or names a symbol defined there, so
 | `plugins/clock.c` | the deadline clock, token renewal, the SigV4 timestamp |
 | `test/sekretotest.c` | the conformance suite |
 | `test/plugintest.c` | the plugin seam, from both sides |
+| `test/minivaulttest.c` | the mini vault, and the committed files every port reads |
 | `test/checkcore.sh` | the boundary proof: `nm`, the link line, and the controls |
 | `test/tlscheck.sh` | the TLS obligations, proved against a real server |
 | `cli/cli.c` | the app that needs a secret |
@@ -144,14 +146,14 @@ A kind sekreto has never heard of gets no such hint, because that one is
 a typo. Collapsing the two was the first thing that made the split
 confusing to use.
 
-The ten are `hashicorp`, `boru`, `awssecrets`, `awsparams`,
-`gcpsecrets`, `azuresecrets`, `onepassword`, `doppler`, `infisical` and
-`secretspec`; `sek_allplugins` hands back all of them at once, for a
-consumer that genuinely wants all ten — the CLI, the conformance suite,
-an app whose chain is decided at run time. **It is also the object to
-avoid if size matters**: naming it pulls every plugin, every HTTP client,
-the TLS binding, the child-process launcher and AWS request signing into
-the link.
+The eleven are `hashicorp`, `boru`, `awssecrets`, `awsparams`,
+`gcpsecrets`, `azuresecrets`, `onepassword`, `doppler`, `infisical`,
+`secretspec` and `minivault`; `sek_allplugins` hands back all of them at
+once, for a consumer that genuinely wants all eleven — the CLI, the
+conformance suite, an app whose chain is decided at run time. **It is
+also the object to avoid if size matters**: naming it pulls every plugin,
+every HTTP client, the TLS binding, the child-process launcher, an AEAD
+and AWS request signing into the link.
 
 A custom kind is one call. `sek_providerplugin(slot, kind, make)` fills a
 `sek_providerkind` the caller owns and answers the definition to pass:
@@ -222,6 +224,74 @@ written out **inline** in a core file is arithmetic with no external
 symbol, so neither `nm` nor any grep would see it. The rule is that the
 core does not *import* a hash function, and inline arithmetic does not
 violate it.
+
+## The mini vault
+
+`plugins/minivault.c` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the
+port's worked example of a definition publishing an API beside its
+provider.
+
+```c
+sek_vaultoptions options = {0};
+sek_minivault *vault = NULL;
+sek_vaultgrant grant = {0};
+
+options.file = "app.skmv";
+options.passphrase = master;
+sek_vault_create(pool, &options, &vault);
+sek_vault_set(vault, "api.token", "tok01");
+
+grant.key = "ci";
+grant.passphrase = ci;
+grant.names = sek_list_new(pool);
+sek_list_add(grant.names, "api.token");
+sek_vault_grant(vault, &grant);
+
+/* ...and the same file, read by a chain. */
+sek_spec chain[1];
+chain[0] = sek_spec_new("minivault");
+chain[0].file = "app.skmv";
+chain[0].vaultkey = "ci";
+chain[0].passphrase = ci;
+
+sek_vaultof(pool, secrets, NULL, &vault);   /* the API behind the store */
+sek_vault_list(vault, &names);              /* api.token — as `ci` sees it */
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `sek_vaultof` reads it
+back off `sek_host`. Both exports are numbers, because voxgig/plugin's
+values are numbers and strings and neither a provider nor a vault is
+data: `provider` is an index into the core's construction slot and
+`vault` an index into `minivault.c`'s own list.
+
+`sek_minivault` is **opaque**, and `sek_vault_info` answers a copy, which
+is how this port answers the defect the review round found in the
+canonical: a caller handed the live permission record could flip its own
+`write` bit. Here there is nothing to flip.
+
+**This is the second file in the library that names OpenSSL, and the
+last.** `tls.c` is the first. AGENTS.md used to confine the dependency
+exception to cryptographic *transport*, which is why `sha256.c` writes
+SHA-256 and HMAC-SHA256 out by hand beside a linked libcrypto that has
+both; the rule now covers cryptography, because a block cipher protecting
+secrets **at rest** has properties no known-answer vector can check.
+`make check-tls` reads the archives and fails if any third object reaches
+for it, and `make check-core` reads the link: a binary that names only
+this plugin carries an AEAD and a KDF, and **no socket, no TLS, no child
+process and no SigV4 digest** — the mini vault is the one store that
+opens nothing.
+
+Ports carrying this kind read each other's files, which
+`test/minivaulttest.c` checks against every committed vault in
+`test/fixture/`, including the one this port wrote:
+
+```sh
+make vaulttest                       # all of it
+./build/minivaulttest restricted     # one case
+```
 
 ## Testing
 
