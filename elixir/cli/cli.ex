@@ -9,7 +9,7 @@
 #
 # Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 #          gcpsecrets azuresecrets onepassword doppler infisical
-#          secretspec chain
+#          secretspec minivault chain
 #
 # Each source's configuration arrives in the environment variables its own
 # ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed in
@@ -17,7 +17,7 @@
 #
 # THE FULL SET, PASSED TO Sekreto. The CLI is asked for any provider kind
 # on the command line, so it is the one consumer that legitimately wants
-# all ten plugins; an app passes the one or two it configures. Nothing in
+# all eleven plugins; an app passes the one or two it configures. Nothing in
 # the conformance suite can see this call - it hands every plugin to every
 # chain it builds - so test/plugins_test.exs pins it.
 
@@ -148,6 +148,15 @@ defmodule Sekreto.Cli do
       reason: env("SECRETSPEC_REASON")
     }
 
+    # The mini vault, read-only here: the CLI is an app that needs a
+    # secret, and writing one is a separate act with its own API.
+    minivaultspec = %ProviderSpec{
+      kind: "minivault",
+      file: envor("SEKRETO_VAULT_FILE", ""),
+      vaultkey: envor("SEKRETO_VAULT_KEY", ""),
+      passphrase: envor("SEKRETO_VAULT_PASSPHRASE", "")
+    }
+
     infisicalspec = %ProviderSpec{
       kind: "infisical",
       addr: env("INFISICAL_ADDR"),
@@ -174,6 +183,7 @@ defmodule Sekreto.Cli do
       "doppler" -> [dopplerspec]
       "infisical" -> [infisicalspec]
       "secretspec" -> [secretspecspec]
+      "minivault" -> [minivaultspec]
       # The default: the chain an app would actually ship with - local
       # overrides first, shared vaults last.
       _other -> [envspec, dotenvspec, hashicorpspec, boruspec]

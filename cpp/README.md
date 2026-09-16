@@ -31,12 +31,13 @@ Every ordered map is a `std::vector<std::pair<...>>` rather than a
 `std::map`, which orders by key: the shared spec compares whole maps, and a
 signed AWS payload's field order is part of what was signed.
 
-## Four kinds are built in; the other ten are plugins
+## Four kinds are built in; the other eleven are plugins
 
 `env`, `memory`, `dotenv` and `file` read at most a local file, so they are
 in the core and a chain of them needs nothing else. Everything that opens a
-socket, signs a request or spawns a process — the vault clients, the cloud
-stores, the two CLIs, and SigV4 with them — is a voxgig/plugin definition
+socket, signs a request, spawns a process, or does cryptography — the vault
+clients, the cloud stores, the two CLIs, the mini vault, and SigV4 with
+them — is a voxgig/plugin definition
 under `plugins/`, and a `Sekreto` can build only the kinds its constructor
 was handed:
 
@@ -52,7 +53,7 @@ no request signing, no OpenSSL. `make check-core` proves it by building
 exactly that program without `-lssl -lcrypto`, and by reading the core
 archive's own undefined-symbol list for a socket, a child process, or a TLS
 call. `plugins/All.hpp` is the full set, for the consumer that genuinely
-wants all ten: the CLI, whose `--source` names any of them at run time.
+wants all eleven: the CLI, whose `--source` names any of them at run time.
 
 ## Layout
 
@@ -63,14 +64,16 @@ wants all ten: the CLI, whose `--source` names any of them at run time.
 | `src/Providers.cpp` | the four built-in kinds, `checkaddr`, the file read |
 | `src/Json.cpp` | the JSON value model, parser and writer |
 | `plugins/<Kind>.cpp` | one file per plugin kind, one definition each |
-| `plugins/All.cpp` | the full set, for a consumer that wants all ten |
+| `plugins/All.cpp` | the full set, for a consumer that wants all eleven |
 | `plugins/Httpjson.cpp` | HTTP/1.1 over a POSIX socket, percent-encoding, base64 |
-| `plugins/Tls.cpp` | the OpenSSL binding, and the only file that names it |
+| `plugins/Tls.cpp` | the OpenSSL binding for TLS |
+| `plugins/Minivault.cpp` | the mini vault: the SKMV format, the key model, and the second and last file that names OpenSSL |
 | `plugins/Sigv4.cpp` | AWS request signing |
 | `plugins/Crypto.cpp` | SHA-256, HMAC-SHA256 and hex — reached only by the signer |
 | `plugins/Proc.cpp` | the child process the two CLI kinds run |
 | `test/SekretoTest.cpp` | the conformance suite |
 | `test/PluginTest.cpp` | the plugin seam, from both sides |
+| `test/MinivaultTest.cpp` | the mini vault, and the committed files every port reads |
 | `test/TlsTest.cpp` | the certificate checks no other suite reaches |
 | `test/CoreOnly.cpp` | a consumer of the core alone, linked without OpenSSL |
 | `cli/Cli.cpp` | the app that needs a secret |
@@ -106,6 +109,74 @@ empty" mean the same thing everywhere in this library.
 for a provider of your own; `providerplugin(kind, make)` makes one a `kind`
 a spec can name, which is the same call every built-in and every shipped
 plugin is made with.
+
+## The mini vault
+
+`plugins/Minivault.cpp` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the
+port's worked example of a definition publishing an API beside its
+provider.
+
+```cpp
+#include "Minivault.hpp"
+
+sekreto::VaultOptions options;
+options.file = "app.skmv";
+options.passphrase = master;
+
+auto vault = sekreto::createvault(options);
+vault->set("api.token", "tok01");
+
+sekreto::GrantSpec grant;
+grant.key = "ci";
+grant.passphrase = ci;
+grant.names = {"api.token"};
+vault->grant(grant);
+
+// ...and the same file, read by a chain.
+sekreto::ProviderSpec spec;
+spec.kind = "minivault";
+spec.file = "app.skmv";
+spec.vaultkey = "ci";
+spec.passphrase = ci;
+
+secrets.get("api.token");              // the chain reads
+sekreto::vaultof(secrets)->list();     // {"api.token"} — as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `secrets.host()`. Both exports are numbers, because voxgig/plugin's
+values are numbers, strings, lists and maps — not pointers. `provider` is
+the same ticket every kind parks, claimed once; `vault` is a ticket into
+this file's own table, which holds **weak** pointers and is not emptied,
+so a chain that has been destroyed leaves an expired ticket and `vaultof`
+refuses rather than handing back a dangling handle.
+
+`VaultKeyInfo` keeps its fields private and hands them back through
+`const` member functions, which is how this port answers the defect the review round found in the canonical: a caller
+handed the live permission record could flip its own `write` bit. Here
+that does not compile.
+
+**This is the second file in the port that includes `<openssl/>`, and the
+last.** `Tls.cpp` is the first. The dependency rule used to confine the
+exception to cryptographic *transport*, which is why `Crypto.cpp` writes
+SHA-256 and HMAC-SHA256 out by hand beside a linked OpenSSL that has both;
+the rule now covers cryptography, because a block cipher protecting
+secrets **at rest** has properties no known-answer vector can check.
+`make lean` reads the link and says what follows: a binary that names only
+this plugin carries an AEAD and **no socket, no TLS, no child process and
+no SigV4 digest** — the mini vault is the one store that opens nothing.
+
+Ports carrying this kind read each other's files, which
+`test/MinivaultTest.cpp` checks against every committed vault in
+`test/fixture/`, including the one this port wrote:
+
+```sh
+make vaulttest                             # all of it
+./build/sekreto-minivaulttest restricted   # one case
+```
 
 ## Testing
 

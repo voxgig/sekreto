@@ -132,7 +132,11 @@ everykindbuildsfromaspec = do
               specaddr = "http://127.0.0.1:8200",
               spectoken = "t",
               specdir = "/tmp",
-              specfile = "/tmp/.env"
+              specfile = "/tmp/.env",
+              -- minivault refuses a chain entry with no passphrase, at
+              -- construction. Nothing here reaches a file: every provider
+              -- is lazy, and this case only builds the chain.
+              specpassphrase = "p"
             }
           | kind <- every
         ]
@@ -144,7 +148,7 @@ everykindbuildsfromaspec = do
   same "every instance live" ["live"] =<< statuses secrets
 
 -- THE CONSUMER'S LIST is what no conformance run can see: a CLI passing
--- one plugin instead of ten leaves all fourteen groups green and fails
+-- one plugin instead of eleven leaves all fourteen groups green and fails
 -- nine integration checks. The whole expression is pinned, closing brace
 -- included, so that `take 1 allplugins` cannot satisfy it.
 theclipassesthefullset :: IO ()

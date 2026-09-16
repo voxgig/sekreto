@@ -119,6 +119,17 @@ type spec = {
   (* infisical: the environment slug and secret path. *)
   environment : string;
   secretpath : string;
+  (* minivault: the passphrase that unwraps `vaultkey`. *)
+  passphrase : string;
+  (* minivault: which key in the vault file to open with, defaulting to
+     `master`. Named apart from `keyid` because that already means an AWS
+     access key id. *)
+  vaultkey : string;
+  (* minivault: PBKDF2 rounds, used only when a key is created. Zero means
+     unset, so the library's own default still applies. *)
+  iterations : int;
+  (* minivault: make the vault file if it is not there. *)
+  create : bool;
 }
 
 let nospec =
@@ -157,6 +168,10 @@ let nospec =
     config = "";
     environment = "";
     secretpath = "";
+    passphrase = "";
+    vaultkey = "";
+    iterations = 0;
+    create = false;
   }
 
 (* Printed without its credentials. See authtostring: the obvious printer
@@ -501,6 +516,13 @@ let optionsof (spec : spec) : V.t =
   text "config" spec.config;
   text "environment" spec.environment;
   text "path" spec.secretpath;
+  text "passphrase" spec.passphrase;
+  text "vaultkey" spec.vaultkey;
+
+  (* Written only when set, like every string above: zero and false are
+     what "not configured" means for these two. *)
+  if 0 <> spec.iterations then V.set out "iterations" (V.vnum (float_of_int spec.iterations));
+  if spec.create then V.set out "create" (V.vbool true);
   out
 
 (* A non-string reads as the empty string, because "not configured" and
@@ -569,6 +591,14 @@ let specof (options : V.t) : spec =
     config = text "config";
     environment = text "environment";
     secretpath = text "path";
+    passphrase = text "passphrase";
+    vaultkey = text "vaultkey";
+    iterations =
+      (match V.get options "iterations" with
+      | held when V.is_num held -> int_of_float (V.as_num held)
+      | _ -> 0);
+    create =
+      (match V.get options "create" with held when V.is_bool held -> V.as_bool held | _ -> false);
   }
 
 (* A provider kind, as a voxgig/plugin definition.
@@ -641,4 +671,4 @@ let builtinkinds = [ "env"; "memory"; "dotenv"; "file" ]
 
 let pluginkinds =
   [ "hashicorp"; "boru"; "awssecrets"; "awsparams"; "gcpsecrets"; "azuresecrets"; "onepassword";
-    "doppler"; "infisical"; "secretspec" ]
+    "doppler"; "infisical"; "secretspec"; "minivault" ]

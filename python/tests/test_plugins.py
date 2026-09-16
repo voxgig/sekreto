@@ -26,7 +26,7 @@ from voxgig_sekreto.plugins.hashicorp import hashicorp  # noqa: E402
 
 PLUGINS = [
     'awsparams', 'awssecrets', 'azuresecrets', 'boru', 'doppler', 'gcpsecrets',
-    'hashicorp', 'infisical', 'onepassword', 'secretspec',
+    'hashicorp', 'infisical', 'minivault', 'onepassword', 'secretspec',
 ]
 
 EVERY = sorted(['dotenv', 'env', 'file', 'memory'] + PLUGINS)
@@ -50,6 +50,7 @@ class TestPlugins(unittest.TestCase):
         chain = [{
             'kind': kind, 'addr': 'http://127.0.0.1:8200', 'token': 't',
             'dir': '/tmp', 'file': '/tmp/.env', 'values': {},
+            'passphrase': 'p',
         } for kind in EVERY]
 
         secrets = Sekreto({'plugins': ALL, 'providers': chain})
@@ -195,9 +196,8 @@ class TestPlugins(unittest.TestCase):
 
     # What an import pulls in, checked in a fresh interpreter because this
     # one has imported everything (above) on purpose.
-    def fresh(self, code):
-        code = ("import sys; " + code + "; "
-                "print(sorted(m for m in sys.modules if m.startswith('voxgig_sekreto')))")
+    def fresh(self, code, report="sorted(m for m in sys.modules if m.startswith('voxgig_sekreto'))"):
+        code = "import sys; " + code + "; print(" + report + ")"
         path = os.pathsep.join([os.path.join(HERE, '..'), os.path.join(pluginhome(), 'python')])
         return subprocess.run(
             [sys.executable, '-c', code], capture_output=True, text=True, check=True,
@@ -213,7 +213,7 @@ class TestPlugins(unittest.TestCase):
             "['voxgig_sekreto', 'voxgig_sekreto.addr', 'voxgig_sekreto.providers', 'voxgig_sekreto.sekreto']")
 
     # ...and one plugin imports only itself. The package initializer used
-    # to import all ten so it could re-export them, which made the
+    # to import all eleven so it could re-export them, which made the
     # single-plugin import execute it first and load every network client
     # behind it - the whole set, for a consumer that named exactly one.
     def test_one_plugin_imports_only_itself(self):
@@ -229,8 +229,23 @@ class TestPlugins(unittest.TestCase):
         self.assertNotIn('plugins.hashicorp', before)
         after = self.fresh("from voxgig_sekreto.plugins import ALL")
         for name in ['hashicorp', 'boru', 'aws', 'gcpsecrets', 'azuresecrets',
-                     'onepassword', 'doppler', 'infisical', 'secretspec', 'sigv4', 'httpjson']:
+                     'onepassword', 'doppler', 'infisical', 'secretspec', 'minivault',
+                     'sigv4', 'httpjson']:
             self.assertIn("'voxgig_sekreto.plugins." + name + "'", after)
+
+    # The mini vault reaches AES-256-GCM through ctypes, in the libcrypto
+    # `import ssl` has already loaded - and it does that at the FIRST SEAL,
+    # never at import. A consumer that names the kind and configures none
+    # pays nothing for the binding, and a python that cannot reach a
+    # libcrypto still imports the module and refuses only when a vault is
+    # actually opened.
+    def test_the_mini_vault_loads_no_crypto_until_it_seals(self):
+        imported = "from voxgig_sekreto.plugins import minivault as mv"
+        self.assertIn("'voxgig_sekreto.plugins.minivault'", self.fresh(imported))
+
+        self.assertEqual('False', self.fresh(imported, "'ssl' in sys.modules"))
+        self.assertEqual('True', self.fresh(
+            imported + "; mv._seal(b'k' * 32, b'v', 'aad')", "'ssl' in sys.modules"))
 
     # `from voxgig_sekreto.plugins import hashicorp` is the MODULE, and a
     # module is refused by name, saying what to import instead.

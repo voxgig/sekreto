@@ -56,7 +56,7 @@ INCLUDES = -I src -I plugins -I $(PLUGIN)/c/src
 # THE CORE LINKS NEITHER. A consumer whose chain is `env` and `dotenv`
 # needs libc and nothing else; only a binary that links a plugin needs
 # these, which is what the split is for.
-LDLIBS = -lssl -lcrypto
+LDLIBS = -lssl -lcrypto -lpthread
 
 # THREE ARCHIVES, AND THE MIDDLE ONE IS THE BOUNDARY.
 #
@@ -64,10 +64,11 @@ LDLIBS = -lssl -lcrypto
 #   libsekreto.a       src/*.c               the core: the chain, the cache,
 #                                            redaction, checkaddr and the
 #                                            four built-in kinds
-#   libsekretoplugins.a plugins/*.c          the ten kinds that open a
-#                                            socket, sign a request or spawn
-#                                            a process, and the transport,
-#                                            TLS, digest and clock under them
+#   libsekretoplugins.a plugins/*.c          the eleven kinds that open a
+#                                            socket, sign a request, spawn a
+#                                            process or do cryptography, and
+#                                            the transport, TLS, digest and
+#                                            clock under them
 #
 # C has no module system, so the boundary is made out of translation units,
 # archives and the link line. Nothing under src/ includes a header under
@@ -83,7 +84,7 @@ PLUGINSRC = plugins/encode.c plugins/sha256.c plugins/sigv4.c plugins/clock.c \
             plugins/hashicorp.c plugins/boru.c plugins/aws.c \
             plugins/gcpsecrets.c plugins/azuresecrets.c plugins/onepassword.c \
             plugins/doppler.c plugins/infisical.c plugins/secretspec.c \
-            plugins/all.c
+            plugins/minivault.c plugins/all.c
 PLUGINOBJ = $(PLUGINSRC:plugins/%.c=build/pobj/%.o)
 
 VOXGIGSRC = $(wildcard $(PLUGIN)/c/src/*.c)
@@ -169,22 +170,25 @@ check-core: build
 	@SEKRETO_CC="$(CC)" SEKRETO_CFLAGS="$(CFLAGS) $(INCLUDES)" SEKRETO_LDLIBS="$(LDLIBS)" \
 	  ./test/checkcore.sh
 
-# OpenSSL is named in exactly one translation unit. A future edit that
-# reached for SSL_* or an OpenSSL digest from anywhere else - which is how
-# the hand-rolled crypto would quietly be replaced by libcrypto's - fails
-# here rather than in review. The core is checked as well as the plugins,
+# OpenSSL is named in exactly two translation units, and the gate says
+# which: `tls.c`, the TLS binding, and `minivault.c`, which needs
+# AES-256-GCM to protect secrets at rest. A future edit that reached for
+# SSL_* or an OpenSSL digest from anywhere else - which is how the
+# hand-rolled SigV4 primitives in `sha256.c` would quietly be replaced by
+# libcrypto's, against what AGENTS.md says stays in-tree - fails here
+# rather than in review. The core is checked as well as the plugins,
 # where it can only ever come out empty, because an archive that grew an
 # OpenSSL edge is exactly what this is for.
 check-tls: build
 	@stray=$$(nm -o --undefined-only build/libsekretoplugins.a build/libsekreto.a \
-	  | grep -E ' (SSL_|OPENSSL_|X509_|ERR_|EVP_|HMAC|d2i_)' \
-	  | grep -v ':tls\.o:' || true); \
+	  | grep -E ' (SSL_|OPENSSL_|X509_|ERR_|EVP_|HMAC|PKCS5_|RAND_|d2i_)' \
+	  | grep -v -e ':tls\.o:' -e ':minivault\.o:' || true); \
 	if [ -n "$$stray" ]; then \
-	  echo "sekreto: OpenSSL reached from outside plugins/tls.c:" >&2; \
+	  echo "sekreto: OpenSSL reached from outside plugins/tls.c and plugins/minivault.c:" >&2; \
 	  echo "$$stray" >&2; \
 	  exit 1; \
 	fi; \
-	echo "check-tls: OpenSSL confined to plugins/tls.c"
+	echo "check-tls: OpenSSL confined to plugins/tls.c and plugins/minivault.c"
 
 # The suite compiles against the archives `build` just made, so the library
 # is compiled once however many times the tests are run. omni appears here
@@ -205,9 +209,15 @@ test: build check-core check-tls
 	$(MAKE) seam
 
 # The plugin seam, from both sides: what the conformance suite cannot see.
-seam: build
+seam: build vaulttest
 	$(CC) $(CFLAGS) $(INCLUDES) -o build/sekretoseam test/plugintest.c $(LIBS) $(LDLIBS)
 	SEKRETO_CC="$(CC)" SEKRETO_CFLAGS="$(CFLAGS) $(INCLUDES)" ./build/sekretoseam $(CASE)
+
+# The mini vault, which the shared spec cannot carry until every port
+# ships the kind, and the committed files every port reads.
+vaulttest: build
+	$(CC) $(CFLAGS) $(INCLUDES) -o build/minivaulttest test/minivaulttest.c $(LIBS) $(LDLIBS)
+	./build/minivaulttest $(CASE)
 
 # The TLS gate. `make test` runs spec/sekreto.json and NO CASE IN THAT
 # SPEC OPENS A SOCKET, so a port with no verification - or no networking

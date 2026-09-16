@@ -11,10 +11,10 @@
 // plugin to every chain it builds, so it can never see a missing one.
 //
 // One thing the conformance suite CAN see is a kind missing from the full
-// set: `sources` and `stores` name all ten, so dropping one fails there
+// set: `sources` and `stores` name all eleven, so dropping one fails there
 // too. The seam test for it is still worth having - it fails faster and
 // names the kind - but it is not covering a blind spot. What genuinely is
-// one is the CONSUMER's list: a CLI passing one plugin instead of ten
+// one is the CONSUMER's list: a CLI passing one plugin instead of eleven
 // leaves all fourteen conformance groups green and fails nine integration
 // checks.
 //
@@ -55,8 +55,9 @@ using sekreto::SekretoError;
 using sekreto::SekretoOptions;
 
 const std::vector<std::string> PLUGINKINDS = {
-    "awsparams", "awssecrets", "azuresecrets", "boru",       "doppler",
-    "gcpsecrets", "hashicorp", "infisical",    "onepassword", "secretspec",
+    "awsparams",  "awssecrets", "azuresecrets", "boru",        "doppler",
+    "gcpsecrets", "hashicorp",  "infisical",    "minivault",   "onepassword",
+    "secretspec",
 };
 
 const std::vector<std::string> BUILTINKINDS = {"dotenv", "env", "file", "memory"};
@@ -248,6 +249,10 @@ void everykindbuildsfromaspec() {
     spec.token = "t";
     spec.dir = "/tmp";
     spec.file = "/tmp/.env";
+    // minivault refuses a chain entry with no passphrase, at
+    // construction. Nothing here reaches a file: every provider is lazy,
+    // and this case only builds the chain.
+    spec.passphrase = "p";
     chain.push_back(spec);
   }
 
@@ -517,8 +522,8 @@ void thefullsetisbuiltondemand() {
   std::vector<Definition> first = sekreto::allplugins();
   std::vector<Definition> second = sekreto::allplugins();
 
-  same(first.size(), size_t(10), "allplugins");
-  same(second.size(), size_t(10), "allplugins again");
+  same(first.size(), size_t(11), "allplugins");
+  same(second.size(), size_t(11), "allplugins again");
 
   for (size_t index = 0; index < first.size(); index++) {
     truth(first[index] != second[index], "two calls share a definition");
@@ -527,8 +532,9 @@ void thefullsetisbuiltondemand() {
   // ...and each kind is its own header, which is what makes "include one" a
   // thing a consumer can actually do.
   const std::vector<std::string> headers = {
-      "Hashicorp", "Boru",      "Aws",   "Gcpsecrets", "Azuresecrets", "Onepassword",
-      "Doppler",   "Infisical", "Secretspec", "Httpjson", "Sigv4", "Crypto", "Proc", "Tls"};
+      "Hashicorp", "Boru",      "Aws",        "Gcpsecrets", "Azuresecrets", "Onepassword",
+      "Doppler",   "Infisical", "Secretspec", "Minivault",  "Httpjson",     "Sigv4",
+      "Crypto",    "Proc",      "Tls"};
 
   for (const std::string& file : headers) {
     truth(exists(HERE + "/plugins/" + file + ".hpp"), "no plugins/" + file + ".hpp");

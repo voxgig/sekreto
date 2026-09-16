@@ -33,7 +33,7 @@ use Voxgig::Sekreto::Plugins::Hashicorp qw(hashicorp);
 
 my @PLUGINS = sort qw(
   awsparams awssecrets azuresecrets boru doppler gcpsecrets
-  hashicorp infisical onepassword secretspec
+  hashicorp infisical minivault onepassword secretspec
 );
 
 my @BUILTIN = qw(env memory dotenv file);
@@ -89,12 +89,13 @@ subtest 'every kind builds from a spec' => sub {
             providers => [
                 map {
                     {
-                        kind   => $_,
-                        addr   => 'http://127.0.0.1:8200',
-                        token  => 't',
-                        dir    => '/tmp',
-                        file   => '/tmp/.env',
-                        values => {},
+                        kind       => $_,
+                        addr       => 'http://127.0.0.1:8200',
+                        token      => 't',
+                        dir        => '/tmp',
+                        file       => '/tmp/.env',
+                        passphrase => 'p',
+                        values     => {},
                     }
                 } @EVERY
             ],

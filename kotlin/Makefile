@@ -40,7 +40,7 @@ STDLIB = $(shell dirname $$(readlink -f $$(command -v $(KOTLINC))))/../lib/kotli
 #
 #   sekreto.jar          the core: the chain, the cache, redaction, the
 #                        four built-in kinds. Nothing else.
-#   sekreto-plugins.jar  the ten plugin kinds, with sigv4 and the shared
+#   sekreto-plugins.jar  the eleven plugin kinds, with sigv4 and the shared
 #                        HTTP-JSON transport. Compiled AGAINST the core.
 #   sekreto-cli.jar      the CLI, self-contained, because test/checks.sh
 #                        runs it as `java -cp <one jar> sekreto.Cli`.
@@ -116,6 +116,9 @@ seam: build check-core
 	mkdir -p build/seam
 	$(KOTLINC) -cp $(VOXPLUGIN):$(CORE):$(PLUGINS) test/PluginsTest.kt -d build/seam
 	java -cp build/seam:$(VOXPLUGIN):$(CORE):$(PLUGINS):$(STDLIB) PluginsTest
+	mkdir -p build/mv
+	$(KOTLINC) -cp $(VOXPLUGIN):$(CORE):$(PLUGINS) test/MinivaultTest.kt -d build/mv
+	java -cp build/mv:$(VOXPLUGIN):$(CORE):$(PLUGINS):$(STDLIB) MinivaultTestKt
 
 # THE CORE DOES NOT REACH A PLUGIN, proved of the artifact and not of the
 # source. test/CoreOnly.kt is compiled and run against a classpath that

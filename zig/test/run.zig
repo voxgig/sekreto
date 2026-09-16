@@ -547,8 +547,9 @@ fn seamStoreNames() !?[]const u8 {
 }
 
 const PLUGIN_KINDS = [_][]const u8{
-    "awsparams",  "awssecrets", "azuresecrets", "boru",        "doppler",
-    "gcpsecrets", "hashicorp",  "infisical",    "onepassword", "secretspec",
+    "awsparams",  "awssecrets", "azuresecrets", "boru",      "doppler",
+    "gcpsecrets", "hashicorp",  "infisical",    "minivault", "onepassword",
+    "secretspec",
 };
 
 fn lessStr(_: void, a: []const u8, b: []const u8) bool {
@@ -574,8 +575,8 @@ fn seamFullSet() !?[]const u8 {
     try kinds.appendSlice(ALLOC, &sekreto.KINDS.plugin);
     std.mem.sort([]const u8, kinds.items, {}, lessStr);
     const all = try joined(kinds.items);
-    const fourteen = "awsparams awssecrets azuresecrets boru doppler dotenv env file gcpsecrets hashicorp infisical memory onepassword secretspec";
-    if (!std.mem.eql(u8, fourteen, all)) return try mismatch("KINDS", fourteen, all);
+    const fifteen = "awsparams awssecrets azuresecrets boru doppler dotenv env file gcpsecrets hashicorp infisical memory minivault onepassword secretspec";
+    if (!std.mem.eql(u8, fifteen, all)) return try mismatch("KINDS", fifteen, all);
 
     var chain: std.ArrayList(ProviderSpec) = .empty;
     for (kinds.items) |kind| {
@@ -585,6 +586,10 @@ fn seamFullSet() !?[]const u8 {
             .token = "t",
             .dir = "/tmp",
             .file = "/tmp/.env",
+            // minivault refuses a chain entry with no passphrase, at
+            // construction. Nothing here reads a file: every provider is
+            // lazy, and this test only builds the chain.
+            .passphrase = "p",
         });
     }
 

@@ -2,6 +2,9 @@
  * transport, the TLS seam, the SHA-256 primitives SigV4 is built from,
  * the two encoders, a child process and a clock.
  *
+ * Not the mini vault: it shares nothing, so its own API is published in
+ * `sekretoplugins.h` where a consumer can reach it.
+ *
  * ONE TRANSLATION UNIT PER CAPABILITY, and that is a link-time decision
  * rather than a filing preference. A static archive is pulled in an
  * object at a time, so a plugin that signs nothing must not sit in the
@@ -27,12 +30,13 @@
 
 /* FIPS 180-4 SHA-256 and RFC 2104 HMAC-SHA256, hand-rolled.
  *
- * Hand-rolled even though this port links libcrypto, and that is the
- * rule, not an oversight: the TLS exception covers cryptographic
- * TRANSPORT and nothing else. Rust is the worked precedent - `ring` is
- * already inside rustls's dependency closure and rust/src/crypto.rs still
- * carries both primitives. Both are proved by the SigV4 known-answer
- * vectors: a signature is a chain of these, so one wrong bit fails there.
+ * Hand-rolled even though this port links libcrypto. AGENTS.md's
+ * dependency exception now covers cryptography rather than only
+ * cryptographic TRANSPORT - `minivault.c` takes its AES-256-GCM from
+ * libcrypto for exactly that reason - and says these two stay where they
+ * are regardless: they work, and they are proved by the SigV4
+ * known-answer vectors, because a signature is a chain of these and one
+ * wrong bit fails there.
  *
  * `sha256.c` and nothing else. The aws plugin is the only thing in the
  * library that names these, and a link of any other plugin must not pull

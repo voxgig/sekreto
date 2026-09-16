@@ -9,7 +9,7 @@
 //
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 //          gcpsecrets azuresecrets onepassword doppler infisical
-//          secretspec chain
+//          secretspec minivault chain
 //
 // Each source's configuration arrives in the environment variables its own
 // ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed in
@@ -163,6 +163,14 @@ std::vector<ProviderSpec> chainfor(const std::string& source) {
   secretspecspec.backend = envvar("SECRETSPEC_PROVIDER");
   secretspecspec.reason = envvar("SECRETSPEC_REASON");
 
+  // The mini vault, read-only here: the CLI is an app that needs a
+  // secret, and writing one is a separate act with its own API.
+  ProviderSpec minivaultspec;
+  minivaultspec.kind = "minivault";
+  minivaultspec.file = envvar("SEKRETO_VAULT_FILE");
+  minivaultspec.vaultkey = envvar("SEKRETO_VAULT_KEY");
+  minivaultspec.passphrase = envvar("SEKRETO_VAULT_PASSPHRASE");
+
   if ("env" == source) return {envspec};
   if ("dotenv" == source) return {dotenvspec};
   if ("file" == source) return {filespec};
@@ -177,6 +185,7 @@ std::vector<ProviderSpec> chainfor(const std::string& source) {
   if ("doppler" == source) return {dopplerspec};
   if ("infisical" == source) return {infisicalspec};
   if ("secretspec" == source) return {secretspecspec};
+  if ("minivault" == source) return {minivaultspec};
 
   // The default: the chain an app would actually ship with - local
   // overrides first, shared vaults last.

@@ -267,11 +267,12 @@ hands to `Sekreto` at construction.
 | `minivault` | `minivault` | AES-256-GCM, PBKDF2-HMAC-SHA256 | `…/plugins/minivault` → `minivault` |
 | *the full set* | every kind the port ships | everything | `@voxgig/sekreto/plugins` → `allplugins` |
 
-`minivault` ships in typescript and go so far; the other nine are in all
-twenty-three ports. A `minivault` case cannot join the shared spec until
-the last port has the kind, so the two that carry it pin the on-disk
-format against each other instead, through a vault file committed under
-`test/fixture/` that each of them reads.
+`minivault` ships in twenty-one ports so far — dart and swift are still
+to come; the other ten kinds are in all twenty-three.
+A `minivault` case cannot join the shared spec until the last port has
+the kind, so the ports that carry it pin the on-disk format against each
+other instead: each writes a vault file under `test/fixture/`, and every
+one of them reads all of those files.
 
 The full set is for the CLI, the conformance suite, and an app whose
 chain is decided at run time. Reaching one plugin through it reaches
@@ -907,11 +908,30 @@ mode.
 
 **Writes are serialized within one process** — every handle on one file
 shares a lock, so two of them cannot each read a snapshot and then
-overwrite the other. Across processes they are not. A reader is always
-handed one whole vault, because a new one is created under `O_EXCL` and
-an update lands by atomic rename, but two processes writing at once can
-still lose an update. A vault is a single-writer store, and a deployment
-that needs more than that wants a vault server.
+overwrite the other. The lock is keyed by the file's absolute path, so
+two handles spelling one vault differently still meet, and it is held
+across the whole read-modify-write of `set`, `remove`, `grant`, `revoke`
+and `rotate`.
+
+Where the language offers concurrent access to one handle, the port
+arranges that itself: a table of locks in go, python, rust, java, kotlin,
+scala, clojure, csharp, ruby, cpp, haskell, lean, zig and c, and
+`:global.trans` in elixir, whose unit is a process rather than a thread.
+Python's GIL does not stand in for that table: it is released around
+every file read and write, which is exactly where two handles interleave.
+In typescript, javascript, php, lua and ocaml there is no second thread
+of execution to interleave with, so the sequence is already indivisible
+and those ports carry no lock — the same property, arrived at for free.
+Perl carries none for a different reason: its interpreter threads copy
+rather than share, so a lock table would be copied with everything else
+and serialize nothing, and two such threads are the cross-process case
+below rather than this one.
+
+Across processes it does not hold. A reader is always handed one whole
+vault, because a new one is created under `O_EXCL` and an update lands by
+atomic rename, but two processes writing at once can still lose an
+update. A vault is a single-writer store, and a deployment that needs
+more than that wants a vault server.
 
 A key id is at most **255 bytes**, which is what the format records it
 in.

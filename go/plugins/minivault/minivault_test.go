@@ -18,6 +18,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -55,24 +56,59 @@ func fresh(t *testing.T) *minivault.Vault {
 
 // fixture copies a committed vault, so that a test which writes cannot
 // edit the bytes the format contract is made of.
-func fixture(t *testing.T, name string) string {
+// Where the committed vaults live, found by walking up.
+func fixturedir(t *testing.T) string {
 	t.Helper()
 
 	dir := "."
 	for step := 0; step < 8; step++ {
-		cand := filepath.Join(dir, "test", "fixture", name)
-		if raw, err := os.ReadFile(cand); nil == err {
-			mine := vaultpath(t)
-			if err := os.WriteFile(mine, raw, 0o600); nil != err {
-				t.Fatal(err)
-			}
-			return mine
+		cand := filepath.Join(dir, "test", "fixture")
+		if _, err := os.Stat(filepath.Join(cand, "minivault.skmv")); nil == err {
+			return cand
 		}
 		dir = filepath.Join(dir, "..")
 	}
 
-	t.Fatal("sekreto: fixture vault not found: " + name)
+	t.Fatal("sekreto: the fixture directory was not found")
 	return ""
+}
+
+// Every committed vault, sorted.
+func fixtures(t *testing.T) []string {
+	t.Helper()
+
+	held, err := os.ReadDir(fixturedir(t))
+	if nil != err {
+		t.Fatal(err)
+	}
+
+	names := []string{}
+	for _, entry := range held {
+		if strings.HasSuffix(entry.Name(), ".skmv") {
+			names = append(names, entry.Name())
+		}
+	}
+	sort.Strings(names)
+
+	return names
+}
+
+// A committed vault, copied so that a case which writes cannot edit the
+// bytes the format contract is made of.
+func fixture(t *testing.T, name string) string {
+	t.Helper()
+
+	raw, err := os.ReadFile(filepath.Join(fixturedir(t), name))
+	if nil != err {
+		t.Fatal(err)
+	}
+
+	mine := vaultpath(t)
+	if err := os.WriteFile(mine, raw, 0o600); nil != err {
+		t.Fatal(err)
+	}
+
+	return mine
 }
 
 func set(t *testing.T, vault *minivault.Vault, name string, value string) {
@@ -584,6 +620,32 @@ func TestAVaultNeedsAFileAndAPassphrase(t *testing.T) {
 	refuses(t, err, "sekreto: minivault: a vault needs a passphrase")
 }
 
+// An EMPTY key is no key, so it means `master`. It is not a contrived
+// case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+// expands to the empty string rather than to nothing at all.
+func TestAnEmptyKeyMeansTheMasterKey(t *testing.T) {
+	vault := fresh(t)
+	set(t, vault, "api.token", "tok01")
+
+	opened, err := minivault.Open(&minivault.Options{
+		File: vault.File(), Key: "", Passphrase: master})
+	if nil != err {
+		t.Fatal(err)
+	}
+
+	if value, _ := get(t, opened, "api.token"); "tok01" != value {
+		t.Fatalf("api.token: %q", value)
+	}
+
+	info, err := opened.Info()
+	if nil != err {
+		t.Fatal(err)
+	}
+	if minivault.MasterKey != info.Key {
+		t.Fatalf("key: %q", info.Key)
+	}
+}
+
 func TestCreateMakesTheFileWhenAsked(t *testing.T) {
 	file := vaultpath(t)
 
@@ -609,8 +671,57 @@ func TestCreateMakesTheFileWhenAsked(t *testing.T) {
 // canonical port, so reading it here is this port checking somebody
 // else's bytes; `minivault-go.skmv` is this port's own, and the
 // canonical suite reads it.
+// EVERY committed vault, read off disk rather than listed here. A
+// hard-coded list is one more place to edit when a port lands, and the
+// edit that gets forgotten is the one that makes this suite stop checking
+// the port that just arrived.
+// A RESTRICTED KEY GRANTED NOTHING STILL WRITES A GRANTS MAP, and the
+// only evidence is the file's length.
+//
+// The asymmetry is the format: a master's ring carries `root` and no
+// `grants`, a restricted key's carries `grants` - possibly empty - and no
+// `root`. Go's `omitempty` drops an empty map as readily as a nil one, so
+// this vault used to be 12 bytes shorter than the canonical's for the same
+// input: `{"v":1,"write":false}` where every other port writes
+// `{"v":1,"write":false,"grants":{}}`.
+//
+// It read back identically everywhere, because an absent `grants` parses
+// as empty, so no round trip could see it and the fixtures could not
+// either - none of them has a key granted nothing. Every length in the
+// format is fixed or derived, so the size IS deterministic for a given
+// input, and 401 is what typescript writes.
+func TestAKeyGrantedNothingStillWritesAGrantsMap(t *testing.T) {
+	vault := fresh(t)
+
+	if err := vault.Grant(&minivault.GrantSpec{
+		Key: "ci", Passphrase: "ci-phrase", Names: []string{}, Iterations: rounds}); nil != err {
+		t.Fatal(err)
+	}
+
+	info, err := os.Stat(vault.File())
+	if nil != err {
+		t.Fatal(err)
+	}
+	if 401 != info.Size() {
+		t.Fatalf("vault is %d bytes, canonical writes 401", info.Size())
+	}
+
+	// ...and it is still a usable handle that reaches nothing.
+	ci, err := minivault.Open(&minivault.Options{
+		File: vault.File(), Key: "ci", Passphrase: "ci-phrase"})
+	if nil != err {
+		t.Fatal(err)
+	}
+	same(t, list(t, ci))
+}
+
 func TestTheCommittedFixtureReads(t *testing.T) {
-	for _, name := range []string{"minivault.skmv", "minivault-go.skmv"} {
+	names := fixtures(t)
+	if 0 == len(names) {
+		t.Fatal("sekreto: no committed vault was found")
+	}
+
+	for _, name := range names {
 		t.Run(name, func(t *testing.T) { readfixture(t, name) })
 	}
 }

@@ -1,6 +1,6 @@
 ;; THE FULL SET - every plugin this library ships, in one require.
 ;;
-;; It exists for the callers that genuinely want all ten kinds: the CLI,
+;; It exists for the callers that genuinely want all eleven kinds: the CLI,
 ;; the conformance suite, an app whose chain is decided at run time.
 ;;
 ;;   (require '[voxgig.sekreto :as sekreto]
@@ -32,7 +32,8 @@
             [voxgig.sekreto.plugins.onepassword :as onepassword]
             [voxgig.sekreto.plugins.doppler :as doppler]
             [voxgig.sekreto.plugins.infisical :as infisical]
-            [voxgig.sekreto.plugins.secretspec :as secretspec]))
+            [voxgig.sekreto.plugins.secretspec :as secretspec]
+            [voxgig.sekreto.plugins.minivault :as minivault]))
 
 (def ALL
   "Every plugin kind this library ships, in one vector."
@@ -45,4 +46,5 @@
    onepassword/onepassword
    doppler/doppler
    infisical/infisical
-   secretspec/secretspec])
+   secretspec/secretspec
+   minivault/minivault])

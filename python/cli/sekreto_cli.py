@@ -10,7 +10,7 @@
 #
 # Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 #          gcpsecrets azuresecrets onepassword doppler infisical
-#          secretspec chain
+#          secretspec minivault chain
 #
 # Each source's configuration arrives in the environment variables its
 # own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -34,7 +34,7 @@ from voxgig_sekreto import Sekreto, writejson  # noqa: E402
 
 # THE FULL SET, passed to Sekreto. The CLI is asked for any provider kind
 # on the command line, so it is the one consumer that legitimately wants
-# all ten plugins; an app passes the one or two it configures.
+# all eleven plugins; an app passes the one or two it configures.
 from voxgig_sekreto.plugins import ALL  # noqa: E402
 
 LANG = 'python'
@@ -136,6 +136,15 @@ def chainfor(source):
         'reason': env.get('SECRETSPEC_REASON'),
     }
 
+    # The mini vault, read-only here: the CLI is an app that needs a
+    # secret, and writing one is a separate act with its own API.
+    minivaultspec = {
+        'kind': 'minivault',
+        'file': env.get('SEKRETO_VAULT_FILE') or '',
+        'vaultkey': env.get('SEKRETO_VAULT_KEY'),
+        'passphrase': env.get('SEKRETO_VAULT_PASSPHRASE') or '',
+    }
+
     infisicalspec = {
         'kind': 'infisical',
         'addr': env.get('INFISICAL_ADDR'),
@@ -162,6 +171,7 @@ def chainfor(source):
         'doppler': [dopplerspec],
         'infisical': [infisicalspec],
         'secretspec': [secretspecspec],
+        'minivault': [minivaultspec],
     }
 
     found = bysource.get(source)

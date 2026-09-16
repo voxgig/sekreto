@@ -38,7 +38,7 @@
 
 (def PLUGINS
   ["awsparams" "awssecrets" "azuresecrets" "boru" "doppler" "gcpsecrets"
-   "hashicorp" "infisical" "onepassword" "secretspec"])
+   "hashicorp" "infisical" "minivault" "onepassword" "secretspec"])
 
 (def EVERY (vec (sort (concat ["dotenv" "env" "file" "memory"] PLUGINS))))
 
@@ -84,7 +84,7 @@
 
   ;; Two kinds, one plugin: aws ships both stores because they share a
   ;; signer, so the list is ten definitions from nine namespaces.
-  (same 10 (count plugins/ALL) "(count ALL)")
+  (same 11 (count plugins/ALL) "(count ALL)")
 
   (same (:builtin sekreto/KINDS) (mapv (fn [d] (get d "name")) sekreto/BUILTINS) "BUILTINS")
   (same PLUGINS (vec (sort (:plugin sekreto/KINDS))) "KINDS"))
@@ -92,8 +92,12 @@
 ;; Naming a kind is not enough: a kind can be in the catalog and still fail
 ;; to build. Construction is what the CLI does before any network.
 (defn everykindbuildsfromaspec []
+  ;; One spec that satisfies every kind's configuration check. The vault's
+  ;; file is not opened here: its handle is lazy, and nothing reaches a
+  ;; store until a lookup.
   (let [chain (mapv (fn [kind] {:kind kind :addr "http://127.0.0.1:8200" :token "t"
-                                :dir "/tmp" :file "/tmp/.env" :values {}})
+                                :dir "/tmp" :file "/tmp/.env" :values {}
+                                :passphrase "p"})
                     EVERY)
         secrets (sekreto/sekreto chain {:plugins plugins/ALL})]
 

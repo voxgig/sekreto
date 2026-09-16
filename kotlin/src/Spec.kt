@@ -111,6 +111,18 @@ data class ProviderSpec(
     /** infisical: the environment slug and secret path. */
     val environment: String? = null,
     val path: String? = null,
+    /** minivault: the passphrase that unwraps `vaultkey`. */
+    val passphrase: String? = null,
+    /**
+     * minivault: which key in the vault file to open with, defaulting to
+     * `master`. Named apart from `key` and `keyid` because those already
+     * mean a secret name and an AWS access key id.
+     */
+    val vaultkey: String? = null,
+    /** minivault: PBKDF2 rounds, used only when a key is created. */
+    val iterations: Int? = null,
+    /** minivault: make the vault file if it is not there. */
+    val create: Boolean? = null,
 ) {
     /**
      * Printed without its credentials. See AuthSpec.toString: the generated

@@ -40,8 +40,9 @@ deps:
 #
 #   build/plugin   voxgig/plugin's library classes
 #   build/core     src/  - the chain, the four built-in kinds, no plugin
-#   build/plugins  plugins/ - the ten kinds that open a socket, spawn a
-#                  process or sign a request, and sigv4 with them
+#   build/plugins  plugins/ - the eleven kinds that open a socket, spawn a
+#                  process, sign a request or do cryptography, and sigv4
+#                  with them
 #
 # `core` compiles src/ with build/plugin on the classpath and NOTHING
 # else: plugins/ is a source root of its own and is on neither the
@@ -102,8 +103,10 @@ test: build check-core
 	mkdir -p build/test
 	javac -cp build/classes:$(OMNI)/java/build -d build/test test/SekretoTest.java
 	javac -cp build/classes:build/core:build/plugins -d build/test test/PluginsTest.java
+	javac -cp build/classes:build/core:build/plugins -d build/test test/MinivaultTest.java
 	java -cp build/classes:build/test:$(OMNI)/java/build SekretoTest
 	java -cp build/plugin:build/core:build/plugins:build/test PluginsTest
+	java -cp build/plugin:build/core:build/plugins:build/test MinivaultTest
 
 clean:
 	rm -rf build

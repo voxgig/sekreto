@@ -2,7 +2,7 @@
 
 # THE FULL SET - every plugin this library ships, in one require.
 #
-# It exists for the callers that genuinely want all ten kinds: the CLI,
+# It exists for the callers that genuinely want all eleven kinds: the CLI,
 # the conformance suite, an app whose chain is decided at run time.
 #
 #     require 'voxgig_sekreto'
@@ -36,12 +36,13 @@ require_relative 'plugins/onepassword'
 require_relative 'plugins/doppler'
 require_relative 'plugins/infisical'
 require_relative 'plugins/secretspec'
+require_relative 'plugins/minivault'
 
 module VoxgigSekreto
   module Plugins
     ALL = [
       HASHICORP, BORU, AWSSECRETS, AWSPARAMS, GCPSECRETS, AZURESECRETS,
-      ONEPASSWORD, DOPPLER, INFISICAL, SECRETSPEC
+      ONEPASSWORD, DOPPLER, INFISICAL, SECRETSPEC, MINIVAULT
     ].freeze
   end
 end

@@ -290,7 +290,8 @@ sub kinds {
         builtin => [qw(env memory dotenv file)],
         plugin  => [
             qw(hashicorp boru awssecrets awsparams gcpsecrets
-              azuresecrets onepassword doppler infisical secretspec)
+              azuresecrets onepassword doppler infisical secretspec
+              minivault)
         ],
     };
 }

@@ -44,13 +44,13 @@ require_once __DIR__ . '/../plugins/hashicorp.php';
 
 const PLUGINS = [
     'awsparams', 'awssecrets', 'azuresecrets', 'boru', 'doppler', 'gcpsecrets',
-    'hashicorp', 'infisical', 'onepassword', 'secretspec',
+    'hashicorp', 'infisical', 'minivault', 'onepassword', 'secretspec',
 ];
 
 const EVERY = [
     'awsparams', 'awssecrets', 'azuresecrets', 'boru', 'doppler', 'dotenv',
     'env', 'file', 'gcpsecrets', 'hashicorp', 'infisical', 'memory',
-    'onepassword', 'secretspec',
+    'minivault', 'onepassword', 'secretspec',
 ];
 
 $only = $argv[1] ?? null;
@@ -166,11 +166,15 @@ testcase('thefullsetholdseverykind', function (): void {
 // Naming a kind is not enough: a kind can be in the catalog and still fail
 // to build. Construction is what the CLI does before any network.
 testcase('everykindbuildsfromaspec', function (): void {
+    // One spec that satisfies every kind's configuration check. The
+    // vault's file is not opened here: its handle is lazy, and nothing
+    // reaches a store until a lookup.
     $chain = [];
     foreach (EVERY as $kind) {
         $chain[] = [
             'kind' => $kind, 'addr' => 'http://127.0.0.1:8200', 'token' => 't',
             'dir' => '/tmp', 'file' => '/tmp/.env', 'values' => [],
+            'passphrase' => 'p',
         ];
     }
 
@@ -396,7 +400,7 @@ testcase('onepluginrequiresonlyitself', function (): void {
 
 // The full set is built on demand, and reaching it requires everything.
 // The requires live inside `allplugins()` for exactly this reason: at file
-// scope, naming the list would load all ten as a side effect.
+// scope, naming the list would load all eleven as a side effect.
 testcase('thefullsetisbuiltondemand', function (): void {
     same(['plugins/plugins.php'], included('plugins/plugins.php'));
 

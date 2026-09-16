@@ -36,17 +36,17 @@ local ONLY = arg[1]
 local PASSCOUNT = 0
 local FAILCOUNT = 0
 
--- The ten kinds that are NOT built in, sorted.
+-- The eleven kinds that are NOT built in, sorted.
 local PLUGINS = {
   'awsparams', 'awssecrets', 'azuresecrets', 'boru', 'doppler', 'gcpsecrets',
-  'hashicorp', 'infisical', 'onepassword', 'secretspec',
+  'hashicorp', 'infisical', 'minivault', 'onepassword', 'secretspec',
 }
 
--- All fourteen, sorted.
+-- All fifteen, sorted.
 local EVERY = {
   'awsparams', 'awssecrets', 'azuresecrets', 'boru', 'doppler', 'dotenv',
   'env', 'file', 'gcpsecrets', 'hashicorp', 'infisical', 'memory',
-  'onepassword', 'secretspec',
+  'minivault', 'onepassword', 'secretspec',
 }
 
 -- The five files the core is, and nothing else may be reached by
@@ -173,7 +173,7 @@ end
 -- ------------------------------------------------ what the library holds
 
 testcase('the full set holds every kind', function()
-  same(#allplugins, 10, 'the full set size')
+  same(#allplugins, 11, 'the full set size')
   samelist(sorted(names(allplugins)), PLUGINS, 'the full set')
 
   -- Every kind is its own module, and reachable as one.
@@ -196,6 +196,10 @@ testcase('every kind builds from a spec', function()
     chain[index] = {
       kind = kind, addr = 'http://127.0.0.1:8200', token = 't',
       dir = '/tmp', file = '/tmp/.env', values = {},
+      -- minivault refuses a chain entry with no passphrase, at
+      -- construction. Nothing here reaches a file: every provider is
+      -- lazy, and this case only builds the chain.
+      passphrase = 'p',
     }
   end
 
@@ -210,7 +214,7 @@ testcase('every kind builds from a spec', function()
 end)
 
 -- THE ONE THING NO CONFORMANCE CHECK CAN SEE. A CLI that passes one
--- plugin instead of ten leaves all fourteen groups green and fails nine
+-- plugin instead of eleven leaves all fourteen groups green and fails nine
 -- integration checks. Pinned as the WHOLE call, closing brace included:
 -- `contains('plugins = allplugins')` is still true of
 -- `plugins = allplugins_but_one`.

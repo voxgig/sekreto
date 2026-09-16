@@ -301,5 +301,6 @@ object KINDS {
     val plugin: List<String> = listOf(
         "hashicorp", "boru", "awssecrets", "awsparams", "gcpsecrets",
         "azuresecrets", "onepassword", "doppler", "infisical", "secretspec",
+        "minivault",
     )
 }

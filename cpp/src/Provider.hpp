@@ -169,6 +169,16 @@ struct ProviderSpec {
   /// infisical: the environment slug and secret path.
   std::string environment;
   std::string path;
+  /// minivault: the passphrase that unwraps `vaultkey`.
+  std::string passphrase;
+  /// minivault: which key in the vault file to open with, defaulting to
+  /// `master`. Named apart from `keyid` because that already means an AWS
+  /// access key id.
+  std::string vaultkey;
+  /// minivault: PBKDF2 rounds, used only when a key is created.
+  std::optional<int> iterations;
+  /// minivault: make the vault file if it is not there.
+  bool create = false;
 
   /// Printed without its credentials. See AuthSpec::str.
   std::string str() const;

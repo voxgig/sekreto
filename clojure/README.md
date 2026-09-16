@@ -82,6 +82,47 @@ its own, so it is not even a `:local/root`: the Makefile finds a checkout —
 classpath, and `make deps` fetches a shallow clone into `../.plugin` when
 there is none. The library itself searches no path.
 
+## The mini vault
+
+`plugins/voxgig/sekreto/plugins/minivault.clj` is a store this port owns
+outright rather than a client for a server somebody else runs: every
+secret, encrypted, in one binary file. It has a master key and restricted
+keys, and it is the port's worked example of a definition publishing an
+API beside its provider.
+
+```clojure
+(require '[voxgig.sekreto :as sekreto]
+         '[voxgig.sekreto.plugins.minivault :as mv])
+
+(def vault (mv/createvault {:file "app.skmv" :passphrase master}))
+(mv/vaultset vault "api.token" "tok01")
+(mv/vaultgrant vault {:key "ci" :passphrase ci :names ["api.token"]})
+
+(def secrets
+  (sekreto/sekreto [{:kind "minivault" :file "app.skmv"
+                     :vaultkey "ci" :passphrase ci}]
+                   {:plugins [mv/minivault]}))
+
+(sekreto/get secrets "api.token")       ; the chain reads
+(mv/vaultlist (mv/vaultof secrets))     ; ["api.token"] - as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `(:host secrets)`. `javax.crypto` carries all four primitives, so
+nothing here is hand-rolled. What each key may do, what the file holds,
+and what the whole thing does and does not protect are in
+[DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
+
+`vaultopen` answers a map, and a map is a value: the defect the review
+round found in the canonical — a caller flipping its own `write` bit on
+the record it was handed — has nowhere to happen here, because `assoc`
+makes a new map and changes nothing the vault reads.
+
+Ports carrying this kind read each other's files, which
+`test/voxgig/sekreto/test/minivault.clj` checks against every committed
+vault in `test/fixture/`, including the one this port wrote.
+
 ## Layout
 
 | | |
@@ -99,6 +140,7 @@ there is none. The library itself searches no path.
 | `plugins/voxgig/sekreto/plugins.clj` | the full set |
 | `test/voxgig/sekreto/test/main.clj` | the conformance suite |
 | `test/voxgig/sekreto/test/plugins.clj` | the plugin seam, from both sides |
+| `test/voxgig/sekreto/test/minivault.clj` | the mini vault, and the committed files every port reads |
 | `cli/sekreto/cli.clj` | the app that needs a secret |
 
 ## Use

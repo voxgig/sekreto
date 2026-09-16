@@ -1,13 +1,19 @@
 /* SHA-256 and HMAC-SHA256, by hand.
  *
- * This port links libcrypto, and these are still written out. That is the
- * rule and not an oversight: the dependency exception in AGENTS.md covers
- * cryptographic TRANSPORT, and nothing else. Rust is the worked
- * precedent - `ring` sits inside rustls's dependency closure and
- * rust/src/crypto.rs carries both primitives anyway. Calling libcrypto's
- * EVP_Digest for a SigV4 signature would quietly widen the exception from
- * "we do not hand-roll TLS" to "we use whatever the TLS library ships",
- * which is a different and much larger claim.
+ * This port links libcrypto, and these are still written out. The rule
+ * they were written under said the dependency exception covered
+ * cryptographic TRANSPORT and nothing else; AGENTS.md now says
+ * cryptography, because the mini vault needs a block cipher to protect
+ * secrets at rest and a table-driven AES passes every known-answer test
+ * in the world while still handing its key to anyone who can time a
+ * cache. These two stay anyway, and the widened rule says so outright:
+ * they work, a SigV4 signature is a chain of them so one wrong bit fails
+ * the published vectors loudly, and rewriting them buys nothing.
+ *
+ * The narrower claim they were written for is also still true of them:
+ * calling libcrypto's EVP_Digest here would make the exception "we use
+ * whatever the TLS library ships" for a signature that needs no library
+ * at all.
  *
  * THIS OBJECT EXISTS SO THAT ONLY THE SIGNER PULLS IT. The aws plugin is
  * the only thing in the library that hashes anything, and a static

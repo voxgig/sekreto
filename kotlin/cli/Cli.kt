@@ -12,11 +12,11 @@
 // be able to reach every store the library ships. An application passes
 // only the kinds its own chain names - that is the point of the split,
 // and this file is the one place in the port that legitimately wants all
-// ten (docs/design/plugin-providers.md).
+// eleven (docs/design/plugin-providers.md).
 //
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 //          gcpsecrets azuresecrets onepassword doppler infisical
-//          secretspec chain
+//          secretspec minivault chain
 //
 // Each source's configuration arrives in the environment variables its own
 // ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed in
@@ -159,6 +159,15 @@ private fun chainfor(source: String): List<ProviderSpec> {
         reason = System.getenv("SECRETSPEC_REASON"),
     )
 
+    // The mini vault, read-only here: the CLI is an app that needs a
+    // secret, and writing one is a separate act with its own API.
+    val minivaultspec = ProviderSpec(
+        kind = "minivault",
+        file = System.getenv("SEKRETO_VAULT_FILE") ?: "",
+        vaultkey = System.getenv("SEKRETO_VAULT_KEY"),
+        passphrase = System.getenv("SEKRETO_VAULT_PASSPHRASE") ?: "",
+    )
+
     val infisicalspec = ProviderSpec(
         kind = "infisical",
         addr = System.getenv("INFISICAL_ADDR"),
@@ -185,6 +194,7 @@ private fun chainfor(source: String): List<ProviderSpec> {
         "doppler" -> listOf(dopplerspec)
         "infisical" -> listOf(infisicalspec)
         "secretspec" -> listOf(secretspecspec)
+        "minivault" -> listOf(minivaultspec)
         // The default: the chain an app would actually ship with - local
         // overrides first, shared vaults last.
         else -> listOf(envspec, dotenvspec, hashicorpspec, boruspec)

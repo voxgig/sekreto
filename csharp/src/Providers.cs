@@ -495,6 +495,7 @@ namespace Voxgig.Sekreto
         {
             "hashicorp", "boru", "awssecrets", "awsparams", "gcpsecrets",
             "azuresecrets", "onepassword", "doppler", "infisical", "secretspec",
+            "minivault",
         };
     }
 }

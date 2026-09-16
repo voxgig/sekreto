@@ -16,7 +16,8 @@
 ;; THIS NAMESPACE IMPORTS NO HTTP CLIENT, NO HASH FUNCTION AND NO
 ;; ProcessBuilder. What makes a kind built in is that it needs nothing of
 ;; the platform beyond reading a local file; every kind that opens a
-;; socket, signs a request or spawns a process is a plugin under
+;; socket, signs a request, spawns a process or does cryptography is a
+;; plugin under
 ;; `plugins/`, its own namespace, required only by a program that names it
 ;; (docs/design/plugin-providers.md).
 ;;
@@ -190,4 +191,5 @@
   unknown kind can be told from a plugin that was not loaded."
   {:builtin ["env" "memory" "dotenv" "file"]
    :plugin ["hashicorp" "boru" "awssecrets" "awsparams" "gcpsecrets"
-            "azuresecrets" "onepassword" "doppler" "infisical" "secretspec"]})
+            "azuresecrets" "onepassword" "doppler" "infisical" "secretspec"
+            "minivault"]})

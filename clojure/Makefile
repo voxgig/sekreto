@@ -45,7 +45,8 @@ CLOJURE ?= clojure
 #           plugins/. `check-core` compiles the core against exactly this,
 #           so a core namespace that required a plugin could not load at
 #           all.
-#   LIBCP   the library a consumer gets: the core plus the ten plugin kinds.
+#   LIBCP   the library a consumer gets: the core plus the eleven plugin
+#           kinds.
 #
 # `-Spath` is asked once, for the runtime jars deps.edn resolves.
 JARS := $(shell $(CLOJURE) -Spath 2>/dev/null | tr ':' '\n' | grep '\.jar$$' | tr '\n' ':')
@@ -74,7 +75,7 @@ deps:
 # directory is precisely what stops a stray .env making a run pass.
 #
 # Compilation is transitive: compiling the CLI namespace compiles the
-# library it requires, the ten plugin kinds it passes, and voxgig/plugin
+# library it requires, the eleven plugin kinds it passes, and voxgig/plugin
 # under them. *compile-path* must be on the classpath, which is why
 # build/classes is on this one.
 build: deps
@@ -138,6 +139,7 @@ test: build check-core
 	$(MAKE) -C $(OMNI)/clojure build
 	$(CLJ) "$(LIBCP):test:$(OMNI)/clojure/src" clojure.main -m voxgig.sekreto.test.main
 	$(CLJ) "$(LIBCP):test" clojure.main -m voxgig.sekreto.test.plugins
+	$(CLJ) "$(LIBCP):test" clojure.main -m voxgig.sekreto.test.minivault
 
 clean:
 	rm -rf build .cpcache

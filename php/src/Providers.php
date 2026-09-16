@@ -19,7 +19,8 @@
  * THIS FILE REQUIRES NOTHING UNDER plugins/, OPENS NO SOCKET, SPAWNS NO
  * PROCESS AND HASHES NOTHING. What makes a kind built in is that it needs
  * nothing of the platform beyond reading a local file; every kind that
- * opens a socket, signs a request or spawns a process is a plugin under
+ * opens a socket, signs a request, spawns a process or does cryptography
+ * is a plugin under
  * plugins/, in its own file and its own namespace, required only by a
  * program that names it (docs/design/plugin-providers.md).
  *
@@ -316,4 +317,5 @@ const BUILTIN_KINDS = ['env', 'memory', 'dotenv', 'file'];
 const PLUGIN_KINDS = [
     'hashicorp', 'boru', 'awssecrets', 'awsparams', 'gcpsecrets',
     'azuresecrets', 'onepassword', 'doppler', 'infisical', 'secretspec',
+    'minivault',
 ];

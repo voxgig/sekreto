@@ -39,6 +39,7 @@ build: deps
 test: deps
 	PLUGIN_HOME=$(PLUGIN) ruby test/test_sekreto.rb
 	PLUGIN_HOME=$(PLUGIN) ruby test/test_plugins.rb
+	PLUGIN_HOME=$(PLUGIN) ruby test/test_minivault.rb
 
 clean:
 

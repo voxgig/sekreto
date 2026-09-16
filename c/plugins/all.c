@@ -1,6 +1,6 @@
 /* THE FULL SET - every plugin this library ships, in one call.
  *
- * It exists for the callers that genuinely want all ten kinds: the CLI,
+ * It exists for the callers that genuinely want all eleven kinds: the CLI,
  * the conformance suite, an app whose chain is decided at run time.
  *
  *     Definition **plugins;
@@ -9,10 +9,10 @@
  *     opts.plugins = plugins;
  *
  * IT IS ALSO THE THING TO AVOID IF YOU CARE ABOUT SIZE, and in C the cost
- * is exactly visible: this object references all ten `sek_plugin_*`
- * symbols, so a link that pulls `all.o` in pulls every plugin object,
- * every HTTP client, the TLS binding, the child-process launcher and AWS
- * request signing with them. A lean consumer never names this file. It
+ * is exactly visible: this object references all eleven
+ * `sek_plugin_*` symbols, so a link that pulls `all.o` in pulls every
+ * plugin object, every HTTP client, the TLS binding, the child-process
+ * launcher, an AEAD and AWS request signing with them. A lean consumer never names this file. It
  * links the plugin objects it configures and passes their definitions:
  *
  *     Definition *chain[] = {sek_plugin_hashicorp()};
@@ -25,7 +25,7 @@
 
 #include "sekretoplugins.h"
 
-static Definition *ALL[10];
+static Definition *ALL[11];
 
 size_t sek_allplugins(Definition ***out) {
   ALL[0] = sek_plugin_hashicorp();
@@ -38,8 +38,9 @@ size_t sek_allplugins(Definition ***out) {
   ALL[7] = sek_plugin_doppler();
   ALL[8] = sek_plugin_infisical();
   ALL[9] = sek_plugin_secretspec();
+  ALL[10] = sek_plugin_minivault();
 
   *out = ALL;
 
-  return 10;
+  return 11;
 }

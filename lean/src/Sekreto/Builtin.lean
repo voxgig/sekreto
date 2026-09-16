@@ -101,6 +101,7 @@ heard of can be told from one the caller did not pass in. Naming them
 costs the core nothing: these are strings, not imports. -/
 def PLUGINKINDS : List String := [
   "hashicorp", "boru", "awssecrets", "awsparams", "gcpsecrets",
-  "azuresecrets", "onepassword", "doppler", "infisical", "secretspec"]
+  "azuresecrets", "onepassword", "doppler", "infisical", "secretspec",
+  "minivault"]
 
 end Sekreto

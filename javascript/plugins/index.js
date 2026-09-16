@@ -2,7 +2,7 @@
 
 // THE FULL SET - every plugin this library ships, in one require.
 //
-// It exists for the callers that genuinely want all ten kinds: the CLI,
+// It exists for the callers that genuinely want all eleven kinds: the CLI,
 // the conformance suite, an app whose chain is decided at run time.
 //
 //     const { allplugins } = require('@voxgig/sekreto-js/plugins')
@@ -29,19 +29,26 @@ const { onepassword, onepasswordprovider } = require('./onepassword')
 const { doppler, dopplerprovider } = require('./doppler')
 const { infisical, infisicalprovider } = require('./infisical')
 const { secretspec, secretspecprovider } = require('./secretspec')
+const {
+  ITERATIONS, MASTERKEY, VAULT_EXPORT, createvault, minivault, minivaultprovider,
+  openvault, providerof, vaultof,
+} = require('./minivault')
 const { fetchjson } = require('./httpjson')
 
 const allplugins = [
   hashicorp, boru, awssecrets, awsparams, gcpsecrets, azuresecrets,
-  onepassword, doppler, infisical, secretspec,
+  onepassword, doppler, infisical, secretspec, minivault,
 ]
 
 module.exports = {
   allplugins,
 
   hashicorp, boru, awssecrets, awsparams, gcpsecrets, azuresecrets,
-  onepassword, doppler, infisical, secretspec,
+  onepassword, doppler, infisical, secretspec, minivault,
 
+  ITERATIONS,
+  MASTERKEY,
+  VAULT_EXPORT,
   awsparamsprovider,
   awssecretsprovider,
   azuresecretsprovider,
@@ -50,8 +57,13 @@ module.exports = {
   fetchjson,
   gcpsecretsprovider,
   hashicorpprovider,
+  createvault,
   infisicalprovider,
+  minivaultprovider,
   onepasswordprovider,
+  openvault,
+  providerof,
   secretspecprovider,
   sigv4,
+  vaultof,
 }

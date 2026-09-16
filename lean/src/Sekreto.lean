@@ -13,7 +13,8 @@ qualifies.
 
 Four kinds are built in - `env`, `memory`, `dotenv` and `file` - and a
 chain of them needs nothing further. Every kind that opens a socket,
-signs a request or spawns a process is a voxgig/plugin definition under
+signs a request, spawns a process or does cryptography is a voxgig/plugin
+definition under
 `plugins/`, imported and passed by the calling project:
 
     import SekretoPlugins.Hashicorp

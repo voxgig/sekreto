@@ -1,4 +1,4 @@
-.PHONY: build test deps clean inspect
+.PHONY: build test vaulttest deps clean inspect
 
 # voxgig/plugin is a runtime dependency, and pyproject.toml declares it
 # from git - `pip install` brings it. A checkout that has not done that
@@ -20,6 +20,8 @@ PLUGIN ?= $(shell \
 
 PLUGIN_REPO ?= https://github.com/voxgig/plugin
 
+CASE ?= minivault
+
 deps:
 	@if python3 -c 'import voxgig_plugin' 2>/dev/null; then \
 	  echo "voxgig_plugin: installed"; \
@@ -35,6 +37,12 @@ build: deps
 
 test: deps
 	PLUGIN_HOME=$(PLUGIN) PYTHONPATH=.:tests python3 -m unittest discover -s tests -v
+
+# The mini vault alone, which is what `-k` is for: the suite reads every
+# committed fixture, so it is the one worth running on its own after a
+# change to the format.
+vaulttest: deps
+	PLUGIN_HOME=$(PLUGIN) PYTHONPATH=.:tests python3 -m unittest discover -s tests -v -k $(CASE)
 
 clean:
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +

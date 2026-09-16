@@ -12,7 +12,9 @@
 
 import { before, describe, test } from 'node:test'
 import assert from 'node:assert'
-import { copyFileSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -37,6 +39,29 @@ function vaultpath(): string {
 
 function fresh(): MiniVault {
   return createvault({ file: vaultpath(), passphrase: MASTER, iterations: ROUNDS })
+}
+
+/** Where the committed vaults live, found by walking up. */
+function fixturedir(): string {
+  let dir = __dirname
+
+  for (let step = 0; step < 8; step++) {
+    const cand = join(dir, 'test', 'fixture')
+    if (existsSync(cand)) {
+      return cand
+    }
+    dir = join(dir, '..')
+  }
+  throw new Error('sekreto: fixture directory not found')
+}
+
+/** EVERY committed vault, read off disk rather than listed here.
+ *
+ * A hard-coded list is one more place to edit when a port lands, and the
+ * edit that gets forgotten is the one that makes this suite stop
+ * checking the port that just arrived. */
+function fixtures(): string[] {
+  return readdirSync(fixturedir()).filter((n) => n.endsWith('.skmv')).sort()
 }
 
 /** A committed vault, copied so that a test which writes cannot edit the
@@ -380,6 +405,22 @@ describe('minivault', () => {
       { message: 'sekreto: minivault: a vault needs a passphrase' })
   })
 
+  // An EMPTY key is no key, so it means `master`. It is not a contrived
+  // case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+  // expands to the empty string rather than to nothing at all. A port
+  // whose null-coalescing operator answers for null alone - PHP's `??`,
+  // Java's `null ==`, C#'s `??`, Kotlin's `?:` - reads it as a key id of
+  // its own and refuses the handle.
+  test('an empty key means the master key', () => {
+    const vault = fresh()
+    vault.set('api.token', 'tok01')
+
+    assert.equal(openvault({ file: vault.file(), key: '', passphrase: MASTER }).get('api.token'),
+      'tok01')
+    assert.equal(openvault({ file: vault.file(), key: '', passphrase: MASTER }).open().key,
+      'master')
+  })
+
   test('create makes the file, and only when asked', () => {
     const file = vaultpath()
 
@@ -391,13 +432,13 @@ describe('minivault', () => {
 
   // --- the format, across ports ---------------------------------------
 
-  // BOTH DIRECTIONS, and the second one is the point. A suite that only
-  // reads a vault its own port wrote proves the reader agrees with the
+  // EVERY COMMITTED VAULT, not only this port's. A suite that reads only
+  // the vault its own port wrote proves the reader agrees with the
   // writer beside it — which a port whose serializer and parser share a
-  // mistake satisfies perfectly. `minivault-go.skmv` was written by the
-  // go port, so reading it here is the canonical checking somebody
-  // else's bytes.
-  for (const name of ['minivault.skmv', 'minivault-go.skmv']) {
+  // mistake satisfies perfectly. The others were written by other ports,
+  // so reading them here is the canonical checking somebody else's
+  // bytes.
+  for (const name of fixtures()) {
   test('the committed fixture reads, key by key: ' + name, () => {
     const file = fixture(name)
 

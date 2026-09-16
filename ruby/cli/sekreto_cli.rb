@@ -11,7 +11,7 @@
 #
 # Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 #          gcpsecrets azuresecrets onepassword doppler infisical
-#          secretspec chain
+#          secretspec minivault chain
 #
 # Each source's configuration arrives in the environment variables its
 # own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -30,7 +30,7 @@ require_relative '../lib/voxgig_sekreto'
 
 # THE FULL SET, passed to Sekreto. The CLI is asked for any provider kind
 # on the command line, so it is the one consumer that legitimately wants
-# all ten plugins; an app passes the one or two it configures.
+# all eleven plugins; an app passes the one or two it configures.
 require_relative '../lib/voxgig_sekreto/plugins'
 
 LANG = 'ruby'
@@ -134,6 +134,15 @@ def chainfor(source)
     'reason' => ENV.fetch('SECRETSPEC_REASON', nil)
   }
 
+  # The mini vault, read-only here: the CLI is an app that needs a
+  # secret, and writing one is a separate act with its own API.
+  minivaultspec = {
+    'kind' => 'minivault',
+    'file' => ENV['SEKRETO_VAULT_FILE'] || '',
+    'vaultkey' => ENV.fetch('SEKRETO_VAULT_KEY', nil),
+    'passphrase' => ENV['SEKRETO_VAULT_PASSPHRASE'] || ''
+  }
+
   infisicalspec = {
     'kind' => 'infisical',
     'addr' => ENV.fetch('INFISICAL_ADDR', nil),
@@ -160,6 +169,7 @@ def chainfor(source)
   when 'doppler' then [dopplerspec]
   when 'infisical' then [infisicalspec]
   when 'secretspec' then [secretspecspec]
+  when 'minivault' then [minivaultspec]
   else
     # The default: the chain an app would actually ship with - local
     # overrides first, shared vaults last.

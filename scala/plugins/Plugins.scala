@@ -19,8 +19,8 @@ import com.voxgig.sekreto.Definition
 
 object Plugins:
 
-  /** The ten plugin kinds, in the order docs/design/plugin-providers.md
-    * lists them.
+  /** The eleven plugin kinds, in the order
+    * docs/design/plugin-providers.md lists them.
     */
   val ALL: List[Definition] = List(
     hashicorp,
@@ -33,4 +33,5 @@ object Plugins:
     doppler,
     infisical,
     secretspec,
+    minivault,
   )

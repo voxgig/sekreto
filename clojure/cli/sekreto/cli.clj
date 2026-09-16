@@ -119,6 +119,13 @@
                         :backend (env "SECRETSPEC_PROVIDER")
                         :reason (env "SECRETSPEC_REASON")}
 
+        ;; The mini vault, read-only here: the CLI is an app that needs a
+        ;; secret, and writing one is a separate act with its own API.
+        minivaultspec {:kind "minivault"
+                       :file (env "SEKRETO_VAULT_FILE")
+                       :vaultkey (env "SEKRETO_VAULT_KEY")
+                       :passphrase (env "SEKRETO_VAULT_PASSPHRASE")}
+
         infisicalspec {:kind "infisical"
                        :addr (env "INFISICAL_ADDR")
                        :token (env "INFISICAL_TOKEN")
@@ -143,6 +150,7 @@
       "doppler" [dopplerspec]
       "infisical" [infisicalspec]
       "secretspec" [secretspecspec]
+      "minivault" [minivaultspec]
       ;; The default: the chain an app would actually ship with - local
       ;; overrides first, shared vaults last.
       [envspec dotenvspec hashicorpspec boruspec])))

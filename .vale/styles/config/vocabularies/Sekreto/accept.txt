@@ -8,7 +8,7 @@
 # distinct words on a clean run. Fifteen of those words were identifiers
 # sitting in prose (`kv`, `argv`, `errno`, `dNSName`, the plugin kind
 # names in a table cell) and were put into code spans on the page rather
-# than accepted here; this file is the 109 words that remained, sorted
+# than accepted here; this file is the 111 words that remained, sorted
 # into the groups below, and nothing else. A word that stops appearing in
 # the docs should come out of here, and a new one is added when the gate
 # asks for it.
@@ -104,6 +104,7 @@ Asio
 [Cc]lojure
 comptime
 cpp
+CPython(?:'s)?
 csharp
 escript
 Fastify
@@ -112,6 +113,7 @@ Gson
 Hackage
 [Hh]askell
 httpc(?:'s)?
+ithreads
 [Jj]avascript
 [Kk]otlin
 lakefile

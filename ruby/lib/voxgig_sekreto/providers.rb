@@ -17,8 +17,9 @@
 #
 # THIS FILE REQUIRES NO net/http, NO openssl AND NO open3. What makes a
 # kind built in is that it needs nothing of the platform beyond reading a
-# local file; every kind that opens a socket, signs a request or spawns a
-# process is a plugin under plugins/, its own file, required only by a
+# local file; every kind that opens a socket, signs a request, spawns a
+# process or does cryptography is a plugin under plugins/, its own file,
+# required only by a
 # program that names it (docs/design/plugin-providers.md).
 #
 # A port of typescript/src/provider/support.ts and
@@ -201,7 +202,7 @@ module VoxgigSekreto
     'builtin' => %w[env memory dotenv file].freeze,
     'plugin' => %w[
       hashicorp boru awssecrets awsparams gcpsecrets azuresecrets
-      onepassword doppler infisical secretspec
+      onepassword doppler infisical secretspec minivault
     ].freeze
   }.freeze
 end

@@ -162,11 +162,30 @@ internal static class Program
         return 0 == failcount ? 0 : 1;
     }
 
+    private static int MiniVaults()
+    {
+        Console.WriteLine("--- mini vault ---");
+
+        foreach (KeyValuePair<string, Action> one in MiniVaultSeam.Cases())
+        {
+            TestCase(one.Key, one.Value);
+        }
+
+        Console.WriteLine("\n" + passcount + " passed, " + failcount + " failed");
+
+        return 0 == failcount ? 0 : 1;
+    }
+
     private static int Main(string[] args)
     {
         if (0 < args.Length && "plugins" == args[0])
         {
             return Seams();
+        }
+
+        if (0 < args.Length && "minivault" == args[0])
+        {
+            return MiniVaults();
         }
 
         if (0 < args.Length)
@@ -185,6 +204,12 @@ internal static class Program
         failcount = 0;
         Console.WriteLine();
 
-        return 0 == conformance + Seams() ? 0 : 1;
+        int seams = Seams();
+
+        passcount = 0;
+        failcount = 0;
+        Console.WriteLine();
+
+        return 0 == conformance + seams + MiniVaults() ? 0 : 1;
     }
 }

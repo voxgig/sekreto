@@ -59,7 +59,7 @@ SCALACP := $(subst $(space),:,$(strip $(SCALAJARS)))
 #   voxgigplugin.jar     voxgig/plugin's own scala port
 #   sekreto.jar          the core: the chain, the cache, redaction, the four
 #                        built-in kinds. Nothing else.
-#   sekreto-plugins.jar  the ten plugin kinds, with sigv4 and the shared
+#   sekreto-plugins.jar  the eleven plugin kinds, with sigv4 and the shared
 #                        HTTP-JSON transport. Compiled AGAINST the core.
 #   sekreto-cli.jar      the CLI, self-contained, because test/checks.sh runs
 #                        it as `java -cp <one jar> sekreto.Cli`.
@@ -146,6 +146,9 @@ seam: build check-core
 	mkdir -p build/seam
 	$(SCALAC) -classpath $(VOXPLUGIN):$(CORE):$(PLUGINS) -d build/seam test/PluginsTest.scala
 	java -cp build/seam:$(VOXPLUGIN):$(CORE):$(PLUGINS):$(SCALACP) PluginsTest
+	mkdir -p build/mv
+	$(SCALAC) -classpath $(VOXPLUGIN):$(CORE):$(PLUGINS) -d build/mv test/MinivaultTest.scala
+	java -cp build/mv:$(VOXPLUGIN):$(CORE):$(PLUGINS):$(SCALACP) MinivaultTest
 
 # THE CORE DOES NOT REACH A PLUGIN, proved of the artifact and not of the
 # source, three ways.

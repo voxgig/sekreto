@@ -31,7 +31,7 @@ internal static class Seam
     private static readonly string[] PLUGINS =
     {
         "awsparams", "awssecrets", "azuresecrets", "boru", "doppler", "gcpsecrets",
-        "hashicorp", "infisical", "onepassword", "secretspec",
+        "hashicorp", "infisical", "minivault", "onepassword", "secretspec",
     };
 
     // Every kind this library ships, built in or plugged in, in one sorted
@@ -204,9 +204,13 @@ internal static class Seam
 
             foreach (string kind in EVERY)
             {
+                // One spec that satisfies every kind's configuration
+                // check. The vault's file is not opened here: its handle is
+                // lazy, and nothing reaches a store until a lookup.
                 chain.Add(Spec(
                     "kind", kind, "addr", "http://127.0.0.1:8200", "token", "t",
-                    "dir", "/tmp", "file", "/tmp/.env", "values", new Dictionary<string, object>()));
+                    "dir", "/tmp", "file", "/tmp/.env", "values", new Dictionary<string, object>(),
+                    "passphrase", "p"));
             }
 
             var secrets = new Sekreto(new SekretoOptions
@@ -457,7 +461,7 @@ internal static class Seam
 
         // The full set is built on demand: All() hands back a fresh list
         // every time, so a caller cannot mutate the catalog every other
-        // caller will get. It is also the ONLY name that reaches all ten -
+        // caller will get. It is also the ONLY name that reaches all eleven -
         // a consumer that wants one takes one.
         Case("the full set is built on demand", () =>
         {
@@ -465,7 +469,7 @@ internal static class Seam
             List<Definition> second = SekretoPlugins.All();
 
             True(!ReferenceEquals(first, second), "All() returns a shared list");
-            Eq(first.Count, 10, "the full set");
+            Eq(first.Count, 11, "the full set");
             Eq(Names(first), Names(second), "the same definitions");
 
             Eq(Names(new List<Definition> { Hashicorp.Plugin }), new[] { "hashicorp" },

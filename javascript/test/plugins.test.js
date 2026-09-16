@@ -30,7 +30,7 @@ const { hashicorp } = require('../plugins/hashicorp')
 
 const PLUGINS = [
   'awsparams', 'awssecrets', 'azuresecrets', 'boru', 'doppler', 'gcpsecrets',
-  'hashicorp', 'infisical', 'onepassword', 'secretspec',
+  'hashicorp', 'infisical', 'minivault', 'onepassword', 'secretspec',
 ]
 
 const ALL = ['dotenv', 'env', 'file', 'memory'].concat(PLUGINS).sort()
@@ -66,9 +66,12 @@ describe('plugins', () => {
   // Naming a kind is not enough: a kind can be in the catalog and still
   // fail to build. Construction is what the CLI does before any network.
   test('every kind builds from a spec', () => {
+    // One spec that satisfies every kind's configuration check. The
+    // vault's file is not opened here: its handle is lazy, and nothing
+    // reaches a store until a lookup.
     const chain = ALL.map((kind) => ({
       kind, addr: 'http://127.0.0.1:8200', token: 't',
-      dir: '/tmp', file: '/tmp/.env', values: {},
+      dir: '/tmp', file: '/tmp/.env', values: {}, passphrase: 'p',
     }))
 
     const secrets = new Sekreto({ plugins: allplugins, providers: chain })

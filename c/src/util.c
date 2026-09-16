@@ -311,6 +311,20 @@ void sek_list_add(sek_list *list, const char *text) {
   list->len++;
 }
 
+static int bytext(const void *left, const void *right) {
+  return strcmp(*(const char *const *)left, *(const char *const *)right);
+}
+
+/* By BYTE VALUE, which is what `strcmp` is and what every other port
+ * sorts a name list by. A locale-aware comparison would put the same
+ * three secret names in a different order on a machine with a different
+ * LC_COLLATE, and the shared spec compares whole lists. */
+void sek_list_sort(sek_list *list) {
+  if (1 < list->len) {
+    qsort(list->items, list->len, sizeof(char *), bytext);
+  }
+}
+
 /* ---- small string helpers ------------------------------------------ */
 
 int sek_empty(const char *text) { return NULL == text || '\0' == text[0]; }

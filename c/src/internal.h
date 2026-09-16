@@ -76,8 +76,23 @@ int sek_absent(int why);
  * spec's own key names, the shape a config document would have. */
 Value *sek_optionsof(const sek_spec *spec);
 
+/* ...and back, as a kind's `define` reads it. Every string is copied
+ * into the pool: the options map lives in voxgig/plugin's arena, which
+ * this library never resets, and copying keeps the ownership rule - a
+ * provider's strings come from the pool it was built with - true rather
+ * than true by accident.
+ *
+ * Not static to providers.c because `minivault` writes its own `define`,
+ * publishing two exports where every other kind publishes one. */
+sek_spec sek_specof(sek_pool *pool, Value *options);
+
 void sek_build_begin(sek_pool *pool);
 void sek_build_end(void);
 sek_provider *sek_build_at(double index);
+
+/* The pool this construction allocates from, and where a hand-written
+ * `define` puts the provider it built. NULL outside a sek_new. */
+sek_pool *sek_build_pool(void);
+double sek_build_keep(sek_provider *provider);
 
 #endif /* VOXGIG_SEKRETO_INTERNAL_H */

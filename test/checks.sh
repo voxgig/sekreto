@@ -115,7 +115,10 @@ ALL_LANGS="typescript javascript python ruby php perl go rust java csharp zig ko
 # every port, so it is the one check that has to know which ports have it;
 # everything else runs everywhere. Add a port here when it takes the kind,
 # and delete this line when the last one does.
-MINIVAULT_LANGS="typescript go"
+#
+# Missing from it: dart and swift, which are waiting on an AEAD they can
+# reach within the dependency rule.
+MINIVAULT_LANGS="typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure elixir cpp c lua ocaml haskell lean"
 
 # How to invoke each port's CLI.
 cli_cmd() {

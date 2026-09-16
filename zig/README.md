@@ -150,6 +150,59 @@ Two consequences worth knowing:
   a constant (`env`, `memory`, `boru`, `doppler`, `secretspec`). A caller that sometimes
   gets a literal and sometimes gets an allocation cannot free either safely.
 
+## The mini vault
+
+`plugins/minivault.zig` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the port's
+worked example of a definition publishing an API beside its provider.
+
+```zig
+const mv = @import("sekretoplugins");
+
+const vault = try mv.createvault(alloc, io, .{ .file = "app.skmv", .passphrase = master });
+_ = try vault.set(alloc, "api.token", "tok01");
+_ = try vault.grant(alloc, .{ .key = "ci", .passphrase = ci, .names = &.{"api.token"} });
+
+var secrets = try sekreto.Sekreto.init(alloc, config, .{
+    .plugins = &.{mv.minivault},
+    .providers = &.{
+        .{ .kind = "minivault", .file = "app.skmv", .vaultkey = "ci", .passphrase = ci },
+    },
+});
+
+_ = try secrets.get("api.token");            // the chain reads
+const api = try mv.vaultof(alloc, secrets, "");
+_ = try api.list(alloc);                     // api.token — as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `secrets.host`. `std.crypto` carries all four primitives — AES-256-GCM,
+PBKDF2-HMAC-SHA256, HMAC-SHA256 and the entropy under them — so nothing
+here is hand-rolled. What each key may do, what the file holds, and what
+the whole thing does and does not protect are in
+[DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
+
+Two exports rather than one is why this definition is written out instead
+of built by `providerplugin`. Both are numbers, because voxgig/plugin's
+values are numbers and strings and neither a provider nor a vault is data:
+`provider` is an index into `provider.Building.made` and `vault` an index
+into this module's own list, which nulls a slot when a handle is released
+so that `vaultof` on a torn-down chain refuses rather than following a
+dangling pointer.
+
+`KeyInfo` is a value with a `[]const []const u8` of grants, so the defect
+the review round found in the canonical — a caller flipping its own
+`write` bit on the record it was handed — edits a copy and changes nothing
+the vault reads.
+
+Ports carrying this kind read each other's files, which
+`test/minivault.zig` checks against every committed vault in
+`test/fixture/`, including the one this port wrote. That suite names no
+omni and roots `sekretoplugins` at `plugins/minivault.zig` alone, so it is
+also where the lean-consumer build is exercised.
+
 ## Layout
 
 | | |
@@ -158,11 +211,12 @@ Two consequences worth knowing:
 | `src/provider.zig` | `Provider` (a vtable), `ProviderSpec`, the spec ↔ options bridge, `providerplugin` |
 | `src/builtins.zig` | the four built-in providers, `BUILTINS`, `KINDS` |
 | `src/addr.zig` | `checkaddr` |
-| `plugins/<kind>.zig` | one plugin each: `hashicorp`, `boru`, `aws` (two kinds), `gcpsecrets`, `azuresecrets`, `onepassword`, `doppler`, `infisical`, `secretspec` |
+| `plugins/<kind>.zig` | one plugin each: `hashicorp`, `boru`, `aws` (two kinds), `gcpsecrets`, `azuresecrets`, `onepassword`, `doppler`, `infisical`, `secretspec`, `minivault` |
 | `plugins/httpjson.zig` | one JSON round-trip over `std.http.Client`, and the helpers a plugin shares |
 | `plugins/sigv4.zig` | AWS Signature Version 4 |
 | `plugins/all.zig` | `ALL` |
 | `test/run.zig` | the conformance suite, and the plugin seam |
+| `test/minivault.zig` | the mini vault, and the committed files every port reads |
 | `cli/sekreto-cli.zig` | the app that needs a secret |
 
 Only `test/run.zig` names omni. `make build` does not read `$OMNI_HOME` at
@@ -246,6 +300,16 @@ repository.
 make test                       # every group, then the plugin seam
 ./build/sekretotest envkey      # just one
 ./build/sekretotest plugins/oneplugin
+```
+
+The mini vault is its own binary, because the shared spec cannot carry
+that kind until every port ships it. `make test` runs it, and `make seam`
+runs it alone — it names no omni, so it works on a machine with no omni
+checkout:
+
+```sh
+make seam                       # the mini vault, both sides
+./build/minivaulttest restricted
 ```
 
 After the fourteen groups come eight checks the spec cannot express,

@@ -28,7 +28,7 @@ require_relative '../lib/voxgig_sekreto/plugins/hashicorp'
 
 PLUGINS = %w[
   awsparams awssecrets azuresecrets boru doppler gcpsecrets hashicorp
-  infisical onepassword secretspec
+  infisical minivault onepassword secretspec
 ].freeze
 
 EVERY = (%w[dotenv env file memory] + PLUGINS).sort.freeze
@@ -76,9 +76,12 @@ class TestPlugins < Minitest::Test
   # Naming a kind is not enough: a kind can be in the catalog and still
   # fail to build. Construction is what the CLI does before any network.
   def test_every_kind_builds_from_a_spec
+    # One spec that satisfies every kind's configuration check. The
+    # vault's file is not opened here: its handle is lazy, and nothing
+    # reaches a store until a lookup.
     chain = EVERY.map do |kind|
       { 'kind' => kind, 'addr' => 'http://127.0.0.1:8200', 'token' => 't',
-        'dir' => '/tmp', 'file' => '/tmp/.env', 'values' => {} }
+        'dir' => '/tmp', 'file' => '/tmp/.env', 'values' => {}, 'passphrase' => 'p' }
     end
 
     secrets = VoxgigSekreto::Sekreto.new('plugins' => VoxgigSekreto::Plugins::ALL,

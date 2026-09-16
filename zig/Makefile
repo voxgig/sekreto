@@ -1,4 +1,4 @@
-.PHONY: build build-clean deps test check-core clean inspect fmt-check
+.PHONY: build build-clean deps test seam check-core clean inspect fmt-check
 
 # voxgig/omni is a sibling checkout, not a published package, and it may sit
 # anywhere. Find it, then name its source file on the command line - Zig 0.16
@@ -60,7 +60,7 @@ ZIG := zig build-exe
 # The module graph, the same for every binary:
 #
 #   sekreto         src/sekreto.zig      the core - depends on plugin only
-#   sekretoplugins  plugins/all.zig      the ten plugins - depends on both
+#   sekretoplugins  plugins/all.zig      the eleven plugins - depends on both
 #   plugin          <checkout>/zig/src/plugin.zig
 #
 # The core cannot reach the plugins even by accident: a module's imports
@@ -92,7 +92,7 @@ check-core:
 	  echo "sekreto: the core reaches a plugin" >&2; exit 1; \
 	else echo "core: reaches no plugin"; fi
 
-test: deps check-core
+test: deps check-core seam
 	@test -n "$(OMNI)" || { echo "sekreto: voxgig/omni not found - set OMNI_HOME" >&2; exit 1; }
 	mkdir -p build
 	$(ZIG) -femit-bin=build/sekretotest \
@@ -101,6 +101,22 @@ test: deps check-core
 	  -Momni=$(OMNI)/zig/src/omni.zig \
 	  $(MODULES)
 	./build/sekretotest
+
+# The mini vault, which the shared spec cannot carry until every port
+# ships the kind. It names no omni, so it runs with no omni checkout.
+#
+# `sekretoplugins` is rooted at ONE plugin here rather than at all.zig:
+# that is the lean-consumer path the README describes, and building the
+# suite that way is what proves it still works.
+seam: deps
+	mkdir -p build
+	$(ZIG) -femit-bin=build/minivaulttest \
+	  --dep sekreto --dep sekretoplugins \
+	  -Mroot=test/minivault.zig \
+	  --dep plugin -Msekreto=src/sekreto.zig \
+	  --dep sekreto --dep plugin -Msekretoplugins=plugins/minivault.zig \
+	  -Mplugin=$(PLUGIN)/zig/src/plugin.zig
+	./build/minivaulttest
 
 # The compiler is Zig's static analyser; `zig fmt --check` is the style gate.
 fmt-check:

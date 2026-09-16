@@ -1,11 +1,13 @@
 // SHA-256 and HMAC-SHA256, hand-rolled, plus hex.
 //
 // This port links OpenSSL, so `EVP_Digest` and `HMAC` are a function call
-// away - and calling them here would break the rule that allows the link
-// at all. That exception covers cryptographic TRANSPORT and nothing else:
-// SigV4 is signing, not transport. Rust is the worked precedent, with
-// `ring` already inside rustls's closure and `rust/src/crypto.rs` still
-// carrying both primitives in-tree.
+// away. These two are written out anyway, and AGENTS.md's dependency rule
+// now says so outright rather than by omission: the exception used to
+// cover cryptographic TRANSPORT and nothing else, and it now covers
+// cryptography, because `Minivault.cpp` needs a block cipher to protect
+// secrets at rest and a table-driven AES passes every known-answer test
+// in the world while still handing its key to anyone who can time a
+// cache. These stay because they work and cost nothing to keep.
 //
 // Correctness is not asserted here - it is proved by the SigV4
 // known-answer vectors in the shared spec. A signature is a chain of these

@@ -155,7 +155,7 @@ static sek_spec specof(omni_json *entry) {
  *
  * EVERY PLUGIN IS PASSED TO EVERY CHAIN, which is what makes this suite
  * blind to a consumer's plugin list: it can see that a kind is missing
- * from the full set, because `sources` and `stores` name all ten, and it
+ * from the full set, because `sources` and `stores` name all eleven, and it
  * can never see that a consumer passed the wrong list. test/plugintest.c
  * is where that is pinned.
  *

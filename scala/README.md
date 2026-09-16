@@ -26,6 +26,46 @@ The optional lookup is `tryget`, since `try` is a keyword. A provider
 answers `Option[String]`, where `None` is the miss that sends the chain on
 to the next store.
 
+## The mini vault
+
+`plugins/Minivault.scala` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the port's
+worked example of a definition publishing an API beside its provider.
+
+```scala
+val vault = createvault(VaultOptions(file = "app.skmv", passphrase = master))
+vault.set("api.token", "tok01")
+vault.grant(GrantSpec("ci", ci, List("api.token")))
+
+val secrets = Sekreto(
+  plugins = List(minivault),
+  providers = List(
+    ProviderSpec(kind = "minivault", file = Some("app.skmv"),
+                 vaultkey = Some("ci"), passphrase = Some(ci)),
+  ),
+)
+
+secrets.get("api.token")     // the chain reads
+vaultof(secrets).list        // List(api.token) — as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `secrets.host`. `javax.crypto` carries all four primitives, so nothing
+here is hand-rolled. What each key may do, what the file holds, and what
+the whole thing does and does not protect are in
+[DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
+
+`VaultKeyInfo` is a case class of `val` fields over an immutable list, so
+the defect the review round found in the canonical — a caller flipping its
+own `write` bit on the record it was handed — does not compile. `copy`
+makes a new value and changes nothing the vault reads.
+
+Ports carrying this kind read each other's files, which
+`test/MinivaultTest.scala` checks against every committed vault in
+`test/fixture/`, including the one this port wrote.
+
 ## Layout
 
 Four kinds are built in; the other ten are plugins.
@@ -45,7 +85,7 @@ of it.
 
 | `plugins/` — one file per kind | |
 |---|---|
-| `Hashicorp.scala` `Boru.scala` `Aws.scala` `Gcpsecrets.scala` `Azuresecrets.scala` `Onepassword.scala` `Doppler.scala` `Infisical.scala` `Secretspec.scala` | the ten plugin kinds, each a `val` a consumer imports |
+| `Hashicorp.scala` `Boru.scala` `Aws.scala` `Gcpsecrets.scala` `Azuresecrets.scala` `Onepassword.scala` `Doppler.scala` `Infisical.scala` `Secretspec.scala` `Minivault.scala` | the eleven plugin kinds, each a `val` a consumer imports |
 | `Sigv4.scala` | AWS request signing, which travels with `Aws.scala` |
 | `Httpjson.scala` | the shared HTTP-JSON transport and the child-process runner |
 | `Plugins.scala` | `Plugins.ALL`, the full set |
@@ -54,6 +94,7 @@ of it.
 |---|---|
 | `test/SekretoTest.scala` | the conformance suite |
 | `test/PluginsTest.scala` | the plugin seam, which the conformance suite cannot see |
+| `test/MinivaultTest.scala` | the mini vault, and the committed files every port reads |
 | `test/CoreOnly.scala` | the core, run with `plugins/` off the classpath |
 | `cli/Cli.scala` | the app that needs a secret |
 

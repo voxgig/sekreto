@@ -16,7 +16,8 @@
  * THIS FILE NAMES NO SOCKET, NO CHILD PROCESS AND NO HASH FUNCTION. What
  * makes a kind built in is that it needs nothing of the platform beyond
  * the environment and reading a local file; every kind that opens a
- * socket, signs a request or spawns a process is a plugin under
+ * socket, signs a request, spawns a process or does cryptography is a
+ * plugin under
  * `plugins/`, in its own translation unit, linked only by a binary whose
  * link line names it (docs/design/plugin-providers.md).
  *
@@ -468,6 +469,8 @@ static const strfield STRFIELDS[] = {
     SEK_FIELD("config", config),
     SEK_FIELD("environment", environment),
     SEK_FIELD("path", path),
+    SEK_FIELD("passphrase", passphrase),
+    SEK_FIELD("vaultkey", vaultkey),
 };
 
 static const strfield AUTHFIELDS[] = {
@@ -523,6 +526,17 @@ Value *sek_optionsof(const sek_spec *spec) {
     vset(options, "kv", vnum(spec->kv));
   }
 
+  /* Written only when set, like every string above: zero and false are
+   * what "not configured" means for these two, and a minivault spec that
+   * named neither would otherwise carry both. */
+  if (0 != spec->iterations) {
+    vset(options, "iterations", vnum(spec->iterations));
+  }
+
+  if (spec->create) {
+    vset(options, "create", vbool(1));
+  }
+
   if (NULL != spec->auth) {
     Value *auth = vmap();
     for (index = 0; index < sizeof(AUTHFIELDS) / sizeof(AUTHFIELDS[0]); index++) {
@@ -544,10 +558,12 @@ Value *sek_optionsof(const sek_spec *spec) {
  * never frees; copying keeps the ownership rule this header states - a
  * provider's strings come from the pool it was built with - true anyway,
  * rather than true by accident. */
-static sek_spec specof(sek_pool *pool, Value *options) {
+sek_spec sek_specof(sek_pool *pool, Value *options) {
   sek_spec spec = sek_spec_new(NULL);
   Value *values = vget(options, "values");
   Value *kv = vget(options, "kv");
+  Value *iterations = vget(options, "iterations");
+  Value *create = vget(options, "create");
   Value *auth = vget(options, "auth");
   size_t index;
 
@@ -573,6 +589,12 @@ static sek_spec specof(sek_pool *pool, Value *options) {
     spec.kv = (int)vasnum(kv);
     spec.haskv = 1;
   }
+
+  if (visnum(iterations)) {
+    spec.iterations = (int)vasnum(iterations);
+  }
+
+  spec.create = visbool(create) && vasbool(create);
 
   if (vismap(auth)) {
     sek_authspec *use = (sek_authspec *)sek_alloc(pool, sizeof(sek_authspec));
@@ -620,6 +642,8 @@ void sek_build_begin(sek_pool *pool) {
 
 void sek_build_end(void) { BUILDING = NULL; }
 
+sek_pool *sek_build_pool(void) { return NULL == BUILDING ? NULL : BUILDING->pool; }
+
 /* The provider a definition exported, by the index it exported. Answers
  * NULL for an index no `define` of this construction handed out, which is
  * how a Definition that is not a provider plugin at all is caught.
@@ -639,7 +663,10 @@ sek_provider *sek_build_at(double index) {
   return BUILDING->built[(size_t)index];
 }
 
-static double keep(sek_provider *provider) {
+/* Not static, because `minivault` writes its own `define` - it publishes
+ * two exports where every other kind publishes one - and must put the
+ * provider it built in the same place this one does. */
+double sek_build_keep(sek_provider *provider) {
   if (BUILDING->len == BUILDING->cap) {
     size_t cap = 0 == BUILDING->cap ? 8 : BUILDING->cap * 2;
     sek_provider **bigger =
@@ -674,7 +701,7 @@ static void provider_define(Inst *inst) {
   sek_spec spec;
   sek_err err;
 
-  spec = specof(BUILDING->pool, inst_options(inst));
+  spec = sek_specof(BUILDING->pool, inst_options(inst));
 
   err = kind->make(BUILDING->pool, &spec, &made);
 
@@ -687,7 +714,7 @@ static void provider_define(Inst *inst) {
     fail(SEK_ERROR_CODE, err, details2("ref", vstr(inst_ref(inst)), "cause", vstr(err)));
   }
 
-  inst_export(inst, SEK_PROVIDER_EXPORT, vnum(keep(made)));
+  inst_export(inst, SEK_PROVIDER_EXPORT, vnum(sek_build_keep(made)));
 }
 
 Definition *sek_providerplugin(sek_providerkind *slot, const char *kind, sek_makefn make) {
@@ -806,5 +833,6 @@ size_t sek_builtins(Definition ***out) {
 const char *const SEK_BUILTIN_KINDS[] = {"env", "memory", "dotenv", "file", NULL};
 
 const char *const SEK_PLUGIN_KINDS[] = {
-    "hashicorp", "boru",        "awssecrets", "awsparams", "gcpsecrets",
-    "azuresecrets", "onepassword", "doppler",  "infisical", "secretspec", NULL};
+    "hashicorp",    "boru",        "awssecrets", "awsparams",  "gcpsecrets",
+    "azuresecrets", "onepassword", "doppler",    "infisical",  "secretspec",
+    "minivault",    NULL};

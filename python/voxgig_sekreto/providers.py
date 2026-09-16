@@ -204,5 +204,6 @@ KINDS = {
     'plugin': [
         'hashicorp', 'boru', 'awssecrets', 'awsparams', 'gcpsecrets',
         'azuresecrets', 'onepassword', 'doppler', 'infisical', 'secretspec',
+        'minivault',
     ],
 }

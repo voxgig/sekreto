@@ -309,13 +309,15 @@ jobs:
       - name: Setup OpenSSL headers
         if: matrix.lang == 'cpp' || matrix.lang == 'c'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libssl-dev
-      # lua5.4 from the Ubuntu archive, and the OpenSSL headers the port's
-      # own transport needs. Lua has no sockets at all, so the Makefile
-      # compiles native/sekretonet.c into a helper the library runs -- the
-      # -dev package is a BUILD requirement here, not an optional extra.
+      # lua5.4 from the Ubuntu archive, and the OpenSSL and Lua headers
+      # the port's own C needs. Lua has no sockets and no cryptography at
+      # all, so the Makefile compiles native/sekretonet.c into a helper
+      # the library runs and native/sekretovault.c into a module it loads
+      # -- both -dev packages are BUILD requirements here, not optional
+      # extras.
       - name: Setup Lua
         if: matrix.lang == 'lua'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 libssl-dev
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 liblua5.4-dev libssl-dev
       # ocaml and haskell from the Ubuntu archive; neither port uses a
       # package manager, so the compiler is all that is needed. libssl-dev
       # is a BUILD requirement for both -- ocaml binds OpenSSL through C
@@ -329,12 +331,15 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ghc libssl-dev
       # Lean via elan, pinned by the port's own lean-toolchain. libcurl is
       # the binding more-ports.md names for Lean specifically -- it handles
-      # chain and hostname verification itself.
+      # chain and hostname verification itself. libssl-dev is the mini
+      # vault's AEAD and KDF, and libcurl4-openssl-dev only SUGGESTS it,
+      # so the runner image happening to carry it is not something to
+      # build on.
       - name: Setup Lean
         if: matrix.lang == 'lean'
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends libcurl4-openssl-dev
+          sudo apt-get install -y -qq --no-install-recommends libcurl4-openssl-dev libssl-dev
           curl -sSLf --retry 3 https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan.sh
           sh /tmp/elan.sh -y --default-toolchain "$(cat lean/lean-toolchain)"
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
@@ -345,7 +350,15 @@ jobs:
         with:
           dotnet-version: '8.0'
 
-      # perl ships with the runner, and this port needs only core modules.
+      # perl ships with the runner, and the port needs only core modules for
+      # everything but the mini vault. That one kind needs an AEAD, a KDF
+      # and a CSPRNG, and perl's core has none of the three -- so CryptX,
+      # which is the same posture this port already takes for https and
+      # IO::Socket::SSL. Without it the vault suite fails rather than
+      # skipping, which is the point: the kind is not optional in CI.
+      - name: Setup CryptX
+        if: matrix.lang == 'perl'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libcryptx-perl
 
       # omni register 4.13: the conformance suite is a nested module
       # (go/testutil), so the published module must build - and its
@@ -537,12 +550,22 @@ jobs:
       # missing toolchain, which reads as a port bug and is not one.
       - name: Setup OpenSSL headers
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libssl-dev
-      # lua5.4 from the Ubuntu archive, and the OpenSSL headers the port's
-      # own transport needs. Lua has no sockets at all, so the Makefile
-      # compiles native/sekretonet.c into a helper the library runs -- the
-      # -dev package is a BUILD requirement here, not an optional extra.
+      # perl ships with the runner, and the port needs only core modules for
+      # everything but the mini vault. That one kind needs an AEAD, a KDF
+      # and a CSPRNG, and perl's core has none of the three -- so CryptX,
+      # which is the same posture this port already takes for https and
+      # IO::Socket::SSL. Without it the vault suite fails rather than
+      # skipping, which is the point: the kind is not optional in CI.
+      - name: Setup CryptX
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libcryptx-perl
+      # lua5.4 from the Ubuntu archive, and the OpenSSL and Lua headers
+      # the port's own C needs. Lua has no sockets and no cryptography at
+      # all, so the Makefile compiles native/sekretonet.c into a helper
+      # the library runs and native/sekretovault.c into a module it loads
+      # -- both -dev packages are BUILD requirements here, not optional
+      # extras.
       - name: Setup Lua
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 libssl-dev
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 liblua5.4-dev libssl-dev
       # ocaml and haskell from the Ubuntu archive; neither port uses a
       # package manager, so the compiler is all that is needed. libssl-dev
       # is a BUILD requirement for both -- ocaml binds OpenSSL through C
@@ -554,11 +577,14 @@ jobs:
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ghc libssl-dev
       # Lean via elan, pinned by the port's own lean-toolchain. libcurl is
       # the binding more-ports.md names for Lean specifically -- it handles
-      # chain and hostname verification itself.
+      # chain and hostname verification itself. libssl-dev is the mini
+      # vault's AEAD and KDF, and libcurl4-openssl-dev only SUGGESTS it,
+      # so the runner image happening to carry it is not something to
+      # build on.
       - name: Setup Lean
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends libcurl4-openssl-dev
+          sudo apt-get install -y -qq --no-install-recommends libcurl4-openssl-dev libssl-dev
           curl -sSLf --retry 3 https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -o /tmp/elan.sh
           sh /tmp/elan.sh -y --default-toolchain "$(cat lean/lean-toolchain)"
           echo "$HOME/.elan/bin" >> "$GITHUB_PATH"

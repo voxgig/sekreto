@@ -178,12 +178,15 @@ opposite and raises: a vault is configured deliberately, with a key, so
 its absence is a broken deployment rather than "no secrets here".
 
 **The corpus cannot carry it yet.** `spec/sekreto.json` runs against all
-twenty-three ports, so a `minivault` entry would fail the twenty-one that
-have no such kind. Until the last port has it, the ports that do carry it
-pin the on-disk format against `test/fixture/minivault.skmv`, a vault
-written by the canonical port that each of them reads. That covers the
-one thing per-port tests cannot: every port can write and read its own
-vault perfectly while disagreeing about where a length prefix goes.
+twenty-three ports, so a `minivault` entry would fail the five that have
+no such kind. Until the last port has it, the ports that do carry it pin
+the on-disk format against `test/fixture/`: each writes one vault file
+there and every one of them reads all of them. That covers the one thing
+per-port tests cannot: every port can write and read its own vault
+perfectly while disagreeing about where a length prefix goes. One file
+per port and not one shared file, because a suite that reads only what
+its own port wrote is satisfied by a serializer and a parser that share
+a mistake.
 
 ## Loading is static, in every language
 
@@ -339,13 +342,39 @@ and the three seam tests).
 
 ### `minivault`, separately
 
-typescript (canonical) ✅ → go ✅ → the remaining twenty-one.
+typescript (canonical) ✅ → go ✅ → javascript ✅, ruby ✅, php ✅,
+java ✅, csharp ✅, elixir ✅, kotlin ✅, scala ✅, clojure ✅, zig ✅,
+c ✅, cpp ✅, ocaml ✅, haskell ✅, lua ✅, lean ✅, rust ✅, python ✅,
+perl ✅ → dart and swift.
 
 A port takes it when its language has AES-256-GCM and PBKDF2-HMAC-SHA256
-within the dependency rule — from the standard library, or written small
-in-tree the way go writes PBKDF2 because `crypto/pbkdf2` postdates the
-version it targets. The acceptance test is
-`test/fixture/minivault.skmv`: a port that reads it, key by key, and
-writes a vault the others read has the format right. A `minivault`
-section joins `spec/sekreto.aon` when the last port lands, and not
-before.
+within the dependency rule — from the standard library, from a
+cryptographic library the port already links, or written small in-tree
+the way go writes PBKDF2 because `crypto/pbkdf2` postdates the version it
+targets. Rust took the second: `ring` arrived with rustls under
+`plugins/httpjson` and carries all four primitives, so naming it in the
+vault crate adds an edge to the closure rather than a crate to it. Python
+took the second as well, one level down: three of the four primitives are
+in `hashlib`, `hmac` and `os`, and AES-256-GCM comes through `ctypes`
+from the libcrypto that `import ssl` has already loaded. Perl took none
+of the three and needed a fourth: its core has SHA-256 and nothing else the
+format wants, so the kind takes `CryptX` — declared the way this port
+already declares `IO::Socket::SSL` for https, as a package the store needs
+rather than one the library depends on, failing closed with the package to
+install.
+
+The two still to come have no answer yet, and neither is a port of
+somebody else's. **Dart** resolves nothing: `pubspec.yaml` declares no
+dependencies, `dart pub get` is never run, and `package:cryptography`
+would be the port's first — so the way in is `dart:ffi` to the libcrypto
+already under `dart:io`. **Swift** has no `Package.swift` at all, since
+the port builds with `swiftc` directly; CryptoKit ships only on Apple
+platforms and swift-crypto is a package, so the way in is a C binding to
+the libcrypto Foundation sits on, as c, cpp, ocaml, haskell, lean and lua
+already do. Both are a decision about the port's build before they are a
+decision about the vault, which is why each waits for its own.
+
+The acceptance test is `test/fixture/`: a port that reads every vault
+committed there, key by key, and writes one the others read has the
+format right. A `minivault` section joins `spec/sekreto.aon` when the
+last port lands, and not before.

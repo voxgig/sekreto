@@ -11,7 +11,7 @@
 #
 # Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 #          gcpsecrets azuresecrets onepassword doppler infisical
-#          secretspec chain
+#          secretspec minivault chain
 #
 # Each source's configuration arrives in the environment variables its own
 # ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed in
@@ -28,8 +28,8 @@ use JSON::PP   ();
 BEGIN {
     my $here = dirname( File::Spec->rel2abs(__FILE__) );
 
-    # `lib` is the core; `plugins` is the second @INC root the ten plugin
-    # kinds live under, and a program that wants none of them adds neither
+    # `lib` is the core; `plugins` is the second @INC root the eleven
+    # plugin kinds live under, and a program that wants none of them adds neither
     # it nor this. `t` is where the voxgig/plugin search lives, because the
     # library itself searches no path.
     unshift @INC,
@@ -46,10 +46,24 @@ use Voxgig::Sekreto ();
 
 # THE FULL SET, passed to Sekreto. The CLI is asked for any provider kind on
 # the command line, so it is the one consumer that legitimately wants all
-# ten plugins; an app passes the one or two it configures.
+# eleven plugins; an app passes the one or two it configures.
 use Voxgig::Sekreto::Plugins qw(allplugins);
 
 my $LANG = 'perl';
+
+# One environment variable, as text. Bytes that are not UTF-8 are handed
+# back as they are: they came from the environment, so they go on as they
+# arrived rather than becoming replacement characters.
+sub decoded {
+    my ($raw) = @_;
+
+    return $raw if !defined $raw;
+
+    my $copy = $raw;
+    utf8::decode($copy);
+
+    return $copy;
+}
 
 sub chainfor {
     my ($source) = @_;
@@ -149,6 +163,21 @@ sub chainfor {
         reason  => $ENV{SECRETSPEC_REASON},
     };
 
+    # The mini vault, read-only here: the CLI is an app that needs a
+    # secret, and writing one is a separate act with its own API.
+    #
+    # DECODED HERE, because `%ENV` hands back bytes and the vault takes
+    # text. A passphrase with a non-ASCII character in it would otherwise
+    # be encoded twice and open nothing, while reading perfectly well on
+    # every other port. Decoding is the boundary's job, and this is the
+    # boundary.
+    my $minivaultspec = {
+        kind       => 'minivault',
+        file       => $ENV{SEKRETO_VAULT_FILE} || '',
+        vaultkey   => decoded( $ENV{SEKRETO_VAULT_KEY} ),
+        passphrase => decoded( $ENV{SEKRETO_VAULT_PASSPHRASE} ) || '',
+    };
+
     my $infisicalspec = {
         kind         => 'infisical',
         addr         => $ENV{INFISICAL_ADDR},
@@ -174,6 +203,7 @@ sub chainfor {
     return [$dopplerspec]      if 'doppler' eq $source;
     return [$infisicalspec]    if 'infisical' eq $source;
     return [$secretspecspec]   if 'secretspec' eq $source;
+    return [$minivaultspec]    if 'minivault' eq $source;
 
     # The default: the chain an app would actually ship with - local
     # overrides first, shared vaults last.

@@ -1,6 +1,6 @@
 -- THE FULL SET - every plugin this library ships, in one require.
 --
--- It exists for the callers that genuinely want all ten kinds: the CLI,
+-- It exists for the callers that genuinely want all eleven kinds: the CLI,
 -- the conformance suite, an app whose chain is decided at run time.
 --
 --     local sekreto = require('sekreto')
@@ -22,7 +22,7 @@
 -- `sekreto.plugins.hashicorp`, so the laziness python's plugins package
 -- has to arrange with a module `__getattr__` is what a directory of
 -- files already does here. `require('sekreto.plugins')` finds THIS file,
--- and it is the only file that names all ten.
+-- and it is the only file that names all eleven.
 --
 -- See docs/design/plugin-providers.md.
 
@@ -35,10 +35,11 @@ local onepassword = require('sekreto.plugins.onepassword')
 local doppler = require('sekreto.plugins.doppler')
 local infisical = require('sekreto.plugins.infisical')
 local secretspec = require('sekreto.plugins.secretspec')
+local minivault = require('sekreto.plugins.minivault')
 
 local M = {}
 
---- The ten kinds that are not built in, in the order they are
+--- The eleven kinds that are not built in, in the order they are
 --- documented.
 M.allplugins = {
   hashicorp.hashicorp,
@@ -51,6 +52,7 @@ M.allplugins = {
   doppler.doppler,
   infisical.infisical,
   secretspec.secretspec,
+  minivault.minivault,
 }
 
 return M

@@ -9,7 +9,7 @@
 --
 -- Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 --          gcpsecrets azuresecrets onepassword doppler infisical
---          secretspec chain
+--          secretspec minivault chain
 --
 -- Each source's configuration arrives in the environment variables its
 -- own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -215,6 +215,20 @@ chainfor source = do
             specreason = secretspecreason
           }
 
+  -- The mini vault, read-only here: the CLI is an app that needs a
+  -- secret, and writing one is a separate act with its own API.
+  vaultfilepath <- envor "SEKRETO_VAULT_FILE" ""
+  vaultkeyname <- envor "SEKRETO_VAULT_KEY" ""
+  vaultpassphrase <- envor "SEKRETO_VAULT_PASSPHRASE" ""
+
+  let minivaultspec =
+        emptyspec
+          { speckind = "minivault",
+            specfile = vaultfilepath,
+            specvaultkey = vaultkeyname,
+            specpassphrase = vaultpassphrase
+          }
+
   pure $ case source of
     "env" -> [envspec]
     "dotenv" -> [dotenvspec]
@@ -230,6 +244,7 @@ chainfor source = do
     "doppler" -> [dopplerspec]
     "infisical" -> [infisicalspec]
     "secretspec" -> [secretspecspec]
+    "minivault" -> [minivaultspec]
     -- The default: the chain an app would actually ship with - local
     -- overrides first, shared vaults last.
     _ -> [envspec, dotenvspec, hashicorpspec, boruspec]

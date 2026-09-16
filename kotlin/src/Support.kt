@@ -139,6 +139,10 @@ fun optionsof(spec: ProviderSpec): Map<String, Any?> {
     put(out, "config", spec.config)
     put(out, "environment", spec.environment)
     put(out, "path", spec.path)
+    put(out, "passphrase", spec.passphrase)
+    put(out, "vaultkey", spec.vaultkey)
+    put(out, "iterations", spec.iterations?.toDouble())
+    put(out, "create", spec.create)
 
     return out
 }
@@ -198,5 +202,9 @@ fun specof(options: Map<String, Any?>): ProviderSpec {
         config = str(options, "config"),
         environment = str(options, "environment"),
         path = str(options, "path"),
+        passphrase = str(options, "passphrase"),
+        vaultkey = str(options, "vaultkey"),
+        iterations = (options["iterations"] as? Number)?.toInt(),
+        create = options["create"] as? Boolean,
     )
 }

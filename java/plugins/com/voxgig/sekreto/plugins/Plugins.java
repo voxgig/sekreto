@@ -1,6 +1,6 @@
 // THE FULL SET - every plugin this library ships, in one class.
 //
-// It exists for the callers that genuinely want all ten kinds: the CLI,
+// It exists for the callers that genuinely want all eleven kinds: the CLI,
 // the conformance suite, an app whose chain is decided at run time.
 //
 //     new Sekreto(new Sekreto.Options()
@@ -30,5 +30,5 @@ public final class Plugins {
   public static final List<Definition> ALL = List.of(
       Hashicorp.PLUGIN, Boru.PLUGIN, Aws.SECRETS, Aws.PARAMS, Gcpsecrets.PLUGIN,
       Azuresecrets.PLUGIN, Onepassword.PLUGIN, Doppler.PLUGIN, Infisical.PLUGIN,
-      Secretspec.PLUGIN);
+      Secretspec.PLUGIN, Minivault.PLUGIN);
 }

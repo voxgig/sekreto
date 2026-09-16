@@ -61,7 +61,8 @@ child process:
 | `file` | a directory of one-secret-per-file entries — a mounted Kubernetes or Docker secret |
 
 A chain of those works with nothing else loaded. **Everything that opens
-a socket, signs a request or spawns a process is a plugin**: each store
+a socket, signs a request, spawns a process, or does cryptography is a
+plugin**: each store
 client is a [voxgig/plugin](https://github.com/voxgig/plugin) definition
 in the port's `plugins/` folder, and the calling project hands the ones
 it needs to `Sekreto` at construction — statically, in code, so a build
@@ -88,12 +89,14 @@ plugin host they live on. The core imports no plugin in any form, and
 loading is explicit rather than a side effect of importing: a `Sekreto`
 can build only the kinds its constructor was handed.
 
-`minivault` is the newest and is not yet everywhere: it ships in
-typescript and go, and the other twenty-one ports follow. Every kind
-preceding it is in all twenty-three. Because the shared spec runs against
-every port, a `minivault` case cannot join it until the last port has the
-kind, so until then the two ports that do carry it prove the format
-against each other, through a committed vault file each reads.
+`minivault` is the newest and is not yet everywhere: twenty-one ports
+ship it, and dart and swift follow once each has a way to reach
+AES-256-GCM that its build can declare. Every kind preceding it is in all
+twenty-three. Because the shared spec runs against every
+port, a `minivault` case cannot join it until the last port has the kind,
+so until then the ports that do carry it prove the format against each
+other: each writes a vault file into `test/fixture/`, and every one of
+them reads all of those files.
 
 ### A mini vault, in one file
 

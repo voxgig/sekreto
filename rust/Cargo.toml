@@ -57,6 +57,7 @@ members = [
   "plugins/doppler",
   "plugins/infisical",
   "plugins/secretspec",
+  "plugins/minivault",
   "plugins/all",
 ]
 exclude = ["corpus", "vendor", ".plugin"]

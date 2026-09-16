@@ -275,4 +275,5 @@ object KINDS:
     "doppler",
     "infisical",
     "secretspec",
+    "minivault",
   )

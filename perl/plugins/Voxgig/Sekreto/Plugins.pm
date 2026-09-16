@@ -11,9 +11,9 @@ package Voxgig::Sekreto::Plugins;
 #         providers => [ { kind => 'env' }, { kind => 'hashicorp', ... } ],
 #     });
 #
-# THIS MODULE LOADS NO PLUGIN AT COMPILE TIME. `allplugins` requires the ten
-# of them when it is called, and not before, so that merely having this file
-# on @INC costs nothing:
+# THIS MODULE LOADS NO PLUGIN AT COMPILE TIME. `allplugins` requires the
+# eleven of them when it is called, and not before, so that merely having
+# this file on @INC costs nothing:
 #
 #     use Voxgig::Sekreto::Plugins qw(allplugins);
 #     Voxgig::Sekreto->new({ plugins => allplugins(), providers => [ ... ] });
@@ -39,7 +39,7 @@ use Exporter 'import';
 
 our @EXPORT_OK = qw(allplugins);
 
-# The ten plugin kinds, in the order the design lists them, as
+# The eleven plugin kinds, in the order the design lists them, as
 # module/definition pairs.
 our @PLUGINS = (
     [ 'Hashicorp',    'hashicorp' ],
@@ -52,6 +52,7 @@ our @PLUGINS = (
     [ 'Doppler',      'doppler' ],
     [ 'Infisical',    'infisical' ],
     [ 'Secretspec',   'secretspec' ],
+    [ 'Minivault',    'minivault' ],
 );
 
 # Every plugin kind this library ships, loaded now and built now.

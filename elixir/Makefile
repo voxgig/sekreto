@@ -87,6 +87,7 @@ test: build check-core
 	$(MAKE) -C $(OMNI)/elixir build
 	$(ELIXIR) -pa build -pa $(PLUGINBUILD) -pa $(OMNI)/elixir/build test/sekreto_test.exs
 	$(ELIXIR) -pa build -pa $(PLUGINBUILD) test/plugins_test.exs
+	$(ELIXIR) -pa build -pa $(PLUGINBUILD) test/minivault_test.exs
 
 clean:
 	rm -rf build

@@ -252,5 +252,6 @@ pub const KINDS = struct {
     pub const plugin = [_][]const u8{
         "hashicorp",    "boru",        "awssecrets", "awsparams", "gcpsecrets",
         "azuresecrets", "onepassword", "doppler",    "infisical", "secretspec",
+        "minivault",
     };
 };
