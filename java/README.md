@@ -54,6 +54,47 @@ nothing else, so an import of a plugin from the core does not compile.
 fails on any reference to the plugins package — or to an HTTP client, a
 hash function or a child process.
 
+## The mini vault
+
+`plugins/com/voxgig/sekreto/plugins/Minivault.java` is a store this port
+owns outright rather than a client for a server somebody else runs: every
+secret, encrypted, in one binary file. It has a master key and restricted
+keys, and it is the port's worked example of a definition publishing an
+API beside its provider.
+
+```java
+Minivault.Vault vault = Minivault.createvault(
+    new Minivault.Options().file("app.skmv").passphrase(master));
+vault.set("api.token", "tok01");
+vault.grant(new Minivault.Grant().key("ci").passphrase(ci)
+    .names(List.of("api.token")));
+
+Sekreto secrets = new Sekreto(new Sekreto.Options()
+    .plugins(List.of(Minivault.PLUGIN))
+    .providers(List.of(Map.of(
+        "kind", "minivault", "file", "app.skmv",
+        "vaultkey", "ci", "passphrase", ci))));
+
+secrets.get("api.token");              // the chain reads
+Minivault.vaultof(secrets).list();     // ['api.token'] — as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `secrets.host()`. `javax.crypto` carries all four primitives, so
+nothing here is hand-rolled. What each key may do, what the file holds,
+and what the whole thing does and does not protect are in
+[DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
+
+`KeyInfo` has final fields and an immutable `grants`, which is how this
+port answers the defect the review round found in the canonical: a caller
+handed the live permission record could flip its own `write` bit. Here
+that does not compile.
+
+Ports carrying this kind read each other's files, which
+`test/MinivaultTest.java` checks against every committed vault in
+`test/fixture/`, including the one this port wrote.
+
 ## Layout
 
 | | |
@@ -63,9 +104,11 @@ hash function or a child process.
 | `src/com/voxgig/sekreto/Builtins.java` | the four built-in kinds, and the names of the ten that are not |
 | `src/com/voxgig/sekreto/Addr.java` | `checkaddr`, the guard every network plugin runs first |
 | `src/com/voxgig/sekreto/Json.java` | the JSON reader and writer |
-| `plugins/com/voxgig/sekreto/plugins/` | the ten plugin kinds, `Httpjson`, `Proc`, `Sigv4`, and `Plugins.ALL` |
+| `plugins/com/voxgig/sekreto/plugins/` | the eleven plugin kinds, `Httpjson`, `Proc`, `Sigv4`, and `Plugins.ALL` |
+| `plugins/com/voxgig/sekreto/plugins/Minivault.java` | the mini vault: the format, the keys, the API, the definition |
 | `test/SekretoTest.java` | the conformance suite |
 | `test/PluginsTest.java` | the plugin seam, which the conformance suite cannot see |
+| `test/MinivaultTest.java` | the mini vault, and the committed files every port reads |
 | `cli/Cli.java` | the app that needs a secret |
 
 `make build` compiles those into three trees — `build/core`,

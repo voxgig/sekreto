@@ -30,5 +30,5 @@ public final class Plugins {
   public static final List<Definition> ALL = List.of(
       Hashicorp.PLUGIN, Boru.PLUGIN, Aws.SECRETS, Aws.PARAMS, Gcpsecrets.PLUGIN,
       Azuresecrets.PLUGIN, Onepassword.PLUGIN, Doppler.PLUGIN, Infisical.PLUGIN,
-      Secretspec.PLUGIN);
+      Secretspec.PLUGIN, Minivault.PLUGIN);
 }

@@ -50,7 +50,8 @@ public final class Builtins {
    */
   public static final List<String> PLUGIN_KINDS = List.of(
       "hashicorp", "boru", "awssecrets", "awsparams", "gcpsecrets",
-      "azuresecrets", "onepassword", "doppler", "infisical", "secretspec");
+      "azuresecrets", "onepassword", "doppler", "infisical", "secretspec",
+      "minivault");
 
   /**
    * Does this read failure mean "no secrets here", rather than "I could not

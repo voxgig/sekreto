@@ -52,9 +52,9 @@ public final class PluginsTest {
 
   private static final List<String> PLUGINKINDS = List.of(
       "awsparams", "awssecrets", "azuresecrets", "boru", "doppler", "gcpsecrets",
-      "hashicorp", "infisical", "onepassword", "secretspec");
+      "hashicorp", "infisical", "minivault", "onepassword", "secretspec");
 
-  /** All fourteen kinds, sorted, as the catalog and `stores()` order them. */
+  /** All fifteen kinds, sorted, as the catalog and `stores()` order them. */
   private static final List<String> EVERY = sorted(
       concat(List.of("dotenv", "env", "file", "memory"), PLUGINKINDS));
 
@@ -75,7 +75,7 @@ public final class PluginsTest {
     // signer, so the list is ten definitions from nine classes.
     same("awssecrets", Aws.SECRETS.name, "Aws.SECRETS");
     same("awsparams", Aws.PARAMS.name, "Aws.PARAMS");
-    same(10, Plugins.ALL.size(), "Plugins.ALL.size()");
+    same(11, Plugins.ALL.size(), "Plugins.ALL.size()");
   }
 
   // Naming a kind is not enough: a kind can be in the catalog and still
@@ -90,6 +90,10 @@ public final class PluginsTest {
       spec.put("dir", "/tmp");
       spec.put("file", "/tmp/.env");
       spec.put("values", new LinkedHashMap<String, Object>());
+      // One spec that satisfies every kind's configuration check. The
+      // vault's file is not opened here: its handle is lazy, and nothing
+      // reaches a store until a lookup.
+      spec.put("passphrase", "p");
       chain.add(spec);
     }
 
@@ -343,7 +347,7 @@ public final class PluginsTest {
   static void thefullsetreacheseveryplugin() throws Exception {
     same(new TreeSet<>(List.of(
             "Aws", "Azuresecrets", "Boru", "Doppler", "Gcpsecrets", "Hashicorp",
-            "Infisical", "Onepassword", "Plugins", "Secretspec")),
+            "Infisical", "Minivault", "Onepassword", "Plugins", "Secretspec")),
         references(here().resolve("build/plugins/com/voxgig/sekreto/plugins/Plugins.class")),
         "Plugins.class");
   }

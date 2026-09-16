@@ -102,8 +102,10 @@ test: build check-core
 	mkdir -p build/test
 	javac -cp build/classes:$(OMNI)/java/build -d build/test test/SekretoTest.java
 	javac -cp build/classes:build/core:build/plugins -d build/test test/PluginsTest.java
+	javac -cp build/classes:build/core:build/plugins -d build/test test/MinivaultTest.java
 	java -cp build/classes:build/test:$(OMNI)/java/build SekretoTest
 	java -cp build/plugin:build/core:build/plugins:build/test PluginsTest
+	java -cp build/plugin:build/core:build/plugins:build/test MinivaultTest
 
 clean:
 	rm -rf build
