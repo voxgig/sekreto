@@ -45,6 +45,7 @@ namespace Voxgig.Sekreto.Plugins
                 Doppler.Plugin,
                 Infisical.Plugin,
                 SecretSpec.Plugin,
+                MiniVault.Plugin,
             };
         }
     }

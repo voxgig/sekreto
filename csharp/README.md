@@ -51,6 +51,48 @@ the core references nothing back — a reference the other way is a cycle
 assemblies a plugin needs either. `make check-core` reads that out of
 the compiled artifact.
 
+## The mini vault
+
+`plugins/MiniVault.cs` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the port's
+worked example of a definition publishing an API beside its provider.
+
+```csharp
+var vault = MiniVault.CreateVault(new MiniVault.Options {
+    File = "app.skmv", Passphrase = master });
+vault.Set("api.token", "tok01");
+vault.Grant(new MiniVault.Grant {
+    Key = "ci", Passphrase = ci, Names = new List<string> { "api.token" } });
+
+var secrets = new Sekreto(new SekretoOptions {
+    Plugins = new List<Definition> { MiniVault.Plugin },
+    Providers = new List<object> { new Dictionary<string, object> {
+        { "kind", "minivault" }, { "file", "app.skmv" },
+        { "vaultkey", "ci" }, { "passphrase", ci } } } });
+
+secrets.Get("api.token");            // the chain reads
+MiniVault.VaultOf(secrets).List();   // ['api.token'] — as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `VaultOf` reads it back
+off `secrets.Host`. `System.Security.Cryptography` carries all four
+primitives — `AesGcm`, `Rfc2898DeriveBytes.Pbkdf2`, `HMACSHA256` and
+`RandomNumberGenerator` — so nothing here is hand-rolled. What each key
+may do, what the file holds, and what the whole thing does and does not
+protect are in
+[DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
+
+`KeyInfo` has get-only properties and a read-only `Grants`, which is how
+this port answers the defect the review round found in the canonical: a
+caller handed the live permission record could flip its own `Write` bit.
+Here that does not compile.
+
+Ports carrying this kind read each other's files, which
+`test/MiniVault.cs` checks against every committed vault in
+`test/fixture/`, including the one this port wrote.
+
 ## Layout
 
 | | |
@@ -58,11 +100,13 @@ the compiled artifact.
 | `src/Sekreto.cs` | the facade, `Names`, `Dotenv`, `Redact`, `SekretoOptions` |
 | `src/Providers.cs` | `IProvider`, the four built-in kinds, `Addr`, `ProviderPlugin` |
 | `src/Json.cs` | the JSON adapter |
-| `plugins/*.cs` | the ten plugin kinds, one file each, and `Sigv4.cs` with the AWS pair |
+| `plugins/*.cs` | the eleven plugin kinds, one file each, and `Sigv4.cs` with the AWS pair |
 | `plugins/HttpJson.cs` | the shared HTTP-JSON client, `plugins/Child.cs` the child process |
+| `plugins/MiniVault.cs` | the mini vault: the format, the keys, the API, the definition |
 | `plugins/SekretoPlugins.cs` | the full set |
 | `test/Program.cs` | the conformance suite |
 | `test/Plugins.cs` | the plugin seam — what the conformance suite cannot see |
+| `test/MiniVault.cs` | the mini vault, and the committed files every port reads |
 | `cli/Program.cs` | the app that needs a secret |
 
 ## Testing

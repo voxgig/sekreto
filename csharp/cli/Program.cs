@@ -9,7 +9,7 @@
 //
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 //          gcpsecrets azuresecrets onepassword doppler infisical
-//          secretspec chain
+//          secretspec minivault chain
 //
 // Each source's configuration arrives in the environment variables its
 // own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -134,6 +134,14 @@ internal static class Program
             "backend", Environment.GetEnvironmentVariable("SECRETSPEC_PROVIDER"),
             "reason", Environment.GetEnvironmentVariable("SECRETSPEC_REASON"));
 
+        // The mini vault, read-only here: the CLI is an app that needs a
+        // secret, and writing one is a separate act with its own API.
+        var minivaultspec = Spec(
+            "kind", "minivault",
+            "file", Environment.GetEnvironmentVariable("SEKRETO_VAULT_FILE") ?? "",
+            "vaultkey", Environment.GetEnvironmentVariable("SEKRETO_VAULT_KEY"),
+            "passphrase", Environment.GetEnvironmentVariable("SEKRETO_VAULT_PASSPHRASE") ?? "");
+
         var infisicalspec = Spec(
             "kind", "infisical",
             "addr", Environment.GetEnvironmentVariable("INFISICAL_ADDR"),
@@ -162,6 +170,7 @@ internal static class Program
             case "doppler": chain.Add(dopplerspec); break;
             case "infisical": chain.Add(infisicalspec); break;
             case "secretspec": chain.Add(secretspecspec); break;
+            case "minivault": chain.Add(minivaultspec); break;
             default:
                 // The default: the chain an app would actually ship with -
                 // local overrides first, shared vaults last.

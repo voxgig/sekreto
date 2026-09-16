@@ -12,6 +12,7 @@ implementations.
 | `minivault-rb.skmv` | ruby |
 | `minivault-php.skmv` | php |
 | `minivault-java.skmv` | java |
+| `minivault-cs.skmv` | csharp |
 
 **One file per writing port, and every port reads all of them.** A suite
 that reads only what its own port wrote proves the reader agrees with the
