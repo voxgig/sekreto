@@ -19,7 +19,7 @@ import (
 
 var kinds = []string{
 	"awsparams", "awssecrets", "azuresecrets", "boru", "doppler", "gcpsecrets",
-	"hashicorp", "infisical", "onepassword", "secretspec",
+	"hashicorp", "infisical", "minivault", "onepassword", "secretspec",
 }
 
 func TestTheFullSetHoldsEveryKind(t *testing.T) {
@@ -46,11 +46,15 @@ func TestEveryKindBuildsFromASpec(t *testing.T) {
 	all := append(append([]string{}, sekreto.Kinds.Builtin...), kinds...)
 	sort.Strings(all)
 
+	// One spec that satisfies every kind's configuration check. The
+	// vault's file is not opened here: its handle is lazy, and nothing
+	// reaches a store until a lookup.
 	chain := []*sekreto.ProviderSpec{}
 	for _, kind := range all {
 		chain = append(chain, &sekreto.ProviderSpec{
 			Kind: kind, Addr: "http://127.0.0.1:8200", Token: "t",
 			Dir: "/tmp", File: "/tmp/.env", Values: map[string]string{},
+			Passphrase: "p",
 		})
 	}
 

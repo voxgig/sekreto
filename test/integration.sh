@@ -274,6 +274,22 @@ EOF
 printf 'API_TOKEN=%s\n' "$TOKEN" >"$WORK/ss/.env"
 printf '\n' >"$WORK/ss/empty.env"
 
+# A mini vault, written by the CANONICAL port and read by every port that
+# ships the kind. There is no server here and no mock: the store IS the
+# file, so what this proves is that a vault one port wrote is one another
+# port reads, through the CLI rather than from inside the library.
+#
+# That is the half a per-port suite cannot reach. Each port can write and
+# read its own vault perfectly while disagreeing with every other about
+# where a length prefix goes, and only a file that crossed ports sees it.
+mkdir -p "$WORK/minivault"
+MINIVAULT_FILE="$WORK/minivault/app.skmv"
+if [ -f "$ROOT/typescript/dist/plugins/minivault.js" ]; then
+  node "$HERE/minivaultinit.js" "$MINIVAULT_FILE" "$TOKEN" >/dev/null
+else
+  MINIVAULT_FILE=""
+fi
+
 # --------------------------------------------------------------- the runs
 
 LANGS=${*:-$ALL_LANGS}
@@ -471,13 +487,47 @@ for lang in $LANGS; do
     noted_skip "$lang/secretspec" "no secretspec binary"
   fi
 
-  # 19. A store that is not in the chain is a mistake, not a miss.
+  # 19. THE MINI VAULT, written by the canonical port. Three checks,
+  #     because the key is what the vault is about: the master key reads
+  #     the token; a restricted key granted `api.token` reads the same
+  #     value and nothing else; and a wrong passphrase must RAISE rather
+  #     than answer a miss, because a vault that falls through on a bad
+  #     passphrase sends the chain to a weaker store.
+  #
+  #     Skipped where a port has no `minivault` kind yet, and where the
+  #     canonical port is not built to write the file with.
+  case " $MINIVAULT_LANGS " in
+  *" $lang "*)
+    if [ -n "$MINIVAULT_FILE" ]; then
+      STORE= check "$lang" minivault ok \
+        SEKRETO_VAULT_FILE="$MINIVAULT_FILE" \
+        SEKRETO_VAULT_PASSPHRASE=integration-master
+
+      LABEL="$lang/minivault-granted" STORE= check "$lang" minivault ok \
+        SEKRETO_VAULT_FILE="$MINIVAULT_FILE" \
+        SEKRETO_VAULT_KEY=reader \
+        SEKRETO_VAULT_PASSPHRASE=integration-reader
+
+      LABEL="$lang/minivault-wrongpass" WHY='wrong passphrase' \
+        STORE= check "$lang" minivault deny \
+        SEKRETO_VAULT_FILE="$MINIVAULT_FILE" \
+        SEKRETO_VAULT_PASSPHRASE=not-the-passphrase
+    else
+      noted_skip "$lang/minivault" "typescript not built to write the vault"
+    fi
+    ;;
+  *)
+    noted_skip "$lang/minivault" "port has no minivault kind yet"
+    ;;
+  esac
+
+  # 20. A store that is not in the chain is a mistake, not a miss.
   STORE=nosuchstore check "$lang" env deny API_TOKEN="$TOKEN"
 
-  # 20. No secret anywhere: the CLI must fail, not call the API unauthenticated.
+  # 21. No secret anywhere: the CLI must fail, not call the API unauthenticated.
   STORE= check "$lang" env deny SEKRETO_PREFIX=NOSUCH_
 
-  # 21. The wrong secret: the API must refuse it, and the CLI must not print
+  # 22. The wrong secret: the API must refuse it, and the CLI must not print
   #    the real token while complaining.
   STORE= check "$lang" dotenv deny SEKRETO_DOTENV="$WORK/wrong/.env"
 done

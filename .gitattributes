@@ -1,0 +1,2 @@
+# The fixture vault is bytes, not text: no line-ending translation.
+test/fixture/*.skmv binary

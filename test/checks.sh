@@ -111,6 +111,12 @@ waithttp() {
 # Every port, in the order the top-level Makefile lists them.
 ALL_LANGS="typescript javascript python ruby php perl go rust java csharp zig kotlin scala clojure swift dart elixir cpp c lua ocaml haskell lean"
 
+# The ports that ship the `minivault` kind. It is the one kind not yet in
+# every port, so it is the one check that has to know which ports have it;
+# everything else runs everywhere. Add a port here when it takes the kind,
+# and delete this line when the last one does.
+MINIVAULT_LANGS="typescript go"
+
 # How to invoke each port's CLI.
 cli_cmd() {
   case $1 in

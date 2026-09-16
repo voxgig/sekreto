@@ -99,6 +99,92 @@ gone.
   implementation, never an accident, because the four names are
   documented.
 
+## A definition may publish more than ONE export
+
+`providerplugin` exports exactly one value, under the key `provider`,
+because a provider is all a chain needs. That is the whole of what the
+helper does, and for nine of the ten shipped plugins it is enough: they
+are clients for somebody else's server, and the server is where a secret
+is written.
+
+`minivault` is the first kind sekreto OWNS, and owning a store means
+writing to it. So the question arrived as "does voxgig/plugin allow a
+plugin to expose a programmatic API of its own?", and the answer is that
+it already does, and has since its design was written: exports (plugin's
+design §11) are values an instance publishes for other plugins **and for
+the application**, read back as `host.exports('<ref>/<key>')`. Nothing
+was added to plugin for this. What was added is a how-to on its DOCS.md
+page, because the mechanism was documented for plugin-to-plugin use and
+the application-facing half was not written down.
+
+Concretely:
+
+- `minivault`'s `define` exports `provider` (the read half, which the
+  chain uses) and `vault` (the API). Both are ordinary exports and the
+  host treats them identically.
+- Because it publishes two, it cannot be built by `providerplugin` and
+  writes its `define` out. The one thing it must reproduce is the error
+  bridge: a `SekretoError` raised in `define` takes the code
+  `sekreto_error` so the host hands it back unchanged.
+- `vaultof(secrets)` / `minivault.VaultOf(sek, "")` is the one call that
+  reads the export back. It lives in the plugin, never on `Sekreto`,
+  because the core imports no plugin.
+- With no store named it uses the UNQUALIFIED ALIAS, which is plugin's
+  own rule: one vault in the chain resolves whatever it is called, two
+  raise `plugin_export_ambiguous` rather than one winning silently.
+
+The alternative considered and rejected was widening `providerplugin` to
+take a map of extra exports. It is the same function in twenty-three
+ports, and a change to it is a change to twenty-three ports plus the
+corpus, to save eight lines in the one definition that needs it.
+
+## The mini vault
+
+A store with no server: every secret a project owns, encrypted, in one
+binary file. A plugin rather than a built-in, because the built-in line
+is "reads at most a local file, and needs no crypto", and this needs
+AES-256-GCM and PBKDF2-HMAC-SHA256.
+
+**Restricted keys are cryptographic, not a policy check.** The design
+that makes that true:
+
+- A **root key** per vault, random, held only by a master key's ring.
+- Each secret's value key is `HMAC-SHA256(root, "skmv1:secret:" + name)`,
+  so a master reaches every name including ones written later, and a
+  restricted key holds a fixed set of derived keys and nothing that
+  produces another.
+- Each entry is addressed by `HMAC-SHA256(valuekey, "skmv1:id")`, so a
+  restricted key finds its entries without the file naming the rest.
+  Names are sealed under `HMAC-SHA256(root, "skmv1:names")`, which is why
+  only a master can CREATE a name and a restricted `write` key can only
+  overwrite what it was granted.
+- Each key's ring is sealed under PBKDF2 over its own passphrase, so no
+  master can read another key's ring. What `keys()` reports instead comes
+  from a per-record metadata blob sealed under
+  `HMAC-SHA256(root, "skmv1:meta")`, written when the master minted it.
+- Every blob's AAD binds it to its place, so no ciphertext can be moved
+  between key records or between names.
+
+Three consequences are stated rather than hidden. `rotate` drops every
+other key, because their rings are sealed under passphrases the rotating
+process does not have. `revoke` bars the live file and not a copy
+somebody took. And nothing here defends the file's INTEGRITY against a
+party who can write it: restricted keys bound what a reader learns.
+
+**A name outside the grant is a MISS, not an error.** The vault answers
+as the key that opened it, which is what makes a restricted vault in
+front of a broader store a workable chain. A missing vault FILE is the
+opposite and raises: a vault is configured deliberately, with a key, so
+its absence is a broken deployment rather than "no secrets here".
+
+**The corpus cannot carry it yet.** `spec/sekreto.json` runs against all
+twenty-three ports, so a `minivault` entry would fail the twenty-one that
+have no such kind. Until the last port has it, the ports that do carry it
+pin the on-disk format against `test/fixture/minivault.skmv`, a vault
+written by the canonical port that each of them reads. That covers the
+one thing per-port tests cannot: every port can write and read its own
+vault perfectly while disagreeing about where a length prefix goes.
+
 ## Loading is static, in every language
 
 The calling project imports the plugins it needs and passes them to the
@@ -212,6 +298,14 @@ split confusing to use.
   package to stay compatible with. `Options.Providers` is a list of
   specs, and a spec may carry a `Provider` already built for the custom
   case.
+- **One kind is not yet in every port.** `minivault` ships in typescript
+  and go. Rule 4's "the same four built-ins and the same ten plugin
+  kinds in every port" held exactly because no kind was ever added after
+  the split; adding one makes the set temporarily uneven, and the
+  alternative — writing it twenty-three times before anyone can use it —
+  is worse. The uneven set is visible in the README, in DOCS.md and in
+  the propagation order below, and it costs nothing in the corpus
+  because the corpus cannot name the kind until the set is even again.
 - **The Go workspace needed two `replace` directives** for the phantom
   `v0.0.0` versions in `testutil/go.mod`; see AGENTS.md. Generated into
   the gitignored `go.work`, never checked in.
@@ -242,3 +336,16 @@ php, perl, rust, java, csharp, kotlin (plugin ports exist; the same
 layout — built-ins in the core, one plugin per module or package under
 `plugins/`, a full set, a `plugins` option, the `sekreto_error` bridge,
 and the three seam tests).
+
+### `minivault`, separately
+
+typescript (canonical) ✅ → go ✅ → the remaining twenty-one.
+
+A port takes it when its language has AES-256-GCM and PBKDF2-HMAC-SHA256
+within the dependency rule — from the standard library, or written small
+in-tree the way go writes PBKDF2 because `crypto/pbkdf2` postdates the
+version it targets. The acceptance test is
+`test/fixture/minivault.skmv`: a port that reads it, key by key, and
+writes a vault the others read has the format right. A `minivault`
+section joins `spec/sekreto.aon` when the last port lands, and not
+before.

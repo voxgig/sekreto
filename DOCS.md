@@ -264,7 +264,14 @@ hands to `Sekreto` at construction.
 | `doppler` | `doppler` | HTTPS | `…/plugins/doppler` → `doppler` |
 | `infisical` | `infisical` | HTTPS | `…/plugins/infisical` → `infisical` |
 | `secretspec` | `secretspec` | child process | `…/plugins/secretspec` → `secretspec` |
-| *the full set* | all ten | everything | `@voxgig/sekreto/plugins` → `allplugins` |
+| `minivault` | `minivault` | AES-256-GCM, PBKDF2-HMAC-SHA256 | `…/plugins/minivault` → `minivault` |
+| *the full set* | every kind the port ships | everything | `@voxgig/sekreto/plugins` → `allplugins` |
+
+`minivault` ships in typescript and go so far; the other nine are in all
+twenty-three ports. A `minivault` case cannot join the shared spec until
+the last port has the kind, so the two that carry it pin the on-disk
+format against each other instead, through a vault file committed under
+`test/fixture/` that each of them reads.
 
 The full set is for the CLI, the conformance suite, and an app whose
 chain is decided at run time. Reaching one plugin through it reaches
@@ -316,6 +323,35 @@ pub const mystore = sekreto.providerplugin("mystore", make);
 A plugin that names a built-in kind replaces it — how a host substitutes
 an implementation, and never an accident, because the four names are
 documented.
+
+**A definition may publish more than one export**, and `minivault` is
+why the question comes up. voxgig/plugin's exports (its `DOCS.md`, *Expose
+a programmatic API*) let a definition offer an application values of its
+own: `inst.export(key, value)` during `define`, read back as
+`host.exports('<ref>/<key>')`. `providerplugin` publishes exactly one,
+under `provider`, because a provider is all a chain needs. A store that
+is also written to needs a second, so `minivault` writes its `define` out
+rather than calling the helper, publishes `vault` beside `provider`, and
+ships `vaultof(secrets)` as the one line that reads it back:
+
+```ts
+export const mystore: Definition = {
+  name: 'mystore',
+  define: (inst) => {
+    const store = makestore(inst.options)
+    inst.export('provider', { lookup: store.get, describe: () => 'mystore' })
+    inst.export('admin', store)
+  },
+}
+
+// and, from the application
+const admin = secrets.host.exports('mystore/admin')
+```
+
+Writing `define` by hand means reproducing one thing the helper does: a
+`SekretoError` raised there is given the code `sekreto_error` so that the
+host hands it back unchanged rather than wrapping it as
+`plugin_define_failed`.
 
 ### What the host holds
 
@@ -731,6 +767,170 @@ compiled in, or a typo in `backend`, produces exactly that message.
 
 ---
 
+### `minivault` — a local mini vault — plugin `minivault`
+
+```
+{ kind: 'minivault', file: string, passphrase: string,
+  vaultkey?: string, iterations?: number, create?: boolean }
+```
+
+Every secret a project owns, encrypted, in one binary file. There is
+nothing to run and nothing to reach over a socket, which is what makes it
+the store to reach for before there is a vault server — and the same
+chain reads HashiCorp or AWS in production by changing config.
+
+It is a plugin rather than a built-in kind for one reason: it needs
+crypto, and the four built-ins read at most a local file.
+
+`file` is the vault. `passphrase` unwraps `vaultkey`, which defaults to
+`master`. `iterations` sets the PBKDF2 round count when this handle
+**creates** a key, defaulting to 210000; reading uses whatever the file
+records for the key being opened. `create` makes the file if it is not
+there, and is off by default — a missing vault is far more often a broken
+deployment than a new one.
+
+A missing vault file is an **error**, not a miss. A vault is configured
+deliberately, with a key, so its absence is a broken deployment rather
+than "no secrets here", and answering a miss would send the chain on to a
+weaker store.
+
+`describe()` → `minivault:<file>`
+
+#### Keys
+
+A **master key** reads and writes every name, mints restricted keys and
+revokes them. A **restricted key** reads the names it was granted, and
+`write` decides whether it may overwrite them. It can never create a
+name: a new secret needs the master's name key.
+
+The restriction is the cryptography rather than a check the code
+performs. Each secret's value has a key of its own, derived from the root
+key and the name; a master holds the root key and reaches every name,
+including names written after it. A restricted key holds only the derived
+keys it was granted, and nothing that produces another, so the rest of
+the file is ciphertext to it in the way it is to a stranger.
+
+**A name outside the grant is a miss**, so a restricted vault in front of
+a broader store is a workable chain. The vault answers as the key that
+opened it: `list()` shows what that key can read, and it is never told
+what else is there.
+
+#### The programmatic API
+
+A chain reads. Writing a vault is a deliberate act, so it has an API of
+its own, published as a second export beside the provider:
+
+```ts
+import { createvault, minivault, openvault, vaultof } from '@voxgig/sekreto/plugins/minivault'
+
+const vault = createvault({ file: 'app.skmv', passphrase: MASTER })
+
+vault.set('api.token', 'tok01')
+vault.grant({ key: 'ci', passphrase: CI, names: ['api.token'] })
+
+// ...or off a chain that already has one
+const secrets = new Sekreto({
+  plugins: [minivault],
+  providers: [{ kind: 'minivault', file: 'app.skmv', passphrase: MASTER }],
+})
+vaultof(secrets).set('db.pass', 'hunter2')
+```
+
+```go
+vault, err := minivault.Create(&minivault.Options{File: "app.skmv", Passphrase: master})
+vault.Set("api.token", "tok01")
+vault.Grant(&minivault.GrantSpec{Key: "ci", Passphrase: ci, Names: []string{"api.token"}})
+
+api, err := minivault.VaultOf(sek, "")
+```
+
+| call | who | does |
+|---|---|---|
+| `open` / `Info` | any key | derive and read now rather than at first use |
+| `list` | any key | the names this key can read |
+| `get` / `has` | any key | one value, or a miss |
+| `set` | master, or a granted `write` key | write a value |
+| `remove` | master | drop a name |
+| `keys` | master | every key in the file, and what it may do |
+| `grant` | master | mint a restricted key |
+| `revoke` | master | drop a key |
+| `rotate` | master | a new root key, and every other key dropped |
+| `close` | any key | forget the derived keys |
+
+With no store named, `vaultof` uses voxgig/plugin's unqualified alias:
+one vault in the chain resolves whatever it is called, and two raise
+`plugin_export_ambiguous` rather than picking one.
+
+Nothing is read and no passphrase is stretched until a call needs the
+file, so a chain with a vault in it costs no key derivation until a
+secret is wanted. The cost is that a missing file surfaces at the first
+lookup rather than at construction.
+
+#### The file
+
+```
+magic 'SKMV', format version, kdf id, cipher id, one reserved byte
+key records:    id, salt, PBKDF2 rounds, the sealed ring, the sealed metadata
+secret records: a blinded lookup id, the sealed name, the sealed value
+```
+
+Integers are big-endian and every length precedes its bytes. Values are
+AES-256-GCM; passphrases are stretched with PBKDF2-HMAC-SHA256; each
+blob's additional authenticated data binds it to its place, so no
+ciphertext can be moved — a restricted key's ring cannot be given the
+master's id, and one secret's value cannot be served under a name it was
+never written for.
+
+**Nothing outside a key record is plaintext.** Secret names are sealed,
+and a secret is addressed by an id derived from its own key, so a
+restricted key finds what it was granted without the file naming the
+rest. What the file does show anyone is the key ids and how many secrets
+there are.
+
+A vault written by one port is read by every other. That is pinned by a
+committed vault file rather than left to agreement, because each port can
+write and read its own vault perfectly while disagreeing with every other
+about where a length prefix goes.
+
+#### What the mini vault protects
+
+It protects the **confidentiality of values** against someone holding the
+file, and against a restricted key holding part of it. Passphrases are
+stretched, values are sealed, and a tampered file fails its tag rather
+than decrypting to something plausible.
+
+It does not protect **integrity against a writer**. Anyone who can write
+the file can damage or replace it, key records included; restricted keys
+bound what a reader learns, not what a writer can wreck. Filesystem
+permissions are what stop that, and the vault is written with owner-only
+mode.
+
+**Writes are serialized within one process** — every handle on one file
+shares a lock, so two of them cannot each read a snapshot and then
+overwrite the other. Across processes they are not. A reader is always
+handed one whole vault, because a new one is created under `O_EXCL` and
+an update lands by atomic rename, but two processes writing at once can
+still lose an update. A vault is a single-writer store, and a deployment
+that needs more than that wants a vault server.
+
+A key id is at most **255 bytes**, which is what the format records it
+in.
+
+Revoking a key bars it from the live file, including for a handle that
+has already read: every call rechecks that its key record is still there
+and still the same, so a revoked handle stops rather than answering from
+what it derived earlier. It does not reach a copy somebody already took,
+so `rotate` is what takes a secret back: it draws
+a new root key, re-encrypts every value under it, and **drops every other
+key**, because their rings are sealed under passphrases the rotating
+process does not have. Re-grant afterwards.
+
+Passphrases live in memory for as long as the handle does, which is what
+lets `close` be undone by the next call. A vault is a local store, and a
+process that can read the memory of another has already won.
+
+---
+
 ## Errors
 
 Every failure is a `SekretoError` (Go: a `*SekretoError` value; Rust: a
@@ -764,6 +964,13 @@ every port:
 | `sekreto: cannot reach <url>: <why>` | the store could not be contacted |
 | `sekreto: malformed response from <url>` | a store answered 200 with a body that is not JSON |
 | `sekreto: hashicorp: unsupported kv version: <kv>` | a `kv` other than 1 or 2 |
+| `sekreto: minivault: no vault file: <file>` | a vault store whose file is not there, without `create` |
+| `sekreto: minivault: wrong passphrase for key <key>, or a damaged vault` | a key ring that would not unwrap |
+| `sekreto: minivault: no such key: <key>` | a `vaultkey` the file does not hold |
+| `sekreto: minivault: not a vault file` / `… is truncated` / `… has trailing bytes` | a file that is not a vault, or not all of one |
+| `sekreto: minivault: key <key> is read-only` | a write through a restricted key without `write` |
+| `sekreto: minivault: key <key> was not granted <name>` | a write to a name outside the grant |
+| `sekreto: minivault: <what> needs a master key, and <key> is restricted` | a master-only call through a restricted key |
 
 Those messages are pinned by `spec/sekreto.json`, so they cannot drift
 between ports without a test going red.

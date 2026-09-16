@@ -67,6 +67,47 @@ already built joins the chain as `&ProviderSpec{Provider: p}`. See
 The one dependency is `github.com/voxgig/plugin/go`, which itself has
 none, resolved from the module proxy like any other.
 
+## The mini vault
+
+`plugins/minivault/` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the port's
+worked example of a definition publishing an API beside its provider.
+
+```go
+import "github.com/voxgig/sekreto/go/plugins/minivault"
+
+vault, err := minivault.Create(&minivault.Options{File: "app.skmv", Passphrase: master})
+vault.Set("api.token", "tok01")
+vault.Grant(&minivault.GrantSpec{Key: "ci", Passphrase: ci, Names: []string{"api.token"}})
+
+secrets, err := sekreto.New(&sekreto.Options{
+    Plugins: []plugin.Definition{minivault.Plugin},
+    Providers: []*sekreto.ProviderSpec{
+        {Kind: "minivault", File: "app.skmv", VaultKey: "ci", Passphrase: ci},
+    },
+})
+
+token, err := secrets.Get("api.token")     // the chain reads
+api, err := minivault.VaultOf(secrets, "") // the same vault, as an API
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `VaultOf` reads it back
+off `Host()`. What each key may do, what the file holds, and what the
+whole thing does and does not protect are in
+[DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
+
+This package is where the port's crypto lives, which is the reason the
+kind is a plugin rather than a built-in. PBKDF2-HMAC-SHA256 is written
+out in `format.go`: `crypto/pbkdf2` arrived in Go 1.24 and this module
+targets 1.21, and a missing standard-library piece is written small
+rather than taken from a package.
+
+Ports carrying this kind read each other's files, which
+`plugins/minivault/minivault_test.go` checks against a committed vault
+written by the canonical port.
+
 ## Layout
 
 | | |
@@ -76,6 +117,7 @@ none, resolved from the module proxy like any other.
 | `sekreto/addr.go` | `CheckAddr`, the plaintext-address guard — pure, and on the spec |
 | `plugins/<kind>/` | one package per plugin; `plugins/aws` carries `sigv4.go` |
 | `plugins/httpjson/` | the bounded, redirect-refusing HTTP round-trip every wire plugin shares |
+| `plugins/minivault/` | the mini vault: `format.go` is the file and the keys, `minivault.go` the API and the definition |
 | `plugins/plugins.go` | the full set |
 | `sekreto/plugin_test.go`, `plugins/plugins_test.go` | the plugin seam, from both sides |
 | `testutil/sekreto_test.go` | the conformance suite |

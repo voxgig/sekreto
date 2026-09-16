@@ -8,7 +8,8 @@
 // Usage: sekreto-cli <api-url> [--source <source>] [--store <name>]
 //
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-// gcpsecrets azuresecrets onepassword doppler infisical secretspec chain
+// gcpsecrets azuresecrets onepassword doppler infisical secretspec
+// minivault chain
 //
 // Each source's configuration arrives in the environment variables its
 // own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -143,6 +144,15 @@ func chainfor(source string) []*sekreto.ProviderSpec {
 		Reason:  os.Getenv("SECRETSPEC_REASON"),
 	}
 
+	// The mini vault, read-only here: the CLI is an app that needs a
+	// secret, and writing one is a separate act with its own API.
+	minivaultspec := &sekreto.ProviderSpec{
+		Kind:       "minivault",
+		File:       os.Getenv("SEKRETO_VAULT_FILE"),
+		VaultKey:   os.Getenv("SEKRETO_VAULT_KEY"),
+		Passphrase: os.Getenv("SEKRETO_VAULT_PASSPHRASE"),
+	}
+
 	infisicalspec := &sekreto.ProviderSpec{
 		Kind:         "infisical",
 		Addr:         os.Getenv("INFISICAL_ADDR"),
@@ -183,6 +193,8 @@ func chainfor(source string) []*sekreto.ProviderSpec {
 		return []*sekreto.ProviderSpec{infisicalspec}
 	case "secretspec":
 		return []*sekreto.ProviderSpec{secretspecspec}
+	case "minivault":
+		return []*sekreto.ProviderSpec{minivaultspec}
 	default:
 		// The default: the chain an app would actually ship with - local
 		// overrides first, shared vaults last.

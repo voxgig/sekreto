@@ -79,6 +79,7 @@ env]` carries no AWS request signing and no HTTP vault client at all.
 | `doppler` | `doppler` | HTTPS |
 | `infisical` | `infisical` | HTTPS |
 | `secretspec` | `secretspec` | a child process |
+| `minivault` | `minivault` | AES-256-GCM and PBKDF2, from the standard library |
 
 The plugin mechanism is voxgig/plugin's, not sekreto's own: a provider
 kind is a plugin *definition*, a configured store is an *instance*
@@ -87,13 +88,55 @@ plugin host they live on. The core imports no plugin in any form, and
 loading is explicit rather than a side effect of importing: a `Sekreto`
 can build only the kinds its constructor was handed.
 
+`minivault` is the newest and is not yet everywhere: it ships in
+typescript and go, and the other twenty-one ports follow. Every kind
+preceding it is in all twenty-three. Because the shared spec runs against
+every port, a `minivault` case cannot join it until the last port has the
+kind, so until then the two ports that do carry it prove the format
+against each other, through a committed vault file each reads.
+
+### A mini vault, in one file
+
+`minivault` is the store to reach for before there is a vault server. The
+whole thing is one binary file: AES-256-GCM values, PBKDF2-HMAC-SHA256
+passphrases, nothing to run, and no socket to open. Moving to HashiCorp
+later is the config change this library exists to make possible.
+
+It has a **master key**, which reads and writes every name, and
+**restricted keys**, which read the names they were granted. The
+restriction is cryptographic, so a copy of the file plus a restricted
+passphrase yields what was granted and nothing else.
+
+```ts
+import { Sekreto } from '@voxgig/sekreto'
+import { createvault, minivault, vaultof } from '@voxgig/sekreto/plugins/minivault'
+
+const vault = createvault({ file: 'app.skmv', passphrase: MASTER })
+vault.set('api.token', 'tok01')
+vault.grant({ key: 'ci', passphrase: CI, names: ['api.token'] })
+
+const secrets = new Sekreto({
+  plugins: [minivault],
+  providers: [{ kind: 'minivault', file: 'app.skmv', vaultkey: 'ci', passphrase: CI }],
+})
+
+await secrets.get('api.token')   // 'tok01', through the chain
+vaultof(secrets)                 // the same vault, as an API
+```
+
+Writing is not something a chain does, so the writing half is an API of
+its own. `vaultof` reaches it off the plugin host, because voxgig/plugin
+lets a definition publish values beside the provider the host asked it
+for. [`DOCS.md`](DOCS.md) has the format, the key rules, and what they
+do and do not protect.
+
 ### Per language
 
 A port adopts the plugin architecture once voxgig/plugin has a port of
 its language to stand on. Until then it ships every kind in one module
-behind a `kind` switch, with the same four built-ins and the same ten
-plugin kinds — the *set* is identical everywhere; only how the store
-clients are loaded differs.
+behind a `kind` switch, with the same four built-ins and the same store
+clients — the *set* is identical everywhere apart from `minivault`; only
+how the store clients are loaded differs.
 
 | | plugin architecture | plugins live in | voxgig/plugin port |
 |---|---|---|---|

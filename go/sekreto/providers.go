@@ -124,6 +124,17 @@ type ProviderSpec struct {
 	// infisical: the environment slug and secret path.
 	Environment string `json:"environment,omitempty"`
 	Path        string `json:"path,omitempty"`
+	// Passphrase is the minivault passphrase that unwraps VaultKey.
+	Passphrase string `json:"passphrase,omitempty"`
+	// VaultKey is which key in a minivault file to open with, defaulting
+	// to `master`. Named apart from Key and KeyID because those already
+	// mean a secret name and an AWS access key id.
+	VaultKey string `json:"vaultkey,omitempty"`
+	// Iterations is minivault's PBKDF2 round count, used only when a key
+	// is created.
+	Iterations int `json:"iterations,omitempty"`
+	// Create makes a minivault file if it is not there.
+	Create bool `json:"create,omitempty"`
 
 	// Provider is a provider already built, joining the chain as it is.
 	// Never serialized: a live provider is not data.
@@ -435,5 +446,6 @@ var Kinds = struct {
 	Plugin: []string{
 		"hashicorp", "boru", "awssecrets", "awsparams", "gcpsecrets",
 		"azuresecrets", "onepassword", "doppler", "infisical", "secretspec",
+		"minivault",
 	},
 }
