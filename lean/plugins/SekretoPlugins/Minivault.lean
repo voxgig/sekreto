@@ -55,6 +55,8 @@ are pinned by the vaults in test/fixture rather than left to agreement
 between implementations.
 -/
 
+import Std.Sync.Mutex
+
 import Sekreto.Text
 import Sekreto.Json
 import Sekreto.Core
@@ -768,9 +770,56 @@ def vaultget (v : Vault) (name : String) : IO (Option String) := do
 def vaulthas (v : Vault) (name : String) : IO Bool := do
   return (← vaultget v name).isSome
 
+/-- The lock every handle on one file shares.
+
+Each `Vault` is its own value, so two handles on one path did not
+coordinate: both could finish `load` before either saved, and the second
+rename then discarded the first one's change while reporting success.
+Keyed by the path made absolute, so two handles spelled differently still
+meet.
+
+A guarantee WITHIN one process, which is what DOCS.md promises and what
+the go port arranges the same way. Two processes still race, and the
+format's answer to that is the exclusive create and the atomic rename: a
+reader sees one whole vault or the other, never half of one. -/
+initialize vaultlocks : IO.Ref (List (String × Std.BaseMutex)) ← IO.mkRef []
+
+private def lockfor (file : String) : IO Std.BaseMutex := do
+  let key ← tryCatch (do return (← IO.FS.realPath file).toString)
+    (fun _ => pure file)
+
+  match (← vaultlocks.get).find? (·.1 == key) with
+  | some pair => return pair.2
+  | none =>
+    let one ← Std.BaseMutex.new
+    -- The table is read and written under no lock of its own, so two
+    -- threads racing to register the SAME path could each make a mutex
+    -- and only one survive. `modifyGet` is one atomic step on the ref, so
+    -- the loser takes the winner's rather than its own.
+    vaultlocks.modifyGet (fun held =>
+      match held.find? (·.1 == key) with
+      | some pair => (pair.2, held)
+      | none => (one, (key, one) :: held))
+
+/-- Run a mutation with that lock held.
+
+`BaseMutex` is NOT re-entrant, so the five mutating calls must not reach
+one another while it is held - and none of them does: `vaultrotate` reads
+through `vaultlist` and `vaultget`, and every one of them writes through
+`save`, which takes no lock of its own. -/
+private def locked {α : Type} (v : Vault) (body : IO α) : IO α := do
+  let one ← lockfor v.file
+  one.lock
+  let out ← tryCatch (do return Except.ok (← body))
+    (fun err => return Except.error err)
+  one.unlock
+  match out with
+  | .ok value => return value
+  | .error err => throw err
+
 /-- Write a value. A master writes any name; a restricted key holding
 `write` overwrites the names it was granted, and creates none. -/
-def vaultset (v : Vault) (name value : String) : IO Unit := do
+def vaultset (v : Vault) (name value : String) : IO Unit := locked v do
   let _ ← ofResult (checkname name)
   let (file, open') ← load v
 
@@ -799,7 +848,7 @@ def vaultset (v : Vault) (name value : String) : IO Unit := do
     save v { file with entries := entries }
 
 /-- Drop a name. Master only. -/
-def vaultremove (v : Vault) (name : String) : IO Unit := do
+def vaultremove (v : Vault) (name : String) : IO Unit := locked v do
   let _ ← ofResult (checkname name)
   let (file, open') ← load v
   let root ← rootof v open' "removing a secret"
@@ -841,7 +890,7 @@ def vaultkeys (v : Vault) : IO (List VaultKeyInfo) := do
   return out
 
 /-- Mint a restricted key. Master only. -/
-def vaultgrant (v : Vault) (spec : GrantSpec) : IO Unit := do
+def vaultgrant (v : Vault) (spec : GrantSpec) : IO Unit := locked v do
   let (file, open') ← load v
   let root ← rootof v open' "granting a key"
 
@@ -869,7 +918,7 @@ def vaultgrant (v : Vault) (spec : GrantSpec) : IO Unit := do
 Anyone who already copied the file keeps whatever that key could read, so
 revoking bars future reads of the LIVE file and `vaultrotate` is what
 takes a secret back. -/
-def vaultrevoke (v : Vault) (held : String) : IO Unit := do
+def vaultrevoke (v : Vault) (held : String) : IO Unit := locked v do
   let (file, open') ← load v
   let _ ← rootof v open' "revoking a key"
 
@@ -884,7 +933,7 @@ OTHER KEY. Master only.
 The other keys go because they must: their rings are sealed under
 passphrases this process does not have, so there is no way to hand them
 keys they can unwrap. Re-grant afterwards. -/
-def vaultrotate (v : Vault) : IO Unit := do
+def vaultrotate (v : Vault) : IO Unit := locked v do
   let (file, open') ← load v
   let oldroot ← rootof v open' "rotating the vault"
   let iters := match keyrecordof file v.key with

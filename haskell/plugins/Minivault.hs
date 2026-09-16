@@ -85,7 +85,8 @@ module Minivault
   )
 where
 
-import Control.Exception (SomeException, throwIO, try)
+import Control.Concurrent.MVar (MVar, newMVar, withMVar)
+import Control.Exception (SomeException, catch, throwIO, try)
 import Control.Monad (when)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
@@ -110,7 +111,7 @@ import Providers
     takeprovider,
   )
 import Foreign.C.String (withCString)
-import System.Directory (removeFile, renameFile)
+import System.Directory (canonicalizePath, removeFile, renameFile)
 import System.IO.Unsafe (unsafePerformIO)
 import System.IO (hClose)
 import System.Posix.IO (fdToHandle)
@@ -920,8 +921,46 @@ vaulthas v name = maybe False (const True) <$> vaultget v name
 
 -- | Write a value. A master writes any name; a restricted key holding
 -- @write@ overwrites the names it was granted, and creates none.
+-- | The lock every handle on one file shares.
+--
+-- Each 'Vault' is its own value, so two handles on one path did not
+-- coordinate: both could finish 'load' before either saved, and the
+-- second 'renameFile' then discarded the first one's change while
+-- reporting success. Keyed by the ABSOLUTE path, so two handles spelled
+-- differently still meet.
+--
+-- A guarantee WITHIN one process, which is what DOCS.md promises and what
+-- the go port arranges the same way. Two processes still race, and the
+-- format's answer to that is the exclusive create and the atomic rename:
+-- a reader sees one whole vault or the other, never half of one.
+{-# NOINLINE vaultlocks #-}
+vaultlocks :: IORef [(String, MVar ())]
+vaultlocks = unsafePerformIO (newIORef [])
+
+lockfor :: String -> IO (MVar ())
+lockfor file = do
+  key <- catch (canonicalizePath file) (\err -> let _ = (err :: SomeException) in pure file)
+
+  fresh <- newMVar ()
+  atomicModifyIORef' vaultlocks (step key fresh)
+  where
+    step key fresh held = case lookup key held of
+      Just one -> (held, one)
+      Nothing -> ((key, fresh) : held, fresh)
+
+-- | Run a mutation with that lock held.
+--
+-- 'MVar' is NOT re-entrant, so the five mutating calls must not reach one
+-- another while it is held - and none of them does: 'vaultrotate' reads
+-- through 'vaultlist' and 'vaultget', and every one of them writes
+-- through 'save', which takes no lock of its own.
+locked :: Vault -> IO a -> IO a
+locked v body = do
+  one <- lockfor (vfile v)
+  withMVar one (const body)
+
 vaultset :: Vault -> String -> String -> IO ()
-vaultset v name value = do
+vaultset v name value = locked v $ do
   _ <- forced (checkname name)
   (file, open) <- load v
 
@@ -954,7 +993,7 @@ vaultset v name value = do
 
 -- | Drop a name. Master only.
 vaultremove :: Vault -> String -> IO ()
-vaultremove v name = do
+vaultremove v name = locked v $ do
   _ <- forced (checkname name)
   (file, open) <- load v
   root <- rootof v open "removing a secret"
@@ -996,7 +1035,7 @@ vaultkeys v = do
 
 -- | Mint a restricted key. Master only.
 vaultgrant :: Vault -> GrantSpec -> IO ()
-vaultgrant v spec = do
+vaultgrant v spec = locked v $ do
   (file, open) <- load v
   root <- rootof v open "granting a key"
 
@@ -1028,7 +1067,7 @@ vaultgrant v spec = do
 -- so revoking bars future reads of the LIVE file and 'vaultrotate' is
 -- what takes a secret back.
 vaultrevoke :: Vault -> String -> IO ()
-vaultrevoke v held = do
+vaultrevoke v held = locked v $ do
   (file, open) <- load v
   _ <- rootof v open "revoking a key"
 
@@ -1046,7 +1085,7 @@ vaultrevoke v held = do
 -- passphrases this process does not have, so there is no way to hand them
 -- keys they can unwrap. Re-grant afterwards.
 vaultrotate :: Vault -> IO ()
-vaultrotate v = do
+vaultrotate v = locked v $ do
   (file, open) <- load v
   oldroot <- rootof v open "rotating the vault"
 

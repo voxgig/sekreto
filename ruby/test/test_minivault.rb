@@ -365,6 +365,35 @@ class TestMiniVault < Minitest::Test
     end
   end
 
+  # TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each MiniVault
+  # is its own object with its own snapshot, so without the shared
+  # per-path lock both threads finish `load` before either saves and the
+  # second rename discards the first one's secret while reporting success.
+  # DOCS.md promises this within one process.
+  def test_two_handles_writing_at_once_lose_nothing
+    vault = fresh
+    path = vault.file
+    rounds = 40
+    broke = []
+    guard = Mutex.new
+
+    writer = lambda do |tag|
+      Thread.new do
+        begin
+          mine = VoxgigSekreto.openvault('file' => path, 'passphrase' => MASTER)
+          rounds.times { |round| mine.set("t#{tag}.n#{round}", "v#{round}") }
+        rescue StandardError => err
+          guard.synchronize { broke << err.message }
+        end
+      end
+    end
+
+    [writer.call('one'), writer.call('two')].each(&:join)
+
+    assert_empty broke
+    assert_equal 2 * rounds, vault.list.length
+  end
+
   # An EMPTY key is no key, so it means `master`. It is not a contrived
   # case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
   # expands to the empty string rather than to nothing at all - and an

@@ -28,6 +28,8 @@
 #include <functional>
 #include <iostream>
 #include <string>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 #include "Minivault.hpp"
@@ -580,6 +582,40 @@ void avaultneedsafileandapassphrase() {
         "a vault needs a passphrase", "no passphrase");
 }
 
+// TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each MiniVault
+// is its own object with its own snapshot, so without the shared per-path
+// lock both threads finish `load()` before either saves and the second
+// rename discards the first one's secret while reporting success. DOCS.md
+// promises this within one process.
+void twohandleswritingatoncelosenothing() {
+  auto vault = fresh();
+  const std::string path = vault->file();
+  const int rounds = 40;
+
+  std::mutex guard;
+  std::vector<std::string> broke;
+
+  const auto writer = [&](const std::string& tag) {
+    try {
+      auto mine = openas(path, "", MASTER);
+      for (int round = 0; round < rounds; round++) {
+        mine->set("t" + tag + ".n" + std::to_string(round), "v" + std::to_string(round));
+      }
+    } catch (const std::exception& err) {
+      std::lock_guard<std::mutex> held(guard);
+      broke.push_back(err.what());
+    }
+  };
+
+  std::thread one(writer, "one");
+  std::thread two(writer, "two");
+  one.join();
+  two.join();
+
+  truth(broke.empty(), broke.empty() ? "a writer raised" : ("a writer raised: " + broke[0]));
+  same(std::to_string(vault->list().size()), std::to_string(2 * rounds), "every write survived");
+}
+
 // An EMPTY key is no key, so it means `master`. It is not a contrived
 // case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
 // expands to the empty string rather than to nothing at all.
@@ -883,6 +919,7 @@ int main(int argc, char** argv) {
   testcase("damaged", adamagedfileisrefused);
   testcase("createover", creatingoveranexistingvaultisrefused);
   testcase("needsfile", avaultneedsafileandapassphrase);
+  testcase("concurrent", twohandleswritingatoncelosenothing);
   testcase("emptykey", anemptykeymeansthemasterkey);
   testcase("createflag", createmakesthefileonlywhenasked);
   testcase("longkeyid", akeyidlongerthantheformatallows);

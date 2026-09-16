@@ -385,6 +385,35 @@ module VoxgigSekreto
   # `get` answers for those and misses on the rest, and the master-only
   # methods refuse for any other key. Nothing is read or derived until the
   # first call that needs the file.
+  # THE LOCK EVERY HANDLE ON ONE FILE SHARES.
+  #
+  # Each MiniVault is its own object, so two handles on one path did not
+  # coordinate: both could finish `load` before either saved, and the
+  # second `File.rename` then discarded the first one's change while
+  # reporting success. Keyed by the ABSOLUTE path, so two handles spelled
+  # differently still meet.
+  #
+  # A guarantee WITHIN one process, which is what DOCS.md promises and
+  # what the go port arranges the same way. Two processes still race, and
+  # the format's answer to that is the exclusive create and the atomic
+  # rename: a reader sees one whole vault or the other, never half of one.
+  # Ruby's Mutex is NOT re-entrant, so the five mutating methods must not
+  # call one another while holding it - and none of them does: `rotate`
+  # reads through `list` and `get`, and every one of them writes through
+  # `save`, which takes no lock of its own.
+  MINIVAULT_LOCKSMUTEX = Mutex.new
+  MINIVAULT_LOCKTABLE = {}
+
+  def self.minivaultlockfor(file)
+    key = begin
+      File.expand_path(file)
+    rescue StandardError
+      file
+    end
+
+    MINIVAULT_LOCKSMUTEX.synchronize { MINIVAULT_LOCKTABLE[key] ||= Mutex.new }
+  end
+
   class MiniVault
     def initialize(options)
       opts = options || {}
@@ -475,62 +504,70 @@ module VoxgigSekreto
     # Write a value. A master writes any name; a restricted key holding
     # `write` overwrites the names it was granted, and creates none.
     def set(name, value)
-      VoxgigSekreto.checkname(name)
-      VoxgigSekreto.minivaultfail('a secret value must be text: ' + name) unless value.is_a?(String)
+      # Every write on this file, from any handle in this process,
+      # serializes here; see minivaultlockfor.
+      VoxgigSekreto.minivaultlockfor(@file).synchronize do
+        VoxgigSekreto.checkname(name)
+        VoxgigSekreto.minivaultfail('a secret value must be text: ' + name) unless value.is_a?(String)
 
-      vault, opened = load
+        vault, opened = load
 
-      unless opened['info']['write']
-        VoxgigSekreto.minivaultfail('key ' + opened['info']['key'] + ' is read-only')
+        unless opened['info']['write']
+          VoxgigSekreto.minivaultfail('key ' + opened['info']['key'] + ' is read-only')
+        end
+
+        key = keyfor(opened, name)
+        if key.nil?
+          VoxgigSekreto.minivaultfail('key ' + opened['info']['key'] + ' was not granted ' + name)
+        end
+
+        sealedvalue = VoxgigSekreto.minivaultseal(key, value, MiniVaultFormat::AAD_SECRET + name)
+        id = VoxgigSekreto.minivaultentryid(key)
+        at = vault['entries'].index { |entry| entry['id'] == id }
+
+        if at
+          vault['entries'][at] = {
+            'id' => vault['entries'][at]['id'],
+            'name' => vault['entries'][at]['name'],
+            'value' => sealedvalue
+          }
+        else
+          # A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
+          # restricted key with `write` updates what it was granted and
+          # cannot grow the vault.
+          root = rootof(opened, 'creating the secret ' + name)
+          vault['entries'].push({
+                                  'id' => id,
+                                  'name' => VoxgigSekreto.minivaultseal(
+                                    VoxgigSekreto.minivaulthmac(root, MiniVaultFormat::LABEL_NAMES),
+                                    name, MiniVaultFormat::AAD_NAME
+                                  ),
+                                  'value' => sealedvalue
+                                })
+        end
+
+        save(vault)
+        nil
       end
-
-      key = keyfor(opened, name)
-      if key.nil?
-        VoxgigSekreto.minivaultfail('key ' + opened['info']['key'] + ' was not granted ' + name)
-      end
-
-      sealedvalue = VoxgigSekreto.minivaultseal(key, value, MiniVaultFormat::AAD_SECRET + name)
-      id = VoxgigSekreto.minivaultentryid(key)
-      at = vault['entries'].index { |entry| entry['id'] == id }
-
-      if at
-        vault['entries'][at] = {
-          'id' => vault['entries'][at]['id'],
-          'name' => vault['entries'][at]['name'],
-          'value' => sealedvalue
-        }
-      else
-        # A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
-        # restricted key with `write` updates what it was granted and
-        # cannot grow the vault.
-        root = rootof(opened, 'creating the secret ' + name)
-        vault['entries'].push({
-                                'id' => id,
-                                'name' => VoxgigSekreto.minivaultseal(
-                                  VoxgigSekreto.minivaulthmac(root, MiniVaultFormat::LABEL_NAMES),
-                                  name, MiniVaultFormat::AAD_NAME
-                                ),
-                                'value' => sealedvalue
-                              })
-      end
-
-      save(vault)
-      nil
     end
 
     # Drop a name. Master only.
     def remove(name)
-      VoxgigSekreto.checkname(name)
-      vault, opened = load
-      root = rootof(opened, 'removing a secret')
+      # Every write on this file, from any handle in this process,
+      # serializes here; see minivaultlockfor.
+      VoxgigSekreto.minivaultlockfor(@file).synchronize do
+        VoxgigSekreto.checkname(name)
+        vault, opened = load
+        root = rootof(opened, 'removing a secret')
 
-      wanted = VoxgigSekreto.minivaultentryid(VoxgigSekreto.minivaultsecretkey(root, name))
-      at = vault['entries'].index { |entry| entry['id'] == wanted }
-      VoxgigSekreto.minivaultfail('no such secret: ' + name) if at.nil?
+        wanted = VoxgigSekreto.minivaultentryid(VoxgigSekreto.minivaultsecretkey(root, name))
+        at = vault['entries'].index { |entry| entry['id'] == wanted }
+        VoxgigSekreto.minivaultfail('no such secret: ' + name) if at.nil?
 
-      vault['entries'].delete_at(at)
-      save(vault)
-      nil
+        vault['entries'].delete_at(at)
+        save(vault)
+        nil
+      end
     end
 
     # Every key in the file, with what it may do. Master only.
@@ -551,35 +588,39 @@ module VoxgigSekreto
 
     # Mint a restricted key. Master only.
     def grant(spec)
-      vault, opened = load
-      root = rootof(opened, 'granting a key')
+      # Every write on this file, from any handle in this process,
+      # serializes here; see minivaultlockfor.
+      VoxgigSekreto.minivaultlockfor(@file).synchronize do
+        vault, opened = load
+        root = rootof(opened, 'granting a key')
 
-      spec ||= {}
-      VoxgigSekreto.minivaultcheckid(spec['key'], 'a grant needs a key id')
-      unless spec['passphrase'].is_a?(String) && !spec['passphrase'].empty?
-        VoxgigSekreto.minivaultfail('a grant needs a passphrase')
+        spec ||= {}
+        VoxgigSekreto.minivaultcheckid(spec['key'], 'a grant needs a key id')
+        unless spec['passphrase'].is_a?(String) && !spec['passphrase'].empty?
+          VoxgigSekreto.minivaultfail('a grant needs a passphrase')
+        end
+        if vault['keys'].any? { |k| k['id'] == spec['key'] }
+          VoxgigSekreto.minivaultfail('key already exists: ' + spec['key'])
+        end
+
+        names = (spec['names'] || []).sort
+        grants = {}
+        names.each do |name|
+          VoxgigSekreto.checkname(name)
+          grants[name] = VoxgigSekreto.minivaultb64(VoxgigSekreto.minivaultsecretkey(root, name))
+        end
+
+        write = spec['write'] == true
+        vault['keys'].push(sealkey(root, spec['key'], spec['passphrase'],
+                                   spec['iterations'] || @iterations,
+                                   { 'v' => MiniVaultFormat::FORMAT, 'write' => write,
+                                     'grants' => grants },
+                                   { 'v' => MiniVaultFormat::FORMAT, 'master' => false,
+                                     'write' => write, 'grants' => names }))
+
+        save(vault)
+        nil
       end
-      if vault['keys'].any? { |k| k['id'] == spec['key'] }
-        VoxgigSekreto.minivaultfail('key already exists: ' + spec['key'])
-      end
-
-      names = (spec['names'] || []).sort
-      grants = {}
-      names.each do |name|
-        VoxgigSekreto.checkname(name)
-        grants[name] = VoxgigSekreto.minivaultb64(VoxgigSekreto.minivaultsecretkey(root, name))
-      end
-
-      write = spec['write'] == true
-      vault['keys'].push(sealkey(root, spec['key'], spec['passphrase'],
-                                 spec['iterations'] || @iterations,
-                                 { 'v' => MiniVaultFormat::FORMAT, 'write' => write,
-                                   'grants' => grants },
-                                 { 'v' => MiniVaultFormat::FORMAT, 'master' => false,
-                                   'write' => write, 'grants' => names }))
-
-      save(vault)
-      nil
     end
 
     # Drop a key. Master only.
@@ -588,17 +629,21 @@ module VoxgigSekreto
     # read, so revoking bars future reads of the LIVE file and `rotate` is
     # what takes a secret back.
     def revoke(key)
-      vault, opened = load
-      rootof(opened, 'revoking a key')
+      # Every write on this file, from any handle in this process,
+      # serializes here; see minivaultlockfor.
+      VoxgigSekreto.minivaultlockfor(@file).synchronize do
+        vault, opened = load
+        rootof(opened, 'revoking a key')
 
-      VoxgigSekreto.minivaultfail('a key cannot revoke itself: ' + key) if key == opened['info']['key']
+        VoxgigSekreto.minivaultfail('a key cannot revoke itself: ' + key) if key == opened['info']['key']
 
-      at = vault['keys'].index { |k| k['id'] == key }
-      VoxgigSekreto.minivaultfail('no such key: ' + key) if at.nil?
+        at = vault['keys'].index { |k| k['id'] == key }
+        VoxgigSekreto.minivaultfail('no such key: ' + key) if at.nil?
 
-      vault['keys'].delete_at(at)
-      save(vault)
-      nil
+        vault['keys'].delete_at(at)
+        save(vault)
+        nil
+      end
     end
 
     # A new root key, every value re-encrypted under it, and EVERY OTHER
@@ -607,46 +652,50 @@ module VoxgigSekreto
     # The other keys go because they must: their rings are sealed under
     # passphrases this process does not have. Re-grant afterwards.
     def rotate
-      vault, opened = load
-      rootof(opened, 'rotating the vault')
+      # Every write on this file, from any handle in this process,
+      # serializes here; see minivaultlockfor.
+      VoxgigSekreto.minivaultlockfor(@file).synchronize do
+        vault, opened = load
+        rootof(opened, 'rotating the vault')
 
-      # Read everything out under the old root before anything changes:
-      # once the root is replaced the old derived keys are unreachable.
-      plain = list.map { |name| [name, get(name)] }
+        # Read everything out under the old root before anything changes:
+        # once the root is replaced the old derived keys are unreachable.
+        plain = list.map { |name| [name, get(name)] }
 
-      root = VoxgigSekreto.minivaultrandom(MiniVaultFormat::KEYLEN)
-      namekey = VoxgigSekreto.minivaulthmac(root, MiniVaultFormat::LABEL_NAMES)
+        root = VoxgigSekreto.minivaultrandom(MiniVaultFormat::KEYLEN)
+        namekey = VoxgigSekreto.minivaulthmac(root, MiniVaultFormat::LABEL_NAMES)
 
-      entries = plain.map do |name, value|
-        key = VoxgigSekreto.minivaultsecretkey(root, name)
-        {
-          'id' => VoxgigSekreto.minivaultentryid(key),
-          'name' => VoxgigSekreto.minivaultseal(namekey, name, MiniVaultFormat::AAD_NAME),
-          'value' => VoxgigSekreto.minivaultseal(key, value,
-                                                 MiniVaultFormat::AAD_SECRET + name)
+        entries = plain.map do |name, value|
+          key = VoxgigSekreto.minivaultsecretkey(root, name)
+          {
+            'id' => VoxgigSekreto.minivaultentryid(key),
+            'name' => VoxgigSekreto.minivaultseal(namekey, name, MiniVaultFormat::AAD_NAME),
+            'value' => VoxgigSekreto.minivaultseal(key, value,
+                                                   MiniVaultFormat::AAD_SECRET + name)
+          }
+        end
+
+        record = vault['keys'].find { |k| k['id'] == @keyid }
+
+        fresh = sealkey(root, @keyid, @passphrase, record['iters'],
+                        { 'v' => MiniVaultFormat::FORMAT, 'write' => true,
+                          'root' => VoxgigSekreto.minivaultb64(root) },
+                        { 'v' => MiniVaultFormat::FORMAT, 'master' => true, 'write' => true,
+                          'grants' => [] })
+
+        # SAVE FIRST, adopt second. A handle holding the new root over a
+        # file that still holds the old one reads nothing and says the vault
+        # is damaged.
+        save({ 'keys' => [fresh], 'entries' => entries })
+
+        @opened = {
+          'info' => { 'key' => @keyid, 'master' => true, 'write' => true, 'grants' => [] },
+          'root' => root,
+          'grants' => {},
+          'ring' => fresh['ring']
         }
+        nil
       end
-
-      record = vault['keys'].find { |k| k['id'] == @keyid }
-
-      fresh = sealkey(root, @keyid, @passphrase, record['iters'],
-                      { 'v' => MiniVaultFormat::FORMAT, 'write' => true,
-                        'root' => VoxgigSekreto.minivaultb64(root) },
-                      { 'v' => MiniVaultFormat::FORMAT, 'master' => true, 'write' => true,
-                        'grants' => [] })
-
-      # SAVE FIRST, adopt second. A handle holding the new root over a
-      # file that still holds the old one reads nothing and says the vault
-      # is damaged.
-      save({ 'keys' => [fresh], 'entries' => entries })
-
-      @opened = {
-        'info' => { 'key' => @keyid, 'master' => true, 'write' => true, 'grants' => [] },
-        'root' => root,
-        'grants' => {},
-        'ring' => fresh['ring']
-      }
-      nil
     end
 
     private

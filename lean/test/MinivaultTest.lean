@@ -402,6 +402,32 @@ def avaultneedsafileandapassphrase : IO Unit := do
   holds "no passphrase" "a vault needs a passphrase"
     (← refusal "no passphrase" (openvault (vaultopts "v.skmv" "" "")))
 
+/-- TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each `Vault`
+is its own value with its own snapshot, so without the shared per-path
+lock both tasks finish `load` before either saves and the second rename
+discards the first one's secret while reporting success. DOCS.md promises
+this within one process. -/
+def twohandleswritingatoncelosenothing : IO Unit := do
+  let v ← fresh
+  let path := v.file
+  let rounds := 40
+
+  let writer (tag : String) : IO (Task (Except IO.Error Unit)) :=
+    IO.asTask do
+      let mine ← openas path "" master
+      for round in [0 : rounds] do
+        vaultset mine ("t" ++ tag ++ ".n" ++ toString round) ("v" ++ toString round)
+
+  let one ← writer "one"
+  let two ← writer "two"
+
+  for held in [one, two] do
+    match held.get with
+    | .ok _ => pure ()
+    | .error err => raisefail ("a writer raised: " ++ why err)
+
+  same "every write survived" (toString (2 * rounds)) (toString (← vaultlist v).length)
+
 /-- An EMPTY key is no key, so it means `master`. It is not a contrived
 case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
 expands to the empty string rather than to nothing at all. -/
@@ -660,6 +686,7 @@ def main (args : List String) : IO UInt32 := do
   testcase "damaged" adamagedfileisrefused
   testcase "createover" creatingoveranexistingvaultisrefused
   testcase "needsfile" avaultneedsafileandapassphrase
+  testcase "concurrent" twohandleswritingatoncelosenothing
   testcase "emptykey" anemptykeymeansthemasterkey
   testcase "createflag" createmakesthefileonlywhenasked
   testcase "longkeyid" akeyidlongerthantheformatallows

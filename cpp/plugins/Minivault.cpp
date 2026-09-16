@@ -7,7 +7,10 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <map>
+#include <memory>
 #include <mutex>
 
 #include "Json.hpp"
@@ -931,68 +934,111 @@ std::optional<std::string> MiniVault::get(const std::string& name) {
 
 bool MiniVault::has(const std::string& name) { return get(name).has_value(); }
 
+// THE LOCK EVERY HANDLE ON ONE FILE SHARES.
+//
+// Each MiniVault is its own object, so two handles on one path did not
+// coordinate: both could finish `load()` before either saved, and the
+// second rename then discarded the first one's change while reporting
+// success. Keyed by the ABSOLUTE path, so two handles spelled differently
+// still meet.
+//
+// A guarantee WITHIN one process, which is what DOCS.md promises and what
+// the go port arranges the same way. Two processes still race, and the
+// format's answer to that is the exclusive create and the atomic rename:
+// a reader sees one whole vault or the other, never half of one.
+//
+// `recursive_mutex`, because it costs nothing and a mutating method that
+// ever reached another would otherwise deadlock rather than misbehave.
+std::recursive_mutex& lockfor(const std::string& file) {
+  static std::mutex table;
+  static std::map<std::string, std::unique_ptr<std::recursive_mutex>> held;
+
+  std::string key = file;
+  try {
+    key = std::filesystem::absolute(file).lexically_normal().string();
+  } catch (const std::exception&) {
+    key = file;
+  }
+
+  std::lock_guard<std::mutex> guard(table);
+  std::unique_ptr<std::recursive_mutex>& one = held[key];
+  if (nullptr == one) {
+    one = std::make_unique<std::recursive_mutex>();
+  }
+
+  return *one;
+}
+
 void MiniVault::set(const std::string& name, const std::string& value) {
-  checkname(name);
+  // Every write on this file, from any handle in this process,
+  // serializes here; see lockfor.
+  std::lock_guard<std::recursive_mutex> guard(lockfor(file_));
 
-  minivaultfile::Vault file = read();
+    checkname(name);
 
-  if (!write_) fail("key " + key_ + " is read-only");
+    minivaultfile::Vault file = read();
 
-  const std::optional<std::vector<uint8_t>> key = keyfor(name);
-  if (!key.has_value()) fail("key " + key_ + " was not granted " + name);
+    if (!write_) fail("key " + key_ + " is read-only");
 
-  const Sealed box = seal(*key, bytesof(value), std::string(AAD_SECRET) + name);
-  const std::vector<uint8_t> id = entryid(*key);
+    const std::optional<std::vector<uint8_t>> key = keyfor(name);
+    if (!key.has_value()) fail("key " + key_ + " was not granted " + name);
 
-  bool found = false;
-  for (EntryRecord& entry : file.entries) {
-    if (id == entry.id) {
-      entry.value = box;
-      found = true;
-      break;
+    const Sealed box = seal(*key, bytesof(value), std::string(AAD_SECRET) + name);
+    const std::vector<uint8_t> id = entryid(*key);
+
+    bool found = false;
+    for (EntryRecord& entry : file.entries) {
+      if (id == entry.id) {
+        entry.value = box;
+        found = true;
+        break;
+      }
     }
-  }
 
-  if (!found) {
-    // A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
-    // restricted key with `write` updates what it was granted and cannot
-    // grow the vault, which is what "restricted" has to mean for the
-    // grant list to stay the whole story.
-    const std::vector<uint8_t> root = rootof("creating the secret " + name);
+    if (!found) {
+      // A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
+      // restricted key with `write` updates what it was granted and cannot
+      // grow the vault, which is what "restricted" has to mean for the
+      // grant list to stay the whole story.
+      const std::vector<uint8_t> root = rootof("creating the secret " + name);
 
-    EntryRecord made;
-    made.id = id;
-    made.name = seal(mac(root, LABEL_NAMES), bytesof(name), AAD_NAME);
-    made.value = box;
-    file.entries.push_back(std::move(made));
-  }
+      EntryRecord made;
+      made.id = id;
+      made.name = seal(mac(root, LABEL_NAMES), bytesof(name), AAD_NAME);
+      made.value = box;
+      file.entries.push_back(std::move(made));
+    }
 
-  save(file);
+    save(file);
 }
 
 void MiniVault::remove(const std::string& name) {
-  checkname(name);
+  // Every write on this file, from any handle in this process,
+  // serializes here; see lockfor.
+  std::lock_guard<std::recursive_mutex> guard(lockfor(file_));
 
-  minivaultfile::Vault file = read();
-  const std::vector<uint8_t> root = rootof("removing a secret");
-  const std::vector<uint8_t> want = entryid(secretkey(root, name));
+    checkname(name);
 
-  std::vector<EntryRecord> kept;
-  bool found = false;
+    minivaultfile::Vault file = read();
+    const std::vector<uint8_t> root = rootof("removing a secret");
+    const std::vector<uint8_t> want = entryid(secretkey(root, name));
 
-  for (EntryRecord& entry : file.entries) {
-    if (!found && want == entry.id) {
-      found = true;
-      continue;
+    std::vector<EntryRecord> kept;
+    bool found = false;
+
+    for (EntryRecord& entry : file.entries) {
+      if (!found && want == entry.id) {
+        found = true;
+        continue;
+      }
+      kept.push_back(std::move(entry));
     }
-    kept.push_back(std::move(entry));
-  }
 
-  if (!found) fail("no such secret: " + name);
+    if (!found) fail("no such secret: " + name);
 
-  file.entries = std::move(kept);
+    file.entries = std::move(kept);
 
-  save(file);
+    save(file);
 }
 
 std::vector<VaultKeyInfo> MiniVault::keys() {
@@ -1041,126 +1087,138 @@ std::vector<VaultKeyInfo> MiniVault::keys() {
 }
 
 void MiniVault::grant(const GrantSpec& spec) {
-  minivaultfile::Vault file = read();
-  const std::vector<uint8_t> root = rootof("granting a key");
+  // Every write on this file, from any handle in this process,
+  // serializes here; see lockfor.
+  std::lock_guard<std::recursive_mutex> guard(lockfor(file_));
 
-  checkid(spec.key, "a grant needs a key id");
-  if (spec.passphrase.empty()) fail("a grant needs a passphrase");
+    minivaultfile::Vault file = read();
+    const std::vector<uint8_t> root = rootof("granting a key");
 
-  for (const KeyRecord& record : file.keys) {
-    if (spec.key == record.id) fail("key already exists: " + spec.key);
-  }
+    checkid(spec.key, "a grant needs a key id");
+    if (spec.passphrase.empty()) fail("a grant needs a passphrase");
 
-  std::vector<std::string> names = spec.names;
-  std::sort(names.begin(), names.end());
-
-  // Written out rather than built as a Json and stringified, because
-  // `false` and `true` must be literals and the two documents are three
-  // fields each. Every string goes through the JSON quoter: a name is
-  // `[a-z0-9_.]` by the time it reaches here, but "this cannot contain a
-  // quote" is exactly the assumption that stops being true when a rule
-  // moves.
-  std::string ring = "{\"v\":" + std::to_string(FORMAT) +
-                     ",\"write\":" + (spec.write ? "true" : "false") + ",\"grants\":{";
-  std::string meta = "{\"v\":" + std::to_string(FORMAT) + ",\"master\":false,\"write\":" +
-                     (spec.write ? "true" : "false") + ",\"grants\":[";
-
-  for (size_t at = 0; at < names.size(); at++) {
-    checkname(names[at]);
-
-    if (0 < at) {
-      ring += ",";
-      meta += ",";
+    for (const KeyRecord& record : file.keys) {
+      if (spec.key == record.id) fail("key already exists: " + spec.key);
     }
 
-    ring += jsonstring(names[at]) + ":" + jsonstring(b64(secretkey(root, names[at])));
-    meta += jsonstring(names[at]);
-  }
+    std::vector<std::string> names = spec.names;
+    std::sort(names.begin(), names.end());
 
-  ring += "}}";
-  meta += "]}";
+    // Written out rather than built as a Json and stringified, because
+    // `false` and `true` must be literals and the two documents are three
+    // fields each. Every string goes through the JSON quoter: a name is
+    // `[a-z0-9_.]` by the time it reaches here, but "this cannot contain a
+    // quote" is exactly the assumption that stops being true when a rule
+    // moves.
+    std::string ring = "{\"v\":" + std::to_string(FORMAT) +
+                       ",\"write\":" + (spec.write ? "true" : "false") + ",\"grants\":{";
+    std::string meta = "{\"v\":" + std::to_string(FORMAT) + ",\"master\":false,\"write\":" +
+                       (spec.write ? "true" : "false") + ",\"grants\":[";
 
-  file.keys.push_back(sealkey(root, spec.key, spec.passphrase,
-                              static_cast<uint32_t>(0 < spec.iterations ? spec.iterations
-                                                                        : iterations_),
-                              ring, meta));
+    for (size_t at = 0; at < names.size(); at++) {
+      checkname(names[at]);
 
-  save(file);
+      if (0 < at) {
+        ring += ",";
+        meta += ",";
+      }
+
+      ring += jsonstring(names[at]) + ":" + jsonstring(b64(secretkey(root, names[at])));
+      meta += jsonstring(names[at]);
+    }
+
+    ring += "}}";
+    meta += "]}";
+
+    file.keys.push_back(sealkey(root, spec.key, spec.passphrase,
+                                static_cast<uint32_t>(0 < spec.iterations ? spec.iterations
+                                                                          : iterations_),
+                                ring, meta));
+
+    save(file);
 }
 
 void MiniVault::revoke(const std::string& key) {
-  minivaultfile::Vault file = read();
-  rootof("revoking a key");
+  // Every write on this file, from any handle in this process,
+  // serializes here; see lockfor.
+  std::lock_guard<std::recursive_mutex> guard(lockfor(file_));
 
-  if (key == key_) fail("a key cannot revoke itself: " + key);
+    minivaultfile::Vault file = read();
+    rootof("revoking a key");
 
-  bool found = false;
-  std::vector<KeyRecord> kept;
+    if (key == key_) fail("a key cannot revoke itself: " + key);
 
-  for (KeyRecord& record : file.keys) {
-    if (key == record.id) {
-      found = true;
-      continue;
+    bool found = false;
+    std::vector<KeyRecord> kept;
+
+    for (KeyRecord& record : file.keys) {
+      if (key == record.id) {
+        found = true;
+        continue;
+      }
+      kept.push_back(std::move(record));
     }
-    kept.push_back(std::move(record));
-  }
 
-  if (!found) fail("no such key: " + key);
+    if (!found) fail("no such key: " + key);
 
-  file.keys = std::move(kept);
+    file.keys = std::move(kept);
 
-  save(file);
+    save(file);
 }
 
 void MiniVault::rotate() {
-  const minivaultfile::Vault file = read();
-  const std::vector<uint8_t> oldroot = rootof("rotating the vault");
+  // Every write on this file, from any handle in this process,
+  // serializes here; see lockfor.
+  std::lock_guard<std::recursive_mutex> guard(lockfor(file_));
 
-  uint32_t iters = 0;
-  for (const KeyRecord& record : file.keys) {
-    if (key_ == record.id) iters = record.iters;
-  }
+    const minivaultfile::Vault file = read();
+    const std::vector<uint8_t> oldroot = rootof("rotating the vault");
 
-  // Read everything out under the old root before anything changes: once
-  // the root is replaced the old derived keys are unreachable.
-  const std::vector<uint8_t> oldnamekey = mac(oldroot, LABEL_NAMES);
-  std::vector<std::pair<std::string, std::string>> held;
+    uint32_t iters = 0;
+    for (const KeyRecord& record : file.keys) {
+      if (key_ == record.id) iters = record.iters;
+    }
 
-  for (const EntryRecord& entry : file.entries) {
-    const std::string name =
-        textof(unseal(oldnamekey, entry.name, AAD_NAME, "a secret name is damaged"));
-    const std::string value =
-        textof(unseal(secretkey(oldroot, name), entry.value, std::string(AAD_SECRET) + name,
-                      "the value of " + name + " is damaged"));
-    held.emplace_back(name, value);
-  }
+    // Read everything out under the old root before anything changes: once
+    // the root is replaced the old derived keys are unreachable.
+    const std::vector<uint8_t> oldnamekey = mac(oldroot, LABEL_NAMES);
+    std::vector<std::pair<std::string, std::string>> held;
 
-  const std::vector<uint8_t> root = randombytes(KEYLEN);
-  const std::vector<uint8_t> namekey = mac(root, LABEL_NAMES);
+    for (const EntryRecord& entry : file.entries) {
+      const std::string name =
+          textof(unseal(oldnamekey, entry.name, AAD_NAME, "a secret name is damaged"));
+      const std::string value =
+          textof(unseal(secretkey(oldroot, name), entry.value, std::string(AAD_SECRET) + name,
+                        "the value of " + name + " is damaged"));
+      held.emplace_back(name, value);
+    }
 
-  minivaultfile::Vault made;
+    const std::vector<uint8_t> root = randombytes(KEYLEN);
+    const std::vector<uint8_t> namekey = mac(root, LABEL_NAMES);
 
-  for (const auto& secret : held) {
-    const std::vector<uint8_t> key = secretkey(root, secret.first);
+    minivaultfile::Vault made;
 
-    EntryRecord entry;
-    entry.id = entryid(key);
-    entry.name = seal(namekey, bytesof(secret.first), AAD_NAME);
-    entry.value = seal(key, bytesof(secret.second), std::string(AAD_SECRET) + secret.first);
-    made.entries.push_back(std::move(entry));
-  }
+    for (const auto& secret : held) {
+      const std::vector<uint8_t> key = secretkey(root, secret.first);
 
-  made.keys.push_back(masterkey(root, key_, passphrase_, iters));
+      EntryRecord entry;
+      entry.id = entryid(key);
+      entry.name = seal(namekey, bytesof(secret.first), AAD_NAME);
+      entry.value = seal(key, bytesof(secret.second), std::string(AAD_SECRET) + secret.first);
+      made.entries.push_back(std::move(entry));
+    }
 
-  // SAVE FIRST, adopt second. A handle holding the new root over a file
-  // that still holds the old one reads nothing and says the vault is
-  // damaged, which is the wrong story about a failed write.
-  save(made);
+    made.keys.push_back(masterkey(root, key_, passphrase_, iters));
 
-  // Dropped rather than replaced: the next call re-derives from the file
-  // this one just wrote, which is the same rule every other change
-  // follows.
-  close();
+    // SAVE FIRST, adopt second. A handle holding the new root over a file
+    // that still holds the old one reads nothing and says the vault is
+    // damaged, which is the wrong story about a failed write.
+    save(made);
+
+    // Dropped rather than replaced: the next call re-derives from the file
+    // this one just wrote, which is the same rule every other change
+    // follows.
+    close();
 }
 
 // --- opening and creating --------------------------------------------

@@ -20,6 +20,16 @@
 
 module Main (main) where
 
+import Control.Concurrent (forkIO)
+import Control.Concurrent.MVar
+  ( MVar,
+    modifyMVar_,
+    newEmptyMVar,
+    newMVar,
+    putMVar,
+    readMVar,
+    takeMVar,
+  )
 import Control.Exception (Exception, SomeException, displayException, throwIO, try)
 import Control.Monad (forM_, when)
 import qualified Data.ByteString as B
@@ -443,6 +453,43 @@ avaultneedsafileandapassphrase = do
   holds "no passphrase" "a vault needs a passphrase"
     =<< refusal "no passphrase" (openvault (vaultopts "v.skmv" "" ""))
 
+-- | TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each Vault is
+-- its own value with its own snapshot, so without the shared per-path
+-- lock both threads finish 'load' before either saves and the second
+-- rename discards the first one's secret while reporting success.
+-- DOCS.md promises this within one process.
+twohandleswritingatoncelosenothing :: IO ()
+twohandleswritingatoncelosenothing = do
+  v <- fresh
+  let path = vaultfile v
+      rounds = 40 :: Int
+
+  broke <- newMVar ([] :: [String])
+  done <- mapM (const newEmptyMVar) [1 :: Int, 2]
+
+  let writer tag finished = do
+        outcome <-
+          try
+            ( do
+                mine <- openas path "" master
+                mapM_
+                  (\round -> vaultset mine ("t" ++ tag ++ ".n" ++ show round) ("v" ++ show round))
+                  [0 .. rounds - 1]
+            )
+        case outcome of
+          Left err -> modifyMVar_ broke (pure . (show (err :: SomeException) :))
+          Right () -> pure ()
+        putMVar finished ()
+
+  _ <- forkIO (writer "one" (head done))
+  _ <- forkIO (writer "two" (done !! 1))
+  mapM_ takeMVar done
+
+  raised <- readMVar broke
+  same "a writer raised" [] raised
+  names <- vaultlist v
+  same "every write survived" (2 * rounds) (length names)
+
 -- | An EMPTY key is no key, so it means `master`. It is not a contrived
 -- case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
 -- expands to the empty string rather than to nothing at all.
@@ -749,6 +796,7 @@ main = do
   check "damaged" adamagedfileisrefused
   check "createover" creatingoveranexistingvaultisrefused
   check "needsfile" avaultneedsafileandapassphrase
+  check "concurrent" twohandleswritingatoncelosenothing
   check "emptykey" anemptykeymeansthemasterkey
   check "createflag" createmakesthefileonlywhenasked
   check "longkeyid" akeyidlongerthantheformatallows
