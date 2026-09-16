@@ -25,6 +25,47 @@ shallow clone into `../.plugin` when there is none.
 The optional lookup is `tryget`, since `try` is a keyword; `` `try` ``
 delegates to it for callers translating from the canonical TypeScript.
 
+## The mini vault
+
+`plugins/Minivault.kt` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the port's
+worked example of a definition publishing an API beside its provider.
+
+```kotlin
+val vault = createvault(VaultOptions(file = "app.skmv", passphrase = master))
+vault.set("api.token", "tok01")
+vault.grant(GrantSpec("ci", ci, listOf("api.token")))
+
+val secrets = Sekreto(
+    plugins = listOf(minivault),
+    providers = listOf(
+        ProviderSpec(kind = "minivault", file = "app.skmv",
+                     vaultkey = "ci", passphrase = ci),
+    ),
+)
+
+secrets.get("api.token")       // the chain reads
+vaultof(secrets).list()        // ['api.token'] — as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `secrets.host`. `javax.crypto` carries all four primitives, so nothing
+here is hand-rolled. What each key may do, what the file holds, and what
+the whole thing does and does not protect are in
+[DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
+
+`VaultKeyInfo` is a data class of `val` fields over an immutable list, so
+the defect the review round found in the canonical — a caller flipping its
+own `write` bit on the record it was handed — does not compile. `copy`
+makes a new value and changes nothing the vault reads, which is what the
+test asserts.
+
+Ports carrying this kind read each other's files, which
+`test/MinivaultTest.kt` checks against every committed vault in
+`test/fixture/`, including the one this port wrote.
+
 ## Layout
 
 Four kinds are built in; the other ten are plugins.
@@ -44,7 +85,7 @@ of it.
 
 | `plugins/` — one file per kind | |
 |---|---|
-| `Hashicorp.kt` `Boru.kt` `Aws.kt` `Gcpsecrets.kt` `Azuresecrets.kt` `Onepassword.kt` `Doppler.kt` `Infisical.kt` `Secretspec.kt` | the ten plugin kinds, each a `val` a consumer imports |
+| `Hashicorp.kt` `Boru.kt` `Aws.kt` `Gcpsecrets.kt` `Azuresecrets.kt` `Onepassword.kt` `Doppler.kt` `Infisical.kt` `Secretspec.kt` `Minivault.kt` | the eleven plugin kinds, each a `val` a consumer imports |
 | `Sigv4.kt` | AWS request signing, which travels with `Aws.kt` |
 | `Httpjson.kt` | the shared HTTP-JSON transport and the child-process runner |
 | `Plugins.kt` | `Plugins.ALL`, the full set |
@@ -53,6 +94,7 @@ of it.
 |---|---|
 | `test/SekretoTest.kt` | the conformance suite |
 | `test/PluginsTest.kt` | the plugin seam, which the conformance suite cannot see |
+| `test/MinivaultTest.kt` | the mini vault, and the committed files every port reads |
 | `test/CoreOnly.kt` | the core, run with `plugins/` off the classpath |
 | `cli/Cli.kt` | the app that needs a secret |
 

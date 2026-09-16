@@ -14,6 +14,7 @@ implementations.
 | `minivault-java.skmv` | java |
 | `minivault-cs.skmv` | csharp |
 | `minivault-ex.skmv` | elixir |
+| `minivault-kt.skmv` | kotlin |
 
 **One file per writing port, and every port reads all of them.** A suite
 that reads only what its own port wrote proves the reader agrees with the

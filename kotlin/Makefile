@@ -116,6 +116,9 @@ seam: build check-core
 	mkdir -p build/seam
 	$(KOTLINC) -cp $(VOXPLUGIN):$(CORE):$(PLUGINS) test/PluginsTest.kt -d build/seam
 	java -cp build/seam:$(VOXPLUGIN):$(CORE):$(PLUGINS):$(STDLIB) PluginsTest
+	mkdir -p build/mv
+	$(KOTLINC) -cp $(VOXPLUGIN):$(CORE):$(PLUGINS) test/MinivaultTest.kt -d build/mv
+	java -cp build/mv:$(VOXPLUGIN):$(CORE):$(PLUGINS):$(STDLIB) MinivaultTestKt
 
 # THE CORE DOES NOT REACH A PLUGIN, proved of the artifact and not of the
 # source. test/CoreOnly.kt is compiled and run against a classpath that

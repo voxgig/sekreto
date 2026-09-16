@@ -43,7 +43,7 @@ import voxgig.plugin.PluginError
 
 private val PLUGINS = listOf(
     "awsparams", "awssecrets", "azuresecrets", "boru", "doppler", "gcpsecrets",
-    "hashicorp", "infisical", "onepassword", "secretspec",
+    "hashicorp", "infisical", "minivault", "onepassword", "secretspec",
 )
 
 private val EVERY = (listOf("dotenv", "env", "file", "memory") + PLUGINS).sorted()
@@ -149,12 +149,15 @@ fun main(args: Array<String>) {
         eq(PLUGINS, Plugins.ALL.map { it["name"] as String }.sorted(), "Plugins.ALL")
         eq(KINDS.builtin, BUILTINS.map { it["name"] as String }, "BUILTINS")
         eq(PLUGINS, KINDS.plugin.sorted(), "KINDS.plugin")
-        eq(10, Plugins.ALL.size, "ten plugins")
+        eq(11, Plugins.ALL.size, "eleven plugins")
     }
 
     // Naming a kind is not enough: a kind can be in the catalog and still
     // fail to build. Construction is what the CLI does before any network.
     testcase("every kind builds from a spec") {
+        // One spec that satisfies every kind's configuration check. The
+        // vault's file is not opened here: its handle is lazy, and nothing
+        // reaches a store until a lookup.
         val chain = EVERY.map { kind ->
             ProviderSpec(
                 kind = kind,
@@ -163,6 +166,7 @@ fun main(args: Array<String>) {
                 dir = "/tmp",
                 file = "/tmp/.env",
                 values = emptyMap(),
+                passphrase = "p",
             )
         }
 
@@ -499,7 +503,7 @@ fun main(args: Array<String>) {
         )
     }
 
-    // The full set is what pulls all ten in, and reaching for it is the
+    // The full set is what pulls all eleven in, and reaching for it is the
     // deliberate act of a CLI or a test harness rather than a side effect
     // of importing the library.
     testcase("the full set is loaded on demand") {
@@ -514,11 +518,11 @@ fun main(args: Array<String>) {
             (cls.getField("ALL").get(null) as List<*>).size
         }
 
-        eq(10, loaded, "the full set is ten")
+        eq(11, loaded, "the full set is eleven")
         eq(
             listOf(
                 "aws", "azuresecrets", "boru", "doppler", "gcpsecrets",
-                "hashicorp", "infisical", "onepassword", "secretspec",
+                "hashicorp", "infisical", "minivault", "onepassword", "secretspec",
             ),
             recorder.kinds().filter { "plugins" != it && "httpjson" != it && "sigv4" != it },
             "reaching the full set loads every plugin file",
