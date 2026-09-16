@@ -908,11 +908,24 @@ mode.
 
 **Writes are serialized within one process** — every handle on one file
 shares a lock, so two of them cannot each read a snapshot and then
-overwrite the other. Across processes they are not. A reader is always
-handed one whole vault, because a new one is created under `O_EXCL` and
-an update lands by atomic rename, but two processes writing at once can
-still lose an update. A vault is a single-writer store, and a deployment
-that needs more than that wants a vault server.
+overwrite the other. The lock is keyed by the file's absolute path, so
+two handles spelling one vault differently still meet, and it is held
+across the whole read-modify-write of `set`, `remove`, `grant`, `revoke`
+and `rotate`.
+
+Where the language offers concurrent access to one handle, the port
+arranges that itself: a table of locks in go, java, kotlin, scala,
+clojure, csharp, ruby, cpp, haskell, lean, zig and c, and
+`:global.trans` in elixir, whose unit is a process rather than a thread.
+In typescript, javascript, php, lua and ocaml there is no second thread
+of execution to interleave with, so the sequence is already indivisible
+and those ports carry no lock — the same property, arrived at for free.
+
+Across processes it does not hold. A reader is always handed one whole
+vault, because a new one is created under `O_EXCL` and an update lands by
+atomic rename, but two processes writing at once can still lose an
+update. A vault is a single-writer store, and a deployment that needs
+more than that wants a vault server.
 
 A key id is at most **255 bytes**, which is what the format records it
 in.

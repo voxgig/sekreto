@@ -102,6 +102,34 @@ defmodule Sekreto.Plugins.Minivault do
     raise Error, message: "sekreto: minivault: " <> text
   end
 
+  # THE LOCK EVERY HANDLE ON ONE FILE SHARES.
+  #
+  # Each handle is its own map, so two of them on one path did not
+  # coordinate: both could finish `load` before either saved, and the
+  # second rename then discarded the first one's change while reporting
+  # success. Keyed by the ABSOLUTE path, so two handles spelled
+  # differently still meet.
+  #
+  # `:global.trans/2` rather than a mutex, because the BEAM has no shared
+  # memory to put one in: processes are the unit here, and this is OTP's
+  # own per-key lock over them. Given `[node()]` it is a lock within one
+  # node, which is what DOCS.md promises and what the go port arranges
+  # with a mutex. Two OS processes still race, and the format's answer to
+  # that is the exclusive create and the atomic rename: a reader sees one
+  # whole vault or the other, never half of one.
+  #
+  # It is RE-ENTRANT per process, so a mutating call that ever reached
+  # another would wait rather than deadlock; none of them does.
+  defp locked(file, body) do
+    key =
+      case File.cwd() do
+        {:ok, _} -> Path.expand(file)
+        _ -> file
+      end
+
+    :global.trans({{:sekreto_minivault, key}, self()}, body, [node()])
+  end
+
   # The key a caller asked for, or `masterkey()`: an EMPTY key is no key.
   # The canonical's `opts.key || MASTERKEY` answers for both nil and
   # empty, where elixir's `||` answers for nil alone - `""` is truthy
@@ -531,61 +559,69 @@ defmodule Sekreto.Plugins.Minivault do
   `write` overwrites the names it was granted, and creates none.
   """
   def set(vault, name, value) do
-    Sekreto.checkname(name)
-    if not is_binary(value), do: fail("a secret value must be text: " <> name)
+    # Every write on this file, from any handle in this process,
+    # serializes here; see locked.
+    locked(vault.file, fn ->
+        Sekreto.checkname(name)
+        if not is_binary(value), do: fail("a secret value must be text: " <> name)
 
-    {file, opened} = load(vault)
+        {file, opened} = load(vault)
 
-    if not opened["info"]["write"] do
-      fail("key " <> opened["info"]["key"] <> " is read-only")
-    end
+        if not opened["info"]["write"] do
+          fail("key " <> opened["info"]["key"] <> " is read-only")
+        end
 
-    key = keyfor(opened, name)
+        key = keyfor(opened, name)
 
-    if nil == key do
-      fail("key " <> opened["info"]["key"] <> " was not granted " <> name)
-    end
+        if nil == key do
+          fail("key " <> opened["info"]["key"] <> " was not granted " <> name)
+        end
 
-    sealedvalue = seal(key, value, @aad_secret <> name)
-    id = entryid(key)
+        sealedvalue = seal(key, value, @aad_secret <> name)
+        id = entryid(key)
 
-    entries =
-      if Enum.any?(file["entries"], &(&1["id"] == id)) do
-        Enum.map(file["entries"], fn entry ->
-          if entry["id"] == id, do: Map.put(entry, "value", sealedvalue), else: entry
-        end)
-      else
-        # A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
-        # restricted key with `write` updates what it was granted and
-        # cannot grow the vault.
-        root = rootof(opened, "creating the secret " <> name)
+        entries =
+          if Enum.any?(file["entries"], &(&1["id"] == id)) do
+            Enum.map(file["entries"], fn entry ->
+              if entry["id"] == id, do: Map.put(entry, "value", sealedvalue), else: entry
+            end)
+          else
+            # A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
+            # restricted key with `write` updates what it was granted and
+            # cannot grow the vault.
+            root = rootof(opened, "creating the secret " <> name)
 
-        file["entries"] ++
-          [
-            %{
-              "id" => id,
-              "name" => seal(hmac(root, @label_names), name, @aad_name),
-              "value" => sealedvalue
-            }
-          ]
-      end
+            file["entries"] ++
+              [
+                %{
+                  "id" => id,
+                  "name" => seal(hmac(root, @label_names), name, @aad_name),
+                  "value" => sealedvalue
+                }
+              ]
+          end
 
-    save(vault, Map.put(file, "entries", entries))
+        save(vault, Map.put(file, "entries", entries))
+    end)
   end
 
   @doc "Drop a name. Master only."
   def remove(vault, name) do
-    Sekreto.checkname(name)
-    {file, opened} = load(vault)
-    root = rootof(opened, "removing a secret")
+    # Every write on this file, from any handle in this process,
+    # serializes here; see locked.
+    locked(vault.file, fn ->
+        Sekreto.checkname(name)
+        {file, opened} = load(vault)
+        root = rootof(opened, "removing a secret")
 
-    wanted = entryid(secretkey(root, name))
+        wanted = entryid(secretkey(root, name))
 
-    if not Enum.any?(file["entries"], &(&1["id"] == wanted)) do
-      fail("no such secret: " <> name)
-    end
+        if not Enum.any?(file["entries"], &(&1["id"] == wanted)) do
+          fail("no such secret: " <> name)
+        end
 
-    save(vault, Map.put(file, "entries", Enum.reject(file["entries"], &(&1["id"] == wanted))))
+        save(vault, Map.put(file, "entries", Enum.reject(file["entries"], &(&1["id"] == wanted))))
+    end)
   end
 
   @doc "Every key in the file, with what it may do. Master only."
@@ -611,32 +647,36 @@ defmodule Sekreto.Plugins.Minivault do
 
   @doc "Mint a restricted key. Master only."
   def grant(vault, spec) do
-    {file, opened} = load(vault)
-    root = rootof(opened, "granting a key")
+    # Every write on this file, from any handle in this process,
+    # serializes here; see locked.
+    locked(vault.file, fn ->
+        {file, opened} = load(vault)
+        root = rootof(opened, "granting a key")
 
-    want = spec || %{}
-    id = checkid(want["key"], "a grant needs a key id")
-    phrase = want["passphrase"]
+        want = spec || %{}
+        id = checkid(want["key"], "a grant needs a key id")
+        phrase = want["passphrase"]
 
-    if not is_binary(phrase) or phrase == "", do: fail("a grant needs a passphrase")
-    if Enum.any?(file["keys"], &(&1["id"] == id)), do: fail("key already exists: " <> id)
+        if not is_binary(phrase) or phrase == "", do: fail("a grant needs a passphrase")
+        if Enum.any?(file["keys"], &(&1["id"] == id)), do: fail("key already exists: " <> id)
 
-    names = Enum.sort(want["names"] || [])
+        names = Enum.sort(want["names"] || [])
 
-    grants =
-      Enum.reduce(names, %{}, fn name, out ->
-        Sekreto.checkname(name)
-        Map.put(out, name, b64(secretkey(root, name)))
-      end)
+        grants =
+          Enum.reduce(names, %{}, fn name, out ->
+            Sekreto.checkname(name)
+            Map.put(out, name, b64(secretkey(root, name)))
+          end)
 
-    write = want["write"] == true
+        write = want["write"] == true
 
-    record =
-      sealkey(root, id, phrase, want["iterations"] || vault.iterations,
-        %{"v" => @format, "write" => write, "grants" => grants},
-        %{"v" => @format, "master" => false, "write" => write, "grants" => names})
+        record =
+          sealkey(root, id, phrase, want["iterations"] || vault.iterations,
+            %{"v" => @format, "write" => write, "grants" => grants},
+            %{"v" => @format, "master" => false, "write" => write, "grants" => names})
 
-    save(vault, Map.put(file, "keys", file["keys"] ++ [record]))
+        save(vault, Map.put(file, "keys", file["keys"] ++ [record]))
+    end)
   end
 
   @doc """
@@ -647,13 +687,17 @@ defmodule Sekreto.Plugins.Minivault do
   takes a secret back.
   """
   def revoke(vault, key) do
-    {file, opened} = load(vault)
-    rootof(opened, "revoking a key")
+    # Every write on this file, from any handle in this process,
+    # serializes here; see locked.
+    locked(vault.file, fn ->
+        {file, opened} = load(vault)
+        rootof(opened, "revoking a key")
 
-    if key == opened["info"]["key"], do: fail("a key cannot revoke itself: " <> key)
-    if not Enum.any?(file["keys"], &(&1["id"] == key)), do: fail("no such key: " <> key)
+        if key == opened["info"]["key"], do: fail("a key cannot revoke itself: " <> key)
+        if not Enum.any?(file["keys"], &(&1["id"] == key)), do: fail("no such key: " <> key)
 
-    save(vault, Map.put(file, "keys", Enum.reject(file["keys"], &(&1["id"] == key))))
+        save(vault, Map.put(file, "keys", Enum.reject(file["keys"], &(&1["id"] == key))))
+    end)
   end
 
   @doc """
@@ -664,58 +708,62 @@ defmodule Sekreto.Plugins.Minivault do
   passphrases this process does not have. Re-grant afterwards.
   """
   def rotate(vault) do
-    {file, opened} = load(vault)
-    rootof(opened, "rotating the vault")
+    # Every write on this file, from any handle in this process,
+    # serializes here; see locked.
+    locked(vault.file, fn ->
+        {file, opened} = load(vault)
+        rootof(opened, "rotating the vault")
 
-    # Read everything out under the old root before anything changes: once
-    # the root is replaced the old derived keys are unreachable.
-    plain = Enum.map(list(vault), fn name -> {name, get(vault, name)} end)
+        # Read everything out under the old root before anything changes: once
+        # the root is replaced the old derived keys are unreachable.
+        plain = Enum.map(list(vault), fn name -> {name, get(vault, name)} end)
 
-    root = random(@keylen)
-    namekey = hmac(root, @label_names)
+        root = random(@keylen)
+        namekey = hmac(root, @label_names)
 
-    entries =
-      Enum.map(plain, fn {name, value} ->
-        key = secretkey(root, name)
+        entries =
+          Enum.map(plain, fn {name, value} ->
+            key = secretkey(root, name)
 
-        %{
-          "id" => entryid(key),
-          "name" => seal(namekey, name, @aad_name),
-          "value" => seal(key, value, @aad_secret <> name)
-        }
-      end)
+            %{
+              "id" => entryid(key),
+              "name" => seal(namekey, name, @aad_name),
+              "value" => seal(key, value, @aad_secret <> name)
+            }
+          end)
 
-    iters =
-      case Enum.find(file["keys"], &(&1["id"] == vault.key)) do
-        nil -> vault.iterations
-        record -> record["iters"]
-      end
+        iters =
+          case Enum.find(file["keys"], &(&1["id"] == vault.key)) do
+            nil -> vault.iterations
+            record -> record["iters"]
+          end
 
-    fresh =
-      sealkey(root, vault.key, vault.passphrase, iters,
-        %{"v" => @format, "write" => true, "root" => b64(root)},
-        %{"v" => @format, "master" => true, "write" => true, "grants" => []})
+        fresh =
+          sealkey(root, vault.key, vault.passphrase, iters,
+            %{"v" => @format, "write" => true, "root" => b64(root)},
+            %{"v" => @format, "master" => true, "write" => true, "grants" => []})
 
-    # SAVE FIRST, adopt second. A handle holding the new root over a file
-    # that still holds the old one reads nothing and says the vault is
-    # damaged.
-    :ok = write(vault, %{"keys" => [fresh], "entries" => entries})
+        # SAVE FIRST, adopt second. A handle holding the new root over a file
+        # that still holds the old one reads nothing and says the vault is
+        # damaged.
+        :ok = write(vault, %{"keys" => [fresh], "entries" => entries})
 
-    Agent.update(vault.agent, fn _ ->
-      %{
-        "info" => %{
-          "key" => vault.key,
-          "master" => true,
-          "write" => true,
-          "grants" => []
-        },
-        "root" => root,
-        "grants" => %{},
-        "ring" => fresh["ring"]
-      }
+        Agent.update(vault.agent, fn _ ->
+          %{
+            "info" => %{
+              "key" => vault.key,
+              "master" => true,
+              "write" => true,
+              "grants" => []
+            },
+            "root" => root,
+            "grants" => %{},
+            "ring" => fresh["ring"]
+          }
+        end)
+
+        :ok
     end)
-
-    :ok
   end
 
   # --- the inside ------------------------------------------------------

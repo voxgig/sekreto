@@ -509,6 +509,31 @@ needsfile = fn ->
   end)
 end
 
+# TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each handle is
+# its own map with its own snapshot, so without the shared per-path lock
+# both processes finish `load` before either saves and the second rename
+# discards the first one's secret while reporting success. DOCS.md
+# promises this within one process.
+concurrent = fn ->
+  vault = fresh.()
+  path = MV.file(vault)
+  rounds = 40
+
+  writer = fn tag ->
+    Task.async(fn ->
+      mine = MV.openvault(%{"file" => path, "passphrase" => MiniVaultTest.master()})
+
+      Enum.each(0..(rounds - 1), fn round ->
+        MV.set(mine, "t#{tag}.n#{round}", "v#{round}")
+      end)
+    end)
+  end
+
+  [writer.("one"), writer.("two")] |> Enum.each(&Task.await(&1, 60_000))
+
+  MiniVaultTest.same(2 * rounds, length(MV.list(vault)), "every write survived")
+end
+
 # An EMPTY key is no key, so it means `master`. It is not a contrived
 # case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
 # expands to the empty string rather than to nothing at all - and
@@ -876,6 +901,7 @@ state = MiniVaultTest.testcase("wrongphrase", wrongphrase, state)
 state = MiniVaultTest.testcase("damaged", damaged, state)
 state = MiniVaultTest.testcase("createover", createover, state)
 state = MiniVaultTest.testcase("needsfile", needsfile, state)
+state = MiniVaultTest.testcase("concurrent", concurrent, state)
 state = MiniVaultTest.testcase("emptykey", emptykey, state)
 state = MiniVaultTest.testcase("createflag", createflag, state)
 state = MiniVaultTest.testcase("longkeyid", longkeyid, state)
