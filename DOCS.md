@@ -267,8 +267,8 @@ hands to `Sekreto` at construction.
 | `minivault` | `minivault` | AES-256-GCM, PBKDF2-HMAC-SHA256 | `…/plugins/minivault` → `minivault` |
 | *the full set* | every kind the port ships | everything | `@voxgig/sekreto/plugins` → `allplugins` |
 
-`minivault` ships in twenty ports so far — perl, dart, and swift are
-still to come; the other ten kinds are in all twenty-three.
+`minivault` ships in twenty-one ports so far — dart and swift are still
+to come; the other ten kinds are in all twenty-three.
 A `minivault` case cannot join the shared spec until the last port has
 the kind, so the ports that carry it pin the on-disk format against each
 other instead: each writes a vault file under `test/fixture/`, and every
@@ -922,6 +922,10 @@ every file read and write, which is exactly where two handles interleave.
 In typescript, javascript, php, lua and ocaml there is no second thread
 of execution to interleave with, so the sequence is already indivisible
 and those ports carry no lock — the same property, arrived at for free.
+Perl carries none for a different reason: its interpreter threads copy
+rather than share, so a lock table would be copied with everything else
+and serialize nothing, and two such threads are the cross-process case
+below rather than this one.
 
 Across processes it does not hold. A reader is always handed one whole
 vault, because a new one is created under `O_EXCL` and an update lands by

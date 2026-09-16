@@ -26,6 +26,7 @@ implementations.
 | `minivault-lean.skmv` | lean |
 | `minivault-rs.skmv` | rust |
 | `minivault-py.skmv` | python |
+| `minivault-pl.skmv` | perl |
 
 **One file per writing port, and every port reads all of them.** A suite
 that reads only what its own port wrote proves the reader agrees with the

@@ -1,4 +1,4 @@
-.PHONY: build test deps clean inspect
+.PHONY: build test vaulttest deps clean inspect
 
 # voxgig/plugin is a dependency of the LIBRARY, not only of the tests: the
 # core builds its provider catalog on it. Perl has no manifest to declare
@@ -40,6 +40,11 @@ build: deps
 
 test: deps
 	PLUGIN_HOME=$(PLUGIN) prove -Ilib -Iplugins -It t/
+
+# The mini vault alone. The suite reads every committed fixture, so it is
+# the one worth running on its own after a change to the format.
+vaulttest: deps
+	PLUGIN_HOME=$(PLUGIN) prove -v -Ilib -Iplugins -It t/minivault.t
 
 clean:
 

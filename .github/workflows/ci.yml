@@ -350,7 +350,15 @@ jobs:
         with:
           dotnet-version: '8.0'
 
-      # perl ships with the runner, and this port needs only core modules.
+      # perl ships with the runner, and the port needs only core modules for
+      # everything but the mini vault. That one kind needs an AEAD, a KDF
+      # and a CSPRNG, and perl's core has none of the three -- so CryptX,
+      # which is the same posture this port already takes for https and
+      # IO::Socket::SSL. Without it the vault suite fails rather than
+      # skipping, which is the point: the kind is not optional in CI.
+      - name: Setup CryptX
+        if: matrix.lang == 'perl'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libcryptx-perl
 
       # omni register 4.13: the conformance suite is a nested module
       # (go/testutil), so the published module must build - and its
@@ -542,6 +550,14 @@ jobs:
       # missing toolchain, which reads as a port bug and is not one.
       - name: Setup OpenSSL headers
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libssl-dev
+      # perl ships with the runner, and the port needs only core modules for
+      # everything but the mini vault. That one kind needs an AEAD, a KDF
+      # and a CSPRNG, and perl's core has none of the three -- so CryptX,
+      # which is the same posture this port already takes for https and
+      # IO::Socket::SSL. Without it the vault suite fails rather than
+      # skipping, which is the point: the kind is not optional in CI.
+      - name: Setup CryptX
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libcryptx-perl
       # lua5.4 from the Ubuntu archive, and the OpenSSL and Lua headers
       # the port's own C needs. Lua has no sockets and no cryptography at
       # all, so the Makefile compiles native/sekretonet.c into a helper
