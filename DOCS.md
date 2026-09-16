@@ -986,7 +986,7 @@ JSON, run by every port through its own
 That JSON is **generated**: the source of truth is
 [`spec/sekreto.aon`](spec/sekreto.aon), which names the categories, and
 the case files under [`spec/def/`](spec/def), written in
-[aontu](https://github.com/voxgig/aontu). `make spec` compiles them, and the
+[aontu](https://github.com/aontu-lang/aontu). `make spec` compiles them, and the
 result is committed so that no port needs a Node toolchain to run its tests.
 Edit the aontu, never the JSON.
 
