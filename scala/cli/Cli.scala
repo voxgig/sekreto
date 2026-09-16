@@ -31,8 +31,9 @@ import scala.util.control.NonFatal
 // the builder function would otherwise be read as the package.
 import com.voxgig.sekreto.{AuthSpec, Json, ProviderSpec, dig, sekreto as makesekreto}
 
-// THE FULL SET, IMPORTED AND PASSED. The ten kinds that open a socket,
-// sign a request or spawn a process are plugins now, and a Sekreto can
+// THE FULL SET, IMPORTED AND PASSED. The eleven kinds that open a socket,
+// sign a request, spawn a process or do cryptography are plugins now, and
+// a Sekreto can
 // build only the kinds its constructor was handed - so a CLI that must
 // reach every source names the set and hands it over. The import alone
 // would not do it: loading is the list, never the import.

@@ -1,6 +1,6 @@
 # One HTTP round-trip, framed in-tree over OTP's own sockets - and
 # OUTSIDE THE CORE, because a socket is what makes a kind a plugin. Seven
-# of the ten plugin kinds reach a vault over HTTPS; a chain of the four
+# of the eleven plugin kinds reach a vault over HTTPS; a chain of the four
 # built-ins never loads this module at all, and the BEAM never loads a
 # module nothing calls.
 #

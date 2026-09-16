@@ -148,7 +148,7 @@ boot libraries carry no cryptography whatever, and the no-new-package
 rule stands, so the four primitives come from the OpenSSL this port
 already links: `plugins/minivault.c` is AES-256-GCM,
 PBKDF2-HMAC-SHA256, HMAC-SHA256 and the entropy under them, and nothing
-else. AGENTS.md used to confine the dependency exception to cryptographic
+else. The dependency rule used to confine the exception to cryptographic
 *transport*, which is why `plugins/Crypto.hs` writes SHA-256 and
 HMAC-SHA256 out by hand beside a linked libcrypto that has both; the rule
 now covers cryptography, because a block cipher protecting secrets **at

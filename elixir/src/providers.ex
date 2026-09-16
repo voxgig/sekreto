@@ -175,7 +175,7 @@ defmodule Sekreto.Providers do
 
   A provider kind is a voxgig/plugin `Definition`, and `providerplugin/2`
   is the whole bridge between the two libraries - the four kinds below are
-  made with it, the ten under plugins/ are made with it, and so is a
+  made with it, the eleven under plugins/ are made with it, and so is a
   caller's own.
   """
 

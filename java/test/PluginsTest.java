@@ -330,7 +330,7 @@ public final class PluginsTest {
   }
 
   // ...and one plugin reaches only itself and the shared HTTP edge. The
-  // full set is one class away, and naming it would link all ten.
+  // full set is one class away, and naming it would link all eleven.
   static void onepluginreachesonlyitself() throws Exception {
     same(new TreeSet<>(List.of("Hashicorp", "Httpjson")),
         references(here().resolve("build/plugins/com/voxgig/sekreto/plugins/Hashicorp.class")),

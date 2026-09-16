@@ -178,12 +178,15 @@ opposite and raises: a vault is configured deliberately, with a key, so
 its absence is a broken deployment rather than "no secrets here".
 
 **The corpus cannot carry it yet.** `spec/sekreto.json` runs against all
-twenty-three ports, so a `minivault` entry would fail the twenty-one that
-have no such kind. Until the last port has it, the ports that do carry it
-pin the on-disk format against `test/fixture/minivault.skmv`, a vault
-written by the canonical port that each of them reads. That covers the
-one thing per-port tests cannot: every port can write and read its own
-vault perfectly while disagreeing about where a length prefix goes.
+twenty-three ports, so a `minivault` entry would fail the five that have
+no such kind. Until the last port has it, the ports that do carry it pin
+the on-disk format against `test/fixture/`: each writes one vault file
+there and every one of them reads all of them. That covers the one thing
+per-port tests cannot: every port can write and read its own vault
+perfectly while disagreeing about where a length prefix goes. One file
+per port and not one shared file, because a suite that reads only what
+its own port wrote is satisfied by a serializer and a parser that share
+a mistake.
 
 ## Loading is static, in every language
 
@@ -339,13 +342,20 @@ and the three seam tests).
 
 ### `minivault`, separately
 
-typescript (canonical) ✅ → go ✅ → the remaining twenty-one.
+typescript (canonical) ✅ → go ✅ → javascript ✅, ruby ✅, php ✅,
+java ✅, csharp ✅, elixir ✅, kotlin ✅, scala ✅, clojure ✅, zig ✅,
+c ✅, cpp ✅, ocaml ✅, haskell ✅, lua ✅, lean ✅ → python, rust, perl,
+dart, and swift.
 
 A port takes it when its language has AES-256-GCM and PBKDF2-HMAC-SHA256
-within the dependency rule — from the standard library, or written small
-in-tree the way go writes PBKDF2 because `crypto/pbkdf2` postdates the
-version it targets. The acceptance test is
-`test/fixture/minivault.skmv`: a port that reads it, key by key, and
-writes a vault the others read has the format right. A `minivault`
-section joins `spec/sekreto.aon` when the last port lands, and not
-before.
+within the dependency rule — from the standard library, from a
+cryptographic library the port already links, or written small in-tree
+the way go writes PBKDF2 because `crypto/pbkdf2` postdates the version it
+targets. The five still to come are the ones where none of those three
+holds yet, so each needs its own answer before it starts rather than a
+port of somebody else's.
+
+The acceptance test is `test/fixture/`: a port that reads every vault
+committed there, key by key, and writes one the others read has the
+format right. A `minivault` section joins `spec/sekreto.aon` when the
+last port lands, and not before.

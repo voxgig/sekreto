@@ -28,7 +28,8 @@ that `Redact` does not vary between runs.
 
 Four provider kinds are built in — `env`, `memory`, `dotenv`, `file` —
 and the line is *reads at most a local file*. Every kind that opens a
-socket, signs a request or spawns a process is a voxgig/plugin
+socket, signs a request, spawns a process, or does cryptography is a
+voxgig/plugin
 definition in a **separate assembly**, and the calling project passes
 the ones it wants:
 

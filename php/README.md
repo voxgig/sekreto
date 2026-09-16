@@ -12,12 +12,12 @@ make check-core               # what requiring the core pulls in
 No Composer, no autoloader: `require_once` and nothing else, so the
 library drops into any project.
 
-## Four kinds are built in; the other ten are plugins
+## Four kinds are built in; the other eleven are plugins
 
 The core holds the chain, the cache, redaction, and the four provider kinds
 that read at most a local file — `env`, `memory`, `dotenv`, `file`. Every
-kind that opens a socket, signs a request or spawns a process is a
-[voxgig/plugin](https://github.com/voxgig/plugin) definition in its own
+kind that opens a socket, signs a request, spawns a process, or does
+cryptography is a [voxgig/plugin](https://github.com/voxgig/plugin) definition in its own
 file under `plugins/`, and a `Sekreto` can build only the kinds it was
 handed:
 

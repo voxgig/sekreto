@@ -2,7 +2,7 @@
 
 # THE FULL SET - every plugin this library ships, in one require.
 #
-# It exists for the callers that genuinely want all ten kinds: the CLI,
+# It exists for the callers that genuinely want all eleven kinds: the CLI,
 # the conformance suite, an app whose chain is decided at run time.
 #
 #     require 'voxgig_sekreto'

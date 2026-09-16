@@ -31,7 +31,7 @@ local sekreto = require('sekreto')
 
 -- THE FULL SET, passed to Sekreto. The CLI is asked for any provider kind
 -- on the command line, so it is the one consumer that legitimately wants
--- all ten plugins; an app passes the one or two it configures.
+-- all eleven plugins; an app passes the one or two it configures.
 local allplugins = require('sekreto.plugins').allplugins
 
 -- The HTTP client and the JSON reader this CLI uses for the API call

@@ -12,7 +12,7 @@
 // be able to reach every store the library ships. An application passes
 // only the kinds its own chain names - that is the point of the split,
 // and this file is the one place in the port that legitimately wants all
-// ten (docs/design/plugin-providers.md).
+// eleven (docs/design/plugin-providers.md).
 //
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 //          gcpsecrets azuresecrets onepassword doppler infisical

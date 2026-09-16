@@ -1,6 +1,6 @@
 # THE FULL SET - every plugin this library ships, in one call.
 #
-# It exists for the callers that genuinely want all ten kinds: the CLI,
+# It exists for the callers that genuinely want all eleven kinds: the CLI,
 # the conformance suite, an app whose chain is decided at run time.
 #
 #     Sekreto.new(chain, plugins: Sekreto.Plugins.all())
@@ -17,7 +17,7 @@
 # `all/0` is a FUNCTION, not a constant, and that is not a limitation of
 # elixir but the mechanism: the BEAM loads a module when something first
 # calls into it, so naming `Sekreto.Plugins` loads this module alone and
-# the ten behind it arrive only when `all/0` runs. Python's plugins
+# the eleven behind it arrive only when `all/0` runs. Python's plugins
 # package has to arrange the same laziness by hand, with a module
 # `__getattr__`; here it is what the runtime already does.
 #

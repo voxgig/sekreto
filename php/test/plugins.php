@@ -400,7 +400,7 @@ testcase('onepluginrequiresonlyitself', function (): void {
 
 // The full set is built on demand, and reaching it requires everything.
 // The requires live inside `allplugins()` for exactly this reason: at file
-// scope, naming the list would load all ten as a side effect.
+// scope, naming the list would load all eleven as a side effect.
 testcase('thefullsetisbuiltondemand', function (): void {
     same(['plugins/plugins.php'], included('plugins/plugins.php'));
 

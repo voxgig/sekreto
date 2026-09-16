@@ -228,7 +228,7 @@ func run() int {
 
 	// THE FULL SET, passed to New. The CLI is asked for any provider kind
 	// on the command line, so it is the one consumer that legitimately
-	// wants all ten plugins; an app passes the one or two it configures,
+	// wants all eleven plugins; an app passes the one or two it configures,
 	// and links nothing else.
 	secrets, err := sekreto.New(&sekreto.Options{
 		Plugins:   plugins.All(),

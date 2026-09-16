@@ -16,7 +16,8 @@
    its kind, `hashicorp$prod` otherwise - so `Sekreto.host` reads like the
    chain. Only four kinds are built in: `env`, `memory`, `dotenv` and
    `file`, the ones that read at most a local file. Every kind that opens a
-   socket, signs a request or spawns a process lives under `plugins/`, and
+   socket, signs a request, spawns a process or does cryptography lives
+   under `plugins/`, and
    a chain may name one only if the calling project handed it to
    `~plugins`. That is what keeps a chain of built-ins free of TLS, of AWS
    request signing and of seven HTTP vault clients.

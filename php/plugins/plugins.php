@@ -24,7 +24,7 @@
  *
  * The requires are INSIDE the function on purpose. At file scope they
  * would make requiring this file - to read the list, to name the type -
- * load all ten as a side effect, and a side effect of an import is exactly
+ * load all eleven as a side effect, and a side effect of an import is exactly
  * what the split forbids (docs/design/plugin-providers.md).
  */
 

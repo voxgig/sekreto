@@ -84,7 +84,8 @@ Ports carrying this kind read each other's files, which
 
 Four provider kinds are **built in** — `env`, `memory`, `dotenv` and
 `file`, the ones that read at most a local file. Every other kind opens a
-socket, signs a request or spawns a process, and is a voxgig/plugin
+socket, signs a request, spawns a process, or does cryptography, and is a
+voxgig/plugin
 definition under `plugins/` that the calling project hands to the
 constructor. Nothing under `src/` names anything under `plugins/`.
 

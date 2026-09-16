@@ -20,7 +20,7 @@ import type { ProviderSpec } from '../src'
 
 // THE FULL SET, passed to Sekreto. The CLI is asked for any provider
 // kind on the command line, so it is the one consumer that legitimately
-// wants all ten plugins; an app passes the one or two it configures.
+// wants all eleven plugins; an app passes the one or two it configures.
 //
 // It must be a VALUE import. An earlier shape of this split registered
 // kinds as a side effect of importing them, and the CLI's only import of

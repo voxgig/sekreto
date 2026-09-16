@@ -273,7 +273,7 @@ canonical: a caller handed the live permission record could flip its own
 `write` bit. Here there is nothing to flip.
 
 **This is the second file in the library that names OpenSSL, and the
-last.** `tls.c` is the first. AGENTS.md used to confine the dependency
+last.** `tls.c` is the first. The dependency rule used to confine the
 exception to cryptographic *transport*, which is why `sha256.c` writes
 SHA-256 and HMAC-SHA256 out by hand beside a linked libcrypto that has
 both; the rule now covers cryptography, because a block cipher protecting

@@ -16,8 +16,9 @@
 --
 -- THIS MODULE OPENS NO SOCKET, SPEAKS NO TLS AND SPAWNS NO CHILD. What
 -- makes a kind built in is that it reads at most a local file; every kind
--- that opens a socket, signs a request or spawns a process is a
--- voxgig/plugin definition in its own module under @plugins/@, which is
+-- that opens a socket, signs a request, spawns a process or does
+-- cryptography is a voxgig/plugin definition in its own module under
+-- @plugins/@, which is
 -- not on the include path this module is compiled with.
 --
 -- A port of typescript/src/provider/support.ts and

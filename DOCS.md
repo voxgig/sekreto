@@ -267,11 +267,12 @@ hands to `Sekreto` at construction.
 | `minivault` | `minivault` | AES-256-GCM, PBKDF2-HMAC-SHA256 | `…/plugins/minivault` → `minivault` |
 | *the full set* | every kind the port ships | everything | `@voxgig/sekreto/plugins` → `allplugins` |
 
-`minivault` ships in typescript and go so far; the other nine are in all
-twenty-three ports. A `minivault` case cannot join the shared spec until
-the last port has the kind, so the two that carry it pin the on-disk
-format against each other instead, through a vault file committed under
-`test/fixture/` that each of them reads.
+`minivault` ships in eighteen ports so far — python, rust, perl, dart,
+and swift are still to come; the other ten kinds are in all twenty-three.
+A `minivault` case cannot join the shared spec until the last port has
+the kind, so the ports that carry it pin the on-disk format against each
+other instead: each writes a vault file under `test/fixture/`, and every
+one of them reads all of those files.
 
 The full set is for the CLI, the conformance suite, and an app whose
 chain is decided at run time. Reaching one plugin through it reaches

@@ -1,7 +1,7 @@
 # The round-trip every remote store shares - and OUTSIDE THE CORE with the
 # client under it.
 #
-# Eight of the ten plugin kinds read a vault over HTTPS, and all eight
+# Eight of the eleven plugin kinds read a vault over HTTPS, and all eight
 # want the same three things: one JSON round-trip whose failures are
 # never a miss, a login token renewed shortly before its lease runs out,
 # and a handful of conversions between a JSON value and the string a

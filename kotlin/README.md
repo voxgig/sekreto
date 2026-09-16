@@ -68,11 +68,11 @@ Ports carrying this kind read each other's files, which
 
 ## Layout
 
-Four kinds are built in; the other ten are plugins.
+Four kinds are built in; the other eleven are plugins.
 What makes a kind built in is that it reads **at most a local file** —
 `env`, `memory`, `dotenv`, `file`. Everything that opens a socket, signs a
-request or spawns a process lives under `plugins/`, and `src/` links none
-of it.
+request, spawns a process, or does cryptography lives under `plugins/`,
+and `src/` links none of it.
 
 | `src/` — the core | |
 |---|---|

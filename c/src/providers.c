@@ -16,7 +16,8 @@
  * THIS FILE NAMES NO SOCKET, NO CHILD PROCESS AND NO HASH FUNCTION. What
  * makes a kind built in is that it needs nothing of the platform beyond
  * the environment and reading a local file; every kind that opens a
- * socket, signs a request or spawns a process is a plugin under
+ * socket, signs a request, spawns a process or does cryptography is a
+ * plugin under
  * `plugins/`, in its own translation unit, linked only by a binary whose
  * link line names it (docs/design/plugin-providers.md).
  *

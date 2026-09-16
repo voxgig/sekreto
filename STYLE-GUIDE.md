@@ -401,8 +401,8 @@ The rest:
   and `stores()` name. Say **store** when the reader is choosing where a
   secret comes from.
 - **built in** and **plugin** — four kinds are built in (`env`, `memory`,
-  `dotenv`, `file`: they read at most a local file); the other ten are
-  plugin kinds, voxgig/plugin definitions under `plugins/` that a
+  `dotenv`, `file`: they read at most a local file and need no crypto);
+  the other eleven are plugin kinds, voxgig/plugin definitions under `plugins/` that a
   `Sekreto` can build only if its constructor was handed them. Never
   "core provider" for a plugin kind.
 - **transparent** and **directed** — `get` and `try` ask the chain and

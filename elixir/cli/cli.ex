@@ -17,7 +17,7 @@
 #
 # THE FULL SET, PASSED TO Sekreto. The CLI is asked for any provider kind
 # on the command line, so it is the one consumer that legitimately wants
-# all ten plugins; an app passes the one or two it configures. Nothing in
+# all eleven plugins; an app passes the one or two it configures. Nothing in
 # the conformance suite can see this call - it hands every plugin to every
 # chain it builds - so test/plugins_test.exs pins it.
 

@@ -3,7 +3,7 @@
 /**
  * Building the full set, and nothing else, for `php test/included.php
  * test/allplugins.php` to measure. Naming `allplugins` costs one file;
- * CALLING it costs all ten, and that difference is the point.
+ * CALLING it costs all eleven, and that difference is the point.
  */
 
 declare(strict_types=1);

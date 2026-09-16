@@ -76,7 +76,7 @@ local secrets = sekreto.sekreto({
 })
 ```
 
-`require('sekreto.plugins').allplugins` is all ten at once, for the CLI
+`require('sekreto.plugins').allplugins` is all eleven at once, for the CLI
 and for an app whose chain is decided at run time. Reaching it loads
 every network client and the crypto behind them, which is the cost the
 split exists to remove — an app requires the kinds it configures.
@@ -205,11 +205,11 @@ copy, and the test asserts that the vault still reads its own.
 
 **What this port cannot do, stated rather than implied.** Lua's `io.open`
 has `w` and nothing else: no exclusive create, and no way to set a mode.
-So the vault file is created under the process umask rather than at
+So the vault file is created under the process `umask` rather than at
 `0600`, and `createvault` refuses an existing file by looking first —
 a check-then-write that two processes racing could both pass, where every
 other port refuses in one syscall. A deployment that needs `0600` on a
-shared host sets its umask.
+shared host sets its `umask`.
 
 Ports carrying this kind read each other's files, which
 `test/test_minivault.lua` checks against every committed vault in

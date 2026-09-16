@@ -72,7 +72,7 @@ fun main() {
     checkeq("redaction still works", "t=[redacted]", secrets.redact("t=fromdotenv"))
 
     // ...and a plugin kind is refused HERE TOO, naming the fix. The core
-    // knows the ten names without linking one of them: KINDS.plugin is a
+    // knows the eleven names without linking one of them: KINDS.plugin is a
     // list of strings.
     val refused = try {
         secrets.host // touched so the host is real, not elided

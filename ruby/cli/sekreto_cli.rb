@@ -30,7 +30,7 @@ require_relative '../lib/voxgig_sekreto'
 
 # THE FULL SET, passed to Sekreto. The CLI is asked for any provider kind
 # on the command line, so it is the one consumer that legitimately wants
-# all ten plugins; an app passes the one or two it configures.
+# all eleven plugins; an app passes the one or two it configures.
 require_relative '../lib/voxgig_sekreto/plugins'
 
 LANG = 'ruby'

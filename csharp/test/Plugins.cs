@@ -461,7 +461,7 @@ internal static class Seam
 
         // The full set is built on demand: All() hands back a fresh list
         // every time, so a caller cannot mutate the catalog every other
-        // caller will get. It is also the ONLY name that reaches all ten -
+        // caller will get. It is also the ONLY name that reaches all eleven -
         // a consumer that wants one takes one.
         Case("the full set is built on demand", () =>
         {

@@ -35,8 +35,9 @@ signed AWS payload's field order is part of what was signed.
 
 `env`, `memory`, `dotenv` and `file` read at most a local file, so they are
 in the core and a chain of them needs nothing else. Everything that opens a
-socket, signs a request or spawns a process — the vault clients, the cloud
-stores, the two CLIs, and SigV4 with them — is a voxgig/plugin definition
+socket, signs a request, spawns a process, or does cryptography — the vault
+clients, the cloud stores, the two CLIs, the mini vault, and SigV4 with
+them — is a voxgig/plugin definition
 under `plugins/`, and a `Sekreto` can build only the kinds its constructor
 was handed:
 
@@ -153,13 +154,13 @@ this file's own table, which holds **weak** pointers and is not emptied,
 so a chain that has been destroyed leaves an expired ticket and `vaultof`
 refuses rather than handing back a dangling handle.
 
-`VaultKeyInfo` has private members and const accessors, which is how this
-port answers the defect the review round found in the canonical: a caller
+`VaultKeyInfo` keeps its fields private and hands them back through
+`const` member functions, which is how this port answers the defect the review round found in the canonical: a caller
 handed the live permission record could flip its own `write` bit. Here
 that does not compile.
 
 **This is the second file in the port that includes `<openssl/>`, and the
-last.** `Tls.cpp` is the first. AGENTS.md used to confine the dependency
+last.** `Tls.cpp` is the first. The dependency rule used to confine the
 exception to cryptographic *transport*, which is why `Crypto.cpp` writes
 SHA-256 and HMAC-SHA256 out by hand beside a linked OpenSSL that has both;
 the rule now covers cryptography, because a block cipher protecting

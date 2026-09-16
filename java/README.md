@@ -37,7 +37,7 @@ Sekreto secrets = new Sekreto(new Sekreto.Options()
 
 A kind that was not passed in is refused by name, with the plugin to
 pass. `Plugins.ALL` is the full set, for a caller that genuinely wants
-all ten kinds — the CLI, the conformance suite — and naming it links
+all eleven kinds — the CLI, the conformance suite — and naming it links
 every one of them, which is the cost the split exists to remove.
 
 A custom store is one call:
@@ -101,7 +101,7 @@ Ports carrying this kind read each other's files, which
 |---|---|
 | `src/com/voxgig/sekreto/Sekreto.java` | the facade, the chain, the name helpers, `parsedotenv`, `redact` |
 | `src/com/voxgig/sekreto/Support.java` | `providerplugin` — how a kind becomes a plugin definition |
-| `src/com/voxgig/sekreto/Builtins.java` | the four built-in kinds, and the names of the ten that are not |
+| `src/com/voxgig/sekreto/Builtins.java` | the four built-in kinds, and the names of the eleven that are not |
 | `src/com/voxgig/sekreto/Addr.java` | `checkaddr`, the guard every network plugin runs first |
 | `src/com/voxgig/sekreto/Json.java` | the JSON reader and writer |
 | `plugins/com/voxgig/sekreto/plugins/` | the eleven plugin kinds, `Httpjson`, `Proc`, `Sigv4`, and `Plugins.ALL` |

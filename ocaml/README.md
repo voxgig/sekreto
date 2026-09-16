@@ -45,8 +45,8 @@ specs, `Sekreto.make` from providers you built yourself.
 
 Four provider kinds are **built in** — `env`, `memory`, `dotenv` and
 `file` — and what makes them built in is that they read at most a local
-file. Everything that opens a socket, signs a request, or spawns a process
-is a [voxgig/plugin](https://github.com/voxgig/plugin) definition in its
+file. Everything that opens a socket, signs a request, spawns a process, or does
+cryptography is a [voxgig/plugin](https://github.com/voxgig/plugin) definition in its
 own module under `plugins/`, and a chain can build exactly the kinds its
 constructor was handed:
 
@@ -143,7 +143,7 @@ instead, for a provider of your own: it is a record of two functions,
 one call to `Provider.providerplugin`, which is what every built-in and
 every shipped plugin is made of.
 
-`Allplugins.all ()` is every kind at once, for a caller that wants all ten
+`Allplugins.all ()` is every kind at once, for a caller that wants all eleven
 — the CLI takes it, because a source named on the command line is not
 known until the command line is read. An app that ships one chain names
 the kinds that chain configures and links those.
@@ -194,7 +194,7 @@ distribution has no cryptographic digest but MD5 and no cipher at all, and
 the no-new-package rule stands, so the four primitives come from the
 OpenSSL this port already links: `plugins/minivault_stubs.c` is
 AES-256-GCM, PBKDF2-HMAC-SHA256, HMAC-SHA256 and the entropy under them,
-and nothing else. AGENTS.md used to confine the dependency exception to
+and nothing else. The dependency rule used to confine the exception to
 cryptographic *transport*, which is why `plugins/crypto.ml` writes
 SHA-256 and HMAC-SHA256 out by hand beside a linked libcrypto that has
 both; the rule now covers cryptography, because a block cipher protecting

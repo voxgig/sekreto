@@ -13,8 +13,8 @@ make check-core               # what the core actually links
 
 Four provider kinds are **built in** — `env`, `memory`, `dotenv` and
 `file` — and what makes them built in is that they read at most a local
-file. Every kind that opens a socket, signs a request, or spawns a process
-is a [voxgig/plugin](https://github.com/voxgig/plugin) definition under
+file. Every kind that opens a socket, signs a request, spawns a process, or does
+cryptography is a [voxgig/plugin](https://github.com/voxgig/plugin) definition under
 `plugins/`, and a `Sekreto` can build exactly the kinds its constructor
 was handed:
 
@@ -211,7 +211,7 @@ Two things this port cannot ask the platform for, said here rather than
 implied. `IO.FS.writeBinFile` has no exclusive-create mode, so creating a
 vault is check-then-write and two processes racing to create the same
 file is a race the format cannot arbitrate; and it has no file mode
-either, so a new vault lands under the process umask rather than
+either, so a new vault lands under the process `umask` rather than
 owner-only. Both are the same call in every other port and neither is a
 secrecy claim this port makes.
 
