@@ -4,7 +4,7 @@
 #
 #     from voxgig_sekreto.plugins.hashicorp import hashicorp
 #
-# THIS FILE IMPORTS NO PLUGIN. It used to import all ten so that they
+# THIS FILE IMPORTS NO PLUGIN. It used to import all eleven so that they
 # could be re-exported from here, and that made the single-plugin import
 # above execute this initializer first and load every network client,
 # AWS request signing and the two CLIs behind it - the whole set, for a
@@ -31,7 +31,7 @@
 
 _MODULES = [
     'hashicorp', 'boru', 'aws', 'gcpsecrets', 'azuresecrets',
-    'onepassword', 'doppler', 'infisical', 'secretspec',
+    'onepassword', 'doppler', 'infisical', 'secretspec', 'minivault',
 ]
 
 
@@ -45,10 +45,11 @@ def _all():
     from .doppler import doppler
     from .infisical import infisical
     from .secretspec import secretspec
+    from .minivault import minivault
 
     return [
         hashicorp, boru, awssecrets, awsparams, gcpsecrets, azuresecrets,
-        onepassword, doppler, infisical, secretspec,
+        onepassword, doppler, infisical, secretspec, minivault,
     ]
 
 

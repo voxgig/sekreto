@@ -69,6 +69,74 @@ fetches a shallow clone into `../.plugin` when there is none, which is
 what `npm install` and `go mod download` do for the other two ports.
 The library itself searches no path.
 
+## The mini vault
+
+`voxgig_sekreto/plugins/minivault.py` is a store this port owns outright
+rather than a client for a server somebody else runs: every secret,
+encrypted, in one binary file. It has a master key and restricted keys,
+and it is the port's worked example of a definition publishing an API
+beside its provider.
+
+```python
+from voxgig_sekreto import Sekreto
+from voxgig_sekreto.plugins.minivault import createvault, minivault, vaultof
+
+vault = createvault({'file': 'app.skmv', 'passphrase': master})
+vault.set('api.token', 'tok01')
+vault.grant({'key': 'ci', 'passphrase': ci, 'names': ['api.token']})
+
+secrets = Sekreto({
+    'plugins': [minivault],
+    'providers': [{'kind': 'minivault', 'file': 'app.skmv',
+                   'vaultkey': 'ci', 'passphrase': ci}],
+})
+
+secrets.get('api.token')        # the chain reads
+vaultof(secrets).list()         # the API writes
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off the chain's host. That is why this one definition is written out
+rather than built by `providerplugin`, which publishes the provider and
+nothing else.
+
+**Where the crypto comes from, and why it is not a new dependency.**
+Three of the four primitives the format needs are in the standard
+library: `hashlib.pbkdf2_hmac`, `hmac` over `hashlib.sha256`, and
+`os.urandom`. The fourth, AES-256-GCM, python has no interface to at all
+— so the plugin calls it through `ctypes` in the libcrypto CPython has
+already loaded. `import ssl` links OpenSSL into the process; it is what
+`urllib` speaks HTTPS through, and what the HTTP plugins in this same
+folder already depend on. The whole surface is five EVP calls, and the
+library is found three ways, because one is not enough anywhere but
+Linux: the loader's own search path, the directory `_ssl` was built
+beside, then the names each platform ships under.
+
+The alternative was a pure-python AES, which is exactly what the
+dependency rule exists to forbid: a table-driven cipher passes every
+known-answer test in the world and still hands its key to anyone who can
+time a cache. So this module never hand-rolls a primitive and never falls
+back to one. Where no libcrypto can be reached the vault refuses and says
+so, rather than encrypting a secret with something weaker.
+
+**Two handles on one file serialize.** Each handle is its own object, so
+without a shared lock both could finish reading before either saved, and
+the second write would discard the first one's change while reporting
+success. The lock is keyed by the absolute path, so two handles spelled
+differently still meet. The GIL does not make this safe: it is released
+around every file read and write, which is exactly where the two handles
+interleave.
+
+Ports carrying this kind read each other's files, which
+`tests/test_minivault.py` checks against every committed vault in
+`test/fixture/`, including the one this port wrote:
+
+```sh
+make vaulttest                       # all of it
+make vaulttest CASE=two_handles      # one case
+```
+
 ## Layout
 
 | | |
@@ -78,9 +146,11 @@ The library itself searches no path.
 | `voxgig_sekreto/addr.py` | `checkaddr`, the plaintext-address guard — pure, and on the spec |
 | `voxgig_sekreto/plugins/<name>.py` | one plugin each; `aws.py` carries `sigv4.py` beside it |
 | `voxgig_sekreto/plugins/httpjson.py` | the bounded, redirect-refusing HTTP round-trip every wire plugin shares |
+| `voxgig_sekreto/plugins/minivault.py` | the mini vault: the file format, the vault API, and the provider over it |
 | `voxgig_sekreto/plugins/__init__.py` | the full set |
 | `tests/test_sekreto.py` | the conformance suite |
 | `tests/test_plugins.py` | the plugin seam, from both sides |
+| `tests/test_minivault.py` | the mini vault, and the committed files every port reads |
 | `cli/sekreto_cli.py` | the app that needs a secret |
 
 ## Notes

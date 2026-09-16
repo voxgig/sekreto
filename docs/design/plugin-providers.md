@@ -344,16 +344,21 @@ and the three seam tests).
 
 typescript (canonical) ✅ → go ✅ → javascript ✅, ruby ✅, php ✅,
 java ✅, csharp ✅, elixir ✅, kotlin ✅, scala ✅, clojure ✅, zig ✅,
-c ✅, cpp ✅, ocaml ✅, haskell ✅, lua ✅, lean ✅ → python, rust, perl,
-dart, and swift.
+c ✅, cpp ✅, ocaml ✅, haskell ✅, lua ✅, lean ✅, rust ✅, python ✅
+→ perl, dart, and swift.
 
 A port takes it when its language has AES-256-GCM and PBKDF2-HMAC-SHA256
 within the dependency rule — from the standard library, from a
 cryptographic library the port already links, or written small in-tree
 the way go writes PBKDF2 because `crypto/pbkdf2` postdates the version it
-targets. The five still to come are the ones where none of those three
-holds yet, so each needs its own answer before it starts rather than a
-port of somebody else's.
+targets. Rust took the second: `ring` arrived with rustls under
+`plugins/httpjson` and carries all four primitives, so naming it in the
+vault crate adds an edge to the closure rather than a crate to it. Python
+took the second as well, one level down: three of the four primitives are
+in `hashlib`, `hmac` and `os`, and AES-256-GCM comes through `ctypes`
+from the libcrypto that `import ssl` has already loaded. The three still
+to come are the ones where none of the three holds yet, so each needs its
+own answer before it starts rather than a port of somebody else's.
 
 The acceptance test is `test/fixture/`: a port that reads every vault
 committed there, key by key, and writes one the others read has the

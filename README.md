@@ -89,9 +89,9 @@ plugin host they live on. The core imports no plugin in any form, and
 loading is explicit rather than a side effect of importing: a `Sekreto`
 can build only the kinds its constructor was handed.
 
-`minivault` is the newest and is not yet everywhere: eighteen ports ship
-it, and python, rust, perl, dart, and swift follow. Every kind preceding
-it is in all twenty-three. Because the shared spec runs against every
+`minivault` is the newest and is not yet everywhere: twenty ports ship
+it, and perl, dart, and swift follow. Every kind preceding it is in all
+twenty-three. Because the shared spec runs against every
 port, a `minivault` case cannot join it until the last port has the kind,
 so until then the ports that do carry it prove the format against each
 other: each writes a vault file into `test/fixture/`, and every one of

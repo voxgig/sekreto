@@ -267,8 +267,8 @@ hands to `Sekreto` at construction.
 | `minivault` | `minivault` | AES-256-GCM, PBKDF2-HMAC-SHA256 | `…/plugins/minivault` → `minivault` |
 | *the full set* | every kind the port ships | everything | `@voxgig/sekreto/plugins` → `allplugins` |
 
-`minivault` ships in eighteen ports so far — python, rust, perl, dart,
-and swift are still to come; the other ten kinds are in all twenty-three.
+`minivault` ships in twenty ports so far — perl, dart, and swift are
+still to come; the other ten kinds are in all twenty-three.
 A `minivault` case cannot join the shared spec until the last port has
 the kind, so the ports that carry it pin the on-disk format against each
 other instead: each writes a vault file under `test/fixture/`, and every
@@ -914,9 +914,11 @@ across the whole read-modify-write of `set`, `remove`, `grant`, `revoke`
 and `rotate`.
 
 Where the language offers concurrent access to one handle, the port
-arranges that itself: a table of locks in go, java, kotlin, scala,
-clojure, csharp, ruby, cpp, haskell, lean, zig and c, and
+arranges that itself: a table of locks in go, python, rust, java, kotlin,
+scala, clojure, csharp, ruby, cpp, haskell, lean, zig and c, and
 `:global.trans` in elixir, whose unit is a process rather than a thread.
+Python's GIL does not stand in for that table: it is released around
+every file read and write, which is exactly where two handles interleave.
 In typescript, javascript, php, lua and ocaml there is no second thread
 of execution to interleave with, so the sequence is already indivisible
 and those ports carry no lock — the same property, arrived at for free.
