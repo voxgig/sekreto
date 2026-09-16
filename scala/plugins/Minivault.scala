@@ -24,6 +24,7 @@ import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.NoSuchFileException
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.nio.file.StandardCopyOption
 import java.nio.file.StandardOpenOption
 import java.nio.file.attribute.PosixFilePermissions
@@ -125,6 +126,28 @@ private def mvutf8(text: String): Array[Byte] = text.getBytes(StandardCharsets.U
   * this with SEKRETO_VAULT_KEY set and empty, which is what an unset shell
   * variable expands to.
   */
+/** The lock every handle on one file shares.
+  *
+  * Each [[MiniVault]] is its own object, so two handles on one path did
+  * not coordinate: both could finish `load` before either saved, and the
+  * second rename then discarded the first one's change while reporting
+  * success. Keyed by the ABSOLUTE path, so two handles spelled
+  * differently still meet.
+  *
+  * A guarantee WITHIN one process, which is what DOCS.md promises and
+  * what the go port arranges the same way. Two processes still race, and
+  * the format's answer to that is the exclusive create and the atomic
+  * rename: a reader sees one whole vault or the other, never half of one.
+  */
+private val MVLOCKS = java.util.concurrent.ConcurrentHashMap[String, AnyRef]()
+
+private def mvlockfor(file: String): AnyRef =
+  val key =
+    try Paths.get(file).toAbsolutePath.normalize.toString
+    catch case _: RuntimeException => file
+
+  MVLOCKS.computeIfAbsent(key, _ => Object())
+
 private def mvwantkey(value: String): String =
   if value.isEmpty then MASTERKEY else value
 
@@ -537,50 +560,56 @@ final class MiniVault private[plugins] (options: VaultOptions):
     * `write` overwrites the names it was granted, and creates none.
     */
   def set(name: String, value: String): Unit =
-    checkname(name)
-    val (vault, state) = load
+    // Every write on this file, from any handle in this process,
+    // serializes here; see mvlockfor.
+    mvlockfor(file).synchronized:
+      checkname(name)
+      val (vault, state) = load
 
-    if !state.info.write then mvfail(s"key ${state.info.key} is read-only")
+      if !state.info.write then mvfail(s"key ${state.info.key} is read-only")
 
-    val key = keyfor(state, name).getOrElse(
-      mvfail(s"key ${state.info.key} was not granted $name"),
-    )
+      val key = keyfor(state, name).getOrElse(
+        mvfail(s"key ${state.info.key} was not granted $name"),
+      )
 
-    val sealedvalue = mvseal(key, mvutf8(value), AAD_SECRET + name)
-    val id = mventryid(key)
+      val sealedvalue = mvseal(key, mvutf8(value), AAD_SECRET + name)
+      val id = mventryid(key)
 
-    val entries =
-      if vault.entries.exists(entry => java.util.Arrays.equals(entry.id, id)) then
-        vault.entries.map: entry =>
-          if java.util.Arrays.equals(entry.id, id) then entry.copy(value = sealedvalue) else entry
-      else
-        // A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
-        // restricted key with `write` updates what it was granted and cannot
-        // grow the vault.
-        val root = rootof(state, s"creating the secret $name")
-        vault.entries :+ EntryRecord(
-          id,
-          mvseal(mvhmac(root, LABEL_NAMES), mvutf8(name), AAD_NAME),
-          sealedvalue,
-        )
+      val entries =
+        if vault.entries.exists(entry => java.util.Arrays.equals(entry.id, id)) then
+          vault.entries.map: entry =>
+            if java.util.Arrays.equals(entry.id, id) then entry.copy(value = sealedvalue) else entry
+        else
+          // A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
+          // restricted key with `write` updates what it was granted and cannot
+          // grow the vault.
+          val root = rootof(state, s"creating the secret $name")
+          vault.entries :+ EntryRecord(
+            id,
+            mvseal(mvhmac(root, LABEL_NAMES), mvutf8(name), AAD_NAME),
+            sealedvalue,
+          )
 
-    save(vault.copy(entries = entries))
+      save(vault.copy(entries = entries))
 
   /** Drop a name. Master only. */
   def remove(name: String): Unit =
-    checkname(name)
-    val (vault, state) = load
-    val root = rootof(state, "removing a secret")
+    // Every write on this file, from any handle in this process,
+    // serializes here; see mvlockfor.
+    mvlockfor(file).synchronized:
+      checkname(name)
+      val (vault, state) = load
+      val root = rootof(state, "removing a secret")
 
-    val wanted = mventryid(mvsecretkey(root, name))
-    if !vault.entries.exists(entry => java.util.Arrays.equals(entry.id, wanted)) then
-      mvfail(s"no such secret: $name")
+      val wanted = mventryid(mvsecretkey(root, name))
+      if !vault.entries.exists(entry => java.util.Arrays.equals(entry.id, wanted)) then
+        mvfail(s"no such secret: $name")
 
-    save(
-      vault.copy(entries =
-        vault.entries.filterNot(entry => java.util.Arrays.equals(entry.id, wanted)),
-      ),
-    )
+      save(
+        vault.copy(entries =
+          vault.entries.filterNot(entry => java.util.Arrays.equals(entry.id, wanted)),
+        ),
+      )
 
   /** Every key in the file, with what it may do. Master only. */
   def keys: List[VaultKeyInfo] =
@@ -603,38 +632,41 @@ final class MiniVault private[plugins] (options: VaultOptions):
 
   /** Mint a restricted key. Master only. */
   def grant(spec: GrantSpec): Unit =
-    val (vault, state) = load
-    val root = rootof(state, "granting a key")
+    // Every write on this file, from any handle in this process,
+    // serializes here; see mvlockfor.
+    mvlockfor(file).synchronized:
+      val (vault, state) = load
+      val root = rootof(state, "granting a key")
 
-    val id = mvcheckid(Some(spec.key), "a grant needs a key id")
-    if spec.passphrase.isEmpty then mvfail("a grant needs a passphrase")
-    if vault.keys.exists(_.id == id) then mvfail(s"key already exists: $id")
+      val id = mvcheckid(Some(spec.key), "a grant needs a key id")
+      if spec.passphrase.isEmpty then mvfail("a grant needs a passphrase")
+      if vault.keys.exists(_.id == id) then mvfail(s"key already exists: $id")
 
-    val names = spec.names.sorted
+      val names = spec.names.sorted
 
-    // A ListMap built from the sorted names, for a ring whose JSON is the
-    // same text on every run. It is NOT an interop requirement - the ring
-    // is sealed under a fresh nonce, so its ciphertext differs per write
-    // whatever the key order is.
-    val grants = ListMap.from(names.map: name =>
-      checkname(name)
-      (name, mvb64(mvsecretkey(root, name))))
+      // A ListMap built from the sorted names, for a ring whose JSON is the
+      // same text on every run. It is NOT an interop requirement - the ring
+      // is sealed under a fresh nonce, so its ciphertext differs per write
+      // whatever the key order is.
+      val grants = ListMap.from(names.map: name =>
+        checkname(name)
+        (name, mvb64(mvsecretkey(root, name))))
 
-    val record = sealkey(
-      root,
-      id,
-      spec.passphrase,
-      spec.iterations.getOrElse(theiters),
-      ListMap[String, Any]("v" -> FORMAT, "write" -> spec.write, "grants" -> grants),
-      ListMap[String, Any](
-        "v" -> FORMAT,
-        "master" -> false,
-        "write" -> spec.write,
-        "grants" -> names,
-      ),
-    )
+      val record = sealkey(
+        root,
+        id,
+        spec.passphrase,
+        spec.iterations.getOrElse(theiters),
+        ListMap[String, Any]("v" -> FORMAT, "write" -> spec.write, "grants" -> grants),
+        ListMap[String, Any](
+          "v" -> FORMAT,
+          "master" -> false,
+          "write" -> spec.write,
+          "grants" -> names,
+        ),
+      )
 
-    save(vault.copy(keys = vault.keys :+ record))
+      save(vault.copy(keys = vault.keys :+ record))
 
   /** Drop a key. Master only.
     *
@@ -643,13 +675,16 @@ final class MiniVault private[plugins] (options: VaultOptions):
     * takes a secret back.
     */
   def revoke(key: String): Unit =
-    val (vault, state) = load
-    rootof(state, "revoking a key")
+    // Every write on this file, from any handle in this process,
+    // serializes here; see mvlockfor.
+    mvlockfor(file).synchronized:
+      val (vault, state) = load
+      rootof(state, "revoking a key")
 
-    if key == state.info.key then mvfail(s"a key cannot revoke itself: $key")
-    if !vault.keys.exists(_.id == key) then mvfail(s"no such key: $key")
+      if key == state.info.key then mvfail(s"a key cannot revoke itself: $key")
+      if !vault.keys.exists(_.id == key) then mvfail(s"no such key: $key")
 
-    save(vault.copy(keys = vault.keys.filterNot(_.id == key)))
+      save(vault.copy(keys = vault.keys.filterNot(_.id == key)))
 
   /** A new root key, every value re-encrypted under it, and EVERY OTHER KEY
     * DROPPED. Master only.
@@ -658,43 +693,46 @@ final class MiniVault private[plugins] (options: VaultOptions):
     * passphrases this process does not have. Re-grant afterwards.
     */
   def rotate(): Unit =
-    val (vault, state) = load
-    rootof(state, "rotating the vault")
+    // Every write on this file, from any handle in this process,
+    // serializes here; see mvlockfor.
+    mvlockfor(file).synchronized:
+      val (vault, state) = load
+      rootof(state, "rotating the vault")
 
-    // Read everything out under the old root before anything changes: once
-    // the root is replaced the old derived keys are unreachable.
-    val plain = list.map(name => (name, get(name).getOrElse("")))
+      // Read everything out under the old root before anything changes: once
+      // the root is replaced the old derived keys are unreachable.
+      val plain = list.map(name => (name, get(name).getOrElse("")))
 
-    val root = mvrandom(KEYLEN)
-    val namekey = mvhmac(root, LABEL_NAMES)
+      val root = mvrandom(KEYLEN)
+      val namekey = mvhmac(root, LABEL_NAMES)
 
-    val entries = plain.map: (name, value) =>
-      val key = mvsecretkey(root, name)
-      EntryRecord(
-        mventryid(key),
-        mvseal(namekey, mvutf8(name), AAD_NAME),
-        mvseal(key, mvutf8(value), AAD_SECRET + name),
+      val entries = plain.map: (name, value) =>
+        val key = mvsecretkey(root, name)
+        EntryRecord(
+          mventryid(key),
+          mvseal(namekey, mvutf8(name), AAD_NAME),
+          mvseal(key, mvutf8(value), AAD_SECRET + name),
+        )
+
+      val iters = vault.keys.find(_.id == thekey).map(_.iters).getOrElse(theiters)
+
+      val record = sealkey(
+        root,
+        thekey,
+        thephrase,
+        iters,
+        ListMap[String, Any]("v" -> FORMAT, "write" -> true, "root" -> mvb64(root)),
+        ListMap[String, Any]("v" -> FORMAT, "master" -> true, "write" -> true, "grants" -> List()),
       )
 
-    val iters = vault.keys.find(_.id == thekey).map(_.iters).getOrElse(theiters)
+      // SAVE FIRST, adopt second. A handle holding the new root over a file
+      // that still holds the old one reads nothing and says the vault is
+      // damaged.
+      write(VaultFile(List(record), entries))
 
-    val record = sealkey(
-      root,
-      thekey,
-      thephrase,
-      iters,
-      ListMap[String, Any]("v" -> FORMAT, "write" -> true, "root" -> mvb64(root)),
-      ListMap[String, Any]("v" -> FORMAT, "master" -> true, "write" -> true, "grants" -> List()),
-    )
-
-    // SAVE FIRST, adopt second. A handle holding the new root over a file
-    // that still holds the old one reads nothing and says the vault is
-    // damaged.
-    write(VaultFile(List(record), entries))
-
-    opened = Some(
-      Opened(VaultKeyInfo(thekey, true, true, Nil), Some(root), Map.empty, record.ring),
-    )
+      opened = Some(
+        Opened(VaultKeyInfo(thekey, true, true, Nil), Some(root), Map.empty, record.ring),
+      )
 
   // --- the inside ----------------------------------------------------
 

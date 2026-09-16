@@ -368,6 +368,41 @@ fun main(args: Array<String>) {
     // case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
     // expands to the empty string rather than to nothing at all - and `?:`
     // answers for null alone.
+    // TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each
+    // MiniVault is its own object with its own snapshot, so without the
+    // shared per-path lock both threads finish `load()` before either
+    // saves and the second rename discards the first one's secret while
+    // reporting success. DOCS.md promises this within one process.
+    testcase("two handles writing at once lose nothing") {
+        val vault = fresh()
+        val path = vault.file()
+        val rounds = 40
+        val broke = java.util.Collections.synchronizedList(mutableListOf<Throwable>())
+
+        val writer = { tag: String ->
+            Thread {
+                try {
+                    val mine = openvault(VaultOptions(file = path, passphrase = MASTER))
+                    for (round in 0 until rounds) {
+                        mine.set("t$tag.n$round", "v$round")
+                    }
+                } catch (err: Throwable) {
+                    broke.add(err)
+                }
+            }
+        }
+
+        val one = writer("one")
+        val two = writer("two")
+        one.start()
+        two.start()
+        one.join()
+        two.join()
+
+        eq(emptyList<String>(), broke.map { it.toString() }, "a writer raised")
+        eq(2 * rounds, vault.list().size, "every write survived")
+    }
+
     testcase("an empty key means the master key") {
         val vault = fresh()
         vault.set("api.token", "tok01")

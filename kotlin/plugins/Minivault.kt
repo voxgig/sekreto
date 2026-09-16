@@ -128,6 +128,32 @@ private fun mvfail(text: String): Nothing = throw SekretoError("sekreto: minivau
  * SEKRETO_VAULT_KEY set and empty, which is what an unset shell variable
  * expands to.
  */
+/**
+ * The lock every handle on one file shares.
+ *
+ * Each [MiniVault] is its own object, so two handles on one path did not
+ * coordinate: both could finish `load()` before either saved, and the
+ * second rename then discarded the first one's change while reporting
+ * success. Keyed by the ABSOLUTE path, so two handles spelled differently
+ * still meet.
+ *
+ * A guarantee WITHIN one process, which is what DOCS.md promises and what
+ * the go port arranges the same way. Two processes still race, and the
+ * format's answer to that is the exclusive create and the atomic rename:
+ * a reader sees one whole vault or the other, never half of one.
+ */
+private val LOCKS = java.util.concurrent.ConcurrentHashMap<String, Any>()
+
+private fun lockfor(file: String): Any {
+    val key = try {
+        File(file).absoluteFile.normalize().path
+    } catch (err: RuntimeException) {
+        file
+    }
+
+    return LOCKS.computeIfAbsent(key) { Any() }
+}
+
 private fun wantkey(value: String?): String =
     if (value.isNullOrEmpty()) MASTERKEY else value
 
@@ -619,48 +645,56 @@ class MiniVault internal constructor(options: VaultOptions) {
      * `write` overwrites the names it was granted, and creates none.
      */
     fun set(name: String, value: String) {
-        checkname(name)
-        val (vault, open) = load()
+        // Every write on this file, from any handle in this process,
+        // serializes here; see lockfor.
+        synchronized(lockfor(file)) {
+            checkname(name)
+            val (vault, open) = load()
 
-        if (!open.info.write) {
-            mvfail("key ${open.info.key} is read-only")
+            if (!open.info.write) {
+                mvfail("key ${open.info.key} is read-only")
+            }
+
+            val key = keyfor(open, name) ?: mvfail("key ${open.info.key} was not granted $name")
+            val sealedvalue = seal(key, utf8(value), AAD_SECRET + name)
+            val found = findentry(vault, key)
+
+            if (null != found) {
+                found.value = sealedvalue
+            } else {
+                // A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
+                // restricted key with `write` updates what it was granted and
+                // cannot grow the vault.
+                val root = rootof(open, "creating the secret $name")
+                vault.entries.add(
+                    EntryRecord(
+                        entryid(key),
+                        seal(mvhmac(root, LABEL_NAMES), utf8(name), AAD_NAME),
+                        sealedvalue,
+                    ),
+                )
+            }
+
+            save(vault)
         }
-
-        val key = keyfor(open, name) ?: mvfail("key ${open.info.key} was not granted $name")
-        val sealedvalue = seal(key, utf8(value), AAD_SECRET + name)
-        val found = findentry(vault, key)
-
-        if (null != found) {
-            found.value = sealedvalue
-        } else {
-            // A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
-            // restricted key with `write` updates what it was granted and
-            // cannot grow the vault.
-            val root = rootof(open, "creating the secret $name")
-            vault.entries.add(
-                EntryRecord(
-                    entryid(key),
-                    seal(mvhmac(root, LABEL_NAMES), utf8(name), AAD_NAME),
-                    sealedvalue,
-                ),
-            )
-        }
-
-        save(vault)
     }
 
     /** Drop a name. Master only. */
     fun remove(name: String) {
-        checkname(name)
-        val (vault, open) = load()
-        val root = rootof(open, "removing a secret")
+        // Every write on this file, from any handle in this process,
+        // serializes here; see lockfor.
+        synchronized(lockfor(file)) {
+            checkname(name)
+            val (vault, open) = load()
+            val root = rootof(open, "removing a secret")
 
-        val wanted = entryid(secretkey(root, name))
-        val found = vault.entries.firstOrNull { it.id.contentEquals(wanted) }
-            ?: mvfail("no such secret: $name")
+            val wanted = entryid(secretkey(root, name))
+            val found = vault.entries.firstOrNull { it.id.contentEquals(wanted) }
+                ?: mvfail("no such secret: $name")
 
-        vault.entries.remove(found)
-        save(vault)
+            vault.entries.remove(found)
+            save(vault)
+        }
     }
 
     /** Every key in the file, with what it may do. Master only. */
@@ -680,41 +714,45 @@ class MiniVault internal constructor(options: VaultOptions) {
 
     /** Mint a restricted key. Master only. */
     fun grant(spec: GrantSpec) {
-        val (vault, open) = load()
-        val root = rootof(open, "granting a key")
+        // Every write on this file, from any handle in this process,
+        // serializes here; see lockfor.
+        synchronized(lockfor(file)) {
+            val (vault, open) = load()
+            val root = rootof(open, "granting a key")
 
-        val id = checkid(spec.key, "a grant needs a key id")
-        if (spec.passphrase.isEmpty()) {
-            mvfail("a grant needs a passphrase")
+            val id = checkid(spec.key, "a grant needs a key id")
+            if (spec.passphrase.isEmpty()) {
+                mvfail("a grant needs a passphrase")
+            }
+            if (vault.keys.any { it.id == id }) {
+                mvfail("key already exists: $id")
+            }
+
+            val names = spec.names.sorted()
+
+            // A TreeMap, for a ring whose JSON is the same text on every run.
+            // It is NOT an interop requirement - the ring is sealed under a
+            // fresh nonce, so its ciphertext differs per write whatever the key
+            // order is. It is so that two runs of this port over the same grant
+            // produce the same plaintext.
+            val grants = TreeMap<String, Any?>()
+            for (name in names) {
+                checkname(name)
+                grants[name] = b64(secretkey(root, name))
+            }
+
+            vault.keys.add(
+                sealkey(
+                    root, id, spec.passphrase, spec.iterations ?: iterations,
+                    linkedMapOf("v" to FORMAT.toDouble(), "write" to spec.write,
+                        "grants" to LinkedHashMap(grants)),
+                    linkedMapOf("v" to FORMAT.toDouble(), "master" to false,
+                        "write" to spec.write, "grants" to names),
+                ),
+            )
+
+            save(vault)
         }
-        if (vault.keys.any { it.id == id }) {
-            mvfail("key already exists: $id")
-        }
-
-        val names = spec.names.sorted()
-
-        // A TreeMap, for a ring whose JSON is the same text on every run.
-        // It is NOT an interop requirement - the ring is sealed under a
-        // fresh nonce, so its ciphertext differs per write whatever the key
-        // order is. It is so that two runs of this port over the same grant
-        // produce the same plaintext.
-        val grants = TreeMap<String, Any?>()
-        for (name in names) {
-            checkname(name)
-            grants[name] = b64(secretkey(root, name))
-        }
-
-        vault.keys.add(
-            sealkey(
-                root, id, spec.passphrase, spec.iterations ?: iterations,
-                linkedMapOf("v" to FORMAT.toDouble(), "write" to spec.write,
-                    "grants" to LinkedHashMap(grants)),
-                linkedMapOf("v" to FORMAT.toDouble(), "master" to false,
-                    "write" to spec.write, "grants" to names),
-            ),
-        )
-
-        save(vault)
     }
 
     /**
@@ -725,16 +763,20 @@ class MiniVault internal constructor(options: VaultOptions) {
      * what takes a secret back.
      */
     fun revoke(key: String) {
-        val (vault, open) = load()
-        rootof(open, "revoking a key")
+        // Every write on this file, from any handle in this process,
+        // serializes here; see lockfor.
+        synchronized(lockfor(file)) {
+            val (vault, open) = load()
+            rootof(open, "revoking a key")
 
-        if (key == open.info.key) {
-            mvfail("a key cannot revoke itself: $key")
+            if (key == open.info.key) {
+                mvfail("a key cannot revoke itself: $key")
+            }
+
+            val found = vault.keys.firstOrNull { it.id == key } ?: mvfail("no such key: $key")
+            vault.keys.remove(found)
+            save(vault)
         }
-
-        val found = vault.keys.firstOrNull { it.id == key } ?: mvfail("no such key: $key")
-        vault.keys.remove(found)
-        save(vault)
     }
 
     /**
@@ -745,46 +787,50 @@ class MiniVault internal constructor(options: VaultOptions) {
      * passphrases this process does not have. Re-grant afterwards.
      */
     fun rotate() {
-        val (vault, open) = load()
-        rootof(open, "rotating the vault")
+        // Every write on this file, from any handle in this process,
+        // serializes here; see lockfor.
+        synchronized(lockfor(file)) {
+            val (vault, open) = load()
+            rootof(open, "rotating the vault")
 
-        // Read everything out under the old root before anything changes:
-        // once the root is replaced the old derived keys are unreachable.
-        val plain = list().map { it to (get(it) ?: "") }
+            // Read everything out under the old root before anything changes:
+            // once the root is replaced the old derived keys are unreachable.
+            val plain = list().map { it to (get(it) ?: "") }
 
-        val root = random(KEYLEN)
-        val namekey = mvhmac(root, LABEL_NAMES)
+            val root = random(KEYLEN)
+            val namekey = mvhmac(root, LABEL_NAMES)
 
-        val fresh = VaultFile()
-        for ((name, value) in plain) {
-            val key = secretkey(root, name)
-            fresh.entries.add(
-                EntryRecord(
-                    entryid(key),
-                    seal(namekey, utf8(name), AAD_NAME),
-                    seal(key, utf8(value), AAD_SECRET + name),
-                ),
+            val fresh = VaultFile()
+            for ((name, value) in plain) {
+                val key = secretkey(root, name)
+                fresh.entries.add(
+                    EntryRecord(
+                        entryid(key),
+                        seal(namekey, utf8(name), AAD_NAME),
+                        seal(key, utf8(value), AAD_SECRET + name),
+                    ),
+                )
+            }
+
+            val iters = vault.keys.firstOrNull { it.id == keyid }?.iters ?: iterations
+
+            val record = sealkey(
+                root, keyid, passphrase, iters,
+                linkedMapOf("v" to FORMAT.toDouble(), "write" to true, "root" to b64(root)),
+                linkedMapOf("v" to FORMAT.toDouble(), "master" to true, "write" to true,
+                    "grants" to emptyList<Any?>()),
+            )
+            fresh.keys.add(record)
+
+            // SAVE FIRST, adopt second. A handle holding the new root over a
+            // file that still holds the old one reads nothing and says the
+            // vault is damaged.
+            write(fresh)
+
+            opened = Opened(
+                VaultKeyInfo(keyid, true, true, emptyList()), root, emptyMap(), record.ring,
             )
         }
-
-        val iters = vault.keys.firstOrNull { it.id == keyid }?.iters ?: iterations
-
-        val record = sealkey(
-            root, keyid, passphrase, iters,
-            linkedMapOf("v" to FORMAT.toDouble(), "write" to true, "root" to b64(root)),
-            linkedMapOf("v" to FORMAT.toDouble(), "master" to true, "write" to true,
-                "grants" to emptyList<Any?>()),
-        )
-        fresh.keys.add(record)
-
-        // SAVE FIRST, adopt second. A handle holding the new root over a
-        // file that still holds the old one reads nothing and says the
-        // vault is damaged.
-        write(fresh)
-
-        opened = Opened(
-            VaultKeyInfo(keyid, true, true, emptyList()), root, emptyMap(), record.ring,
-        )
     }
 
     // --- the inside ----------------------------------------------------

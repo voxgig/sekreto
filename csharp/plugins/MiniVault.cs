@@ -80,6 +80,38 @@ namespace Voxgig.Sekreto.Plugins
         public const string MasterKey = "master";
 
         /// <summary>
+        /// The lock every handle on one file shares.
+        ///
+        /// <para>Each <c>Vault</c> is its own object, so two handles on one
+        /// path did not coordinate: both could finish <c>Load()</c> before
+        /// either saved, and the second <c>File.Move</c> then discarded the
+        /// first one's change while reporting success. Keyed by the ABSOLUTE
+        /// path, so two handles spelled differently still meet.</para>
+        ///
+        /// <para>A guarantee WITHIN one process, which is what DOCS.md
+        /// promises and what the go port arranges the same way. Two
+        /// processes still race, and the format's answer to that is the
+        /// exclusive create and the atomic rename.</para>
+        /// </summary>
+        private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, object>
+            Locks = new System.Collections.Concurrent.ConcurrentDictionary<string, object>();
+
+        internal static object LockFor(string file)
+        {
+            string key;
+            try
+            {
+                key = Path.GetFullPath(file);
+            }
+            catch (Exception)
+            {
+                key = file;
+            }
+
+            return Locks.GetOrAdd(key, _ => new object());
+        }
+
+        /// <summary>
         /// The key a caller asked for, or <c>master</c>: an EMPTY key is no
         /// key. The canonical's <c>opts.key || MASTERKEY</c> answers for
         /// both null and empty, where <c>??</c> answers for null alone - and
@@ -831,72 +863,82 @@ namespace Voxgig.Sekreto.Plugins
             /// </summary>
             public void Set(string name, string value)
             {
-                Names.CheckName(name);
-
-                if (null == value)
+                // Every write on this file, from any handle in this process,
+                // serializes here; see LockFor.
+                lock (LockFor(file))
                 {
-                    throw Fail("a secret value must be text: " + name);
-                }
+                    Names.CheckName(name);
 
-                VaultFile vault;
-                var open = Load(out vault);
-
-                if (!open.Info.Write)
-                {
-                    throw Fail("key " + open.Info.Key + " is read-only");
-                }
-
-                var key = KeyFor(open, name);
-
-                if (null == key)
-                {
-                    throw Fail("key " + open.Info.Key + " was not granted " + name);
-                }
-
-                var sealedvalue = Seal(key, Utf8(value), AadSecret + name);
-                var found = FindEntry(vault, key);
-
-                if (null != found)
-                {
-                    found.Value = sealedvalue;
-                }
-                else
-                {
-                    // A NEW NAME NEEDS THE NAME KEY, which only a master
-                    // holds. So a restricted key with `write` updates what it
-                    // was granted and cannot grow the vault.
-                    var root = RootOf(open, "creating the secret " + name);
-
-                    vault.Entries.Add(new EntryRecord
+                    if (null == value)
                     {
-                        Id = EntryId(key),
-                        Name = Seal(Hmac(root, LabelNames), Utf8(name), AadName),
-                        Value = sealedvalue,
-                    });
-                }
+                        throw Fail("a secret value must be text: " + name);
+                    }
 
-                Save(vault);
+                    VaultFile vault;
+                    var open = Load(out vault);
+
+                    if (!open.Info.Write)
+                    {
+                        throw Fail("key " + open.Info.Key + " is read-only");
+                    }
+
+                    var key = KeyFor(open, name);
+
+                    if (null == key)
+                    {
+                        throw Fail("key " + open.Info.Key + " was not granted " + name);
+                    }
+
+                    var sealedvalue = Seal(key, Utf8(value), AadSecret + name);
+                    var found = FindEntry(vault, key);
+
+                    if (null != found)
+                    {
+                        found.Value = sealedvalue;
+                    }
+                    else
+                    {
+                        // A NEW NAME NEEDS THE NAME KEY, which only a master
+                        // holds. So a restricted key with `write` updates what it
+                        // was granted and cannot grow the vault.
+                        var root = RootOf(open, "creating the secret " + name);
+
+                        vault.Entries.Add(new EntryRecord
+                        {
+                            Id = EntryId(key),
+                            Name = Seal(Hmac(root, LabelNames), Utf8(name), AadName),
+                            Value = sealedvalue,
+                        });
+                    }
+
+                    Save(vault);
+                }
             }
 
             /// <summary>Drop a name. Master only.</summary>
             public void Remove(string name)
             {
-                Names.CheckName(name);
-
-                VaultFile vault;
-                var open = Load(out vault);
-                var root = RootOf(open, "removing a secret");
-
-                var wanted = EntryId(SecretKey(root, name));
-                var found = vault.Entries.FirstOrDefault(entry => Same(entry.Id, wanted));
-
-                if (null == found)
+                // Every write on this file, from any handle in this process,
+                // serializes here; see LockFor.
+                lock (LockFor(file))
                 {
-                    throw Fail("no such secret: " + name);
-                }
+                    Names.CheckName(name);
 
-                vault.Entries.Remove(found);
-                Save(vault);
+                    VaultFile vault;
+                    var open = Load(out vault);
+                    var root = RootOf(open, "removing a secret");
+
+                    var wanted = EntryId(SecretKey(root, name));
+                    var found = vault.Entries.FirstOrDefault(entry => Same(entry.Id, wanted));
+
+                    if (null == found)
+                    {
+                        throw Fail("no such secret: " + name);
+                    }
+
+                    vault.Entries.Remove(found);
+                    Save(vault);
+                }
             }
 
             /// <summary>Every key in the file, with what it may do. Master only.</summary>
@@ -941,57 +983,62 @@ namespace Voxgig.Sekreto.Plugins
             /// <summary>Mint a restricted key. Master only.</summary>
             public void Grant(Grant spec)
             {
-                VaultFile vault;
-                var open = Load(out vault);
-                var root = RootOf(open, "granting a key");
-
-                var want = spec ?? new Grant();
-                var id = CheckId(want.Key, "a grant needs a key id");
-
-                if (string.IsNullOrEmpty(want.Passphrase))
+                // Every write on this file, from any handle in this process,
+                // serializes here; see LockFor.
+                lock (LockFor(file))
                 {
-                    throw Fail("a grant needs a passphrase");
+                    VaultFile vault;
+                    var open = Load(out vault);
+                    var root = RootOf(open, "granting a key");
+
+                    var want = spec ?? new Grant();
+                    var id = CheckId(want.Key, "a grant needs a key id");
+
+                    if (string.IsNullOrEmpty(want.Passphrase))
+                    {
+                        throw Fail("a grant needs a passphrase");
+                    }
+
+                    if (vault.Keys.Any(record => record.Id == id))
+                    {
+                        throw Fail("key already exists: " + id);
+                    }
+
+                    var names = new List<string>(want.Names ?? new List<string>());
+                    names.Sort(StringComparer.Ordinal);
+
+                    // A SortedDictionary, for a ring whose JSON is the same
+                    // text on every run. It is NOT an interop requirement -
+                    // the ring is sealed under a fresh nonce, so its
+                    // ciphertext differs per write whatever the key order is,
+                    // and a reader parses it back into a map. It is so that
+                    // two runs of this port over the same grant produce the
+                    // same plaintext.
+                    var grants = new SortedDictionary<string, object>(StringComparer.Ordinal);
+
+                    foreach (var name in names)
+                    {
+                        Names.CheckName(name);
+                        grants[name] = B64(SecretKey(root, name));
+                    }
+
+                    var ring = new Dictionary<string, object>
+                    {
+                        { "v", (double)Format }, { "write", want.Write },
+                        { "grants", new Dictionary<string, object>(grants) },
+                    };
+
+                    var meta = new Dictionary<string, object>
+                    {
+                        { "v", (double)Format }, { "master", false }, { "write", want.Write },
+                        { "grants", names.Cast<object>().ToList() },
+                    };
+
+                    vault.Keys.Add(SealKey(root, id, want.Passphrase,
+                        want.Iterations ?? iterations, ring, meta));
+
+                    Save(vault);
                 }
-
-                if (vault.Keys.Any(record => record.Id == id))
-                {
-                    throw Fail("key already exists: " + id);
-                }
-
-                var names = new List<string>(want.Names ?? new List<string>());
-                names.Sort(StringComparer.Ordinal);
-
-                // A SortedDictionary, for a ring whose JSON is the same
-                // text on every run. It is NOT an interop requirement -
-                // the ring is sealed under a fresh nonce, so its
-                // ciphertext differs per write whatever the key order is,
-                // and a reader parses it back into a map. It is so that
-                // two runs of this port over the same grant produce the
-                // same plaintext.
-                var grants = new SortedDictionary<string, object>(StringComparer.Ordinal);
-
-                foreach (var name in names)
-                {
-                    Names.CheckName(name);
-                    grants[name] = B64(SecretKey(root, name));
-                }
-
-                var ring = new Dictionary<string, object>
-                {
-                    { "v", (double)Format }, { "write", want.Write },
-                    { "grants", new Dictionary<string, object>(grants) },
-                };
-
-                var meta = new Dictionary<string, object>
-                {
-                    { "v", (double)Format }, { "master", false }, { "write", want.Write },
-                    { "grants", names.Cast<object>().ToList() },
-                };
-
-                vault.Keys.Add(SealKey(root, id, want.Passphrase,
-                    want.Iterations ?? iterations, ring, meta));
-
-                Save(vault);
             }
 
             /// <summary>
@@ -1003,24 +1050,29 @@ namespace Voxgig.Sekreto.Plugins
             /// </summary>
             public void Revoke(string key)
             {
-                VaultFile vault;
-                var open = Load(out vault);
-                RootOf(open, "revoking a key");
-
-                if (key == open.Info.Key)
+                // Every write on this file, from any handle in this process,
+                // serializes here; see LockFor.
+                lock (LockFor(file))
                 {
-                    throw Fail("a key cannot revoke itself: " + key);
+                    VaultFile vault;
+                    var open = Load(out vault);
+                    RootOf(open, "revoking a key");
+
+                    if (key == open.Info.Key)
+                    {
+                        throw Fail("a key cannot revoke itself: " + key);
+                    }
+
+                    var found = vault.Keys.FirstOrDefault(record => record.Id == key);
+
+                    if (null == found)
+                    {
+                        throw Fail("no such key: " + key);
+                    }
+
+                    vault.Keys.Remove(found);
+                    Save(vault);
                 }
-
-                var found = vault.Keys.FirstOrDefault(record => record.Id == key);
-
-                if (null == found)
-                {
-                    throw Fail("no such key: " + key);
-                }
-
-                vault.Keys.Remove(found);
-                Save(vault);
             }
 
             /// <summary>
@@ -1033,72 +1085,77 @@ namespace Voxgig.Sekreto.Plugins
             /// </summary>
             public void Rotate()
             {
-                VaultFile vault;
-                var open = Load(out vault);
-                RootOf(open, "rotating the vault");
-
-                // Read everything out under the old root before anything
-                // changes: once the root is replaced the old derived keys are
-                // unreachable.
-                var plain = new List<KeyValuePair<string, string>>();
-
-                foreach (var name in List())
+                // Every write on this file, from any handle in this process,
+                // serializes here; see LockFor.
+                lock (LockFor(file))
                 {
-                    plain.Add(new KeyValuePair<string, string>(name, Get(name)));
-                }
+                    VaultFile vault;
+                    var open = Load(out vault);
+                    RootOf(open, "rotating the vault");
 
-                var root = Random(KeyLen);
-                var namekey = Hmac(root, LabelNames);
+                    // Read everything out under the old root before anything
+                    // changes: once the root is replaced the old derived keys are
+                    // unreachable.
+                    var plain = new List<KeyValuePair<string, string>>();
 
-                var fresh = new VaultFile();
-
-                foreach (var secret in plain)
-                {
-                    var key = SecretKey(root, secret.Key);
-
-                    fresh.Entries.Add(new EntryRecord
+                    foreach (var name in List())
                     {
-                        Id = EntryId(key),
-                        Name = Seal(namekey, Utf8(secret.Key), AadName),
-                        Value = Seal(key, Utf8(secret.Value), AadSecret + secret.Key),
-                    });
-                }
-
-                var iters = iterations;
-
-                foreach (var record in vault.Keys)
-                {
-                    if (record.Id == keyid)
-                    {
-                        iters = record.Iters;
+                        plain.Add(new KeyValuePair<string, string>(name, Get(name)));
                     }
+
+                    var root = Random(KeyLen);
+                    var namekey = Hmac(root, LabelNames);
+
+                    var fresh = new VaultFile();
+
+                    foreach (var secret in plain)
+                    {
+                        var key = SecretKey(root, secret.Key);
+
+                        fresh.Entries.Add(new EntryRecord
+                        {
+                            Id = EntryId(key),
+                            Name = Seal(namekey, Utf8(secret.Key), AadName),
+                            Value = Seal(key, Utf8(secret.Value), AadSecret + secret.Key),
+                        });
+                    }
+
+                    var iters = iterations;
+
+                    foreach (var record in vault.Keys)
+                    {
+                        if (record.Id == keyid)
+                        {
+                            iters = record.Iters;
+                        }
+                    }
+
+                    var ring = new Dictionary<string, object>
+                    {
+                        { "v", (double)Format }, { "write", true }, { "root", B64(root) },
+                    };
+
+                    var meta = new Dictionary<string, object>
+                    {
+                        { "v", (double)Format }, { "master", true }, { "write", true },
+                        { "grants", new List<object>() },
+                    };
+
+                    var record2 = SealKey(root, keyid, passphrase, iters, ring, meta);
+                    fresh.Keys.Add(record2);
+
+                    // SAVE FIRST, adopt second. A handle holding the new root over
+                    // a file that still holds the old one reads nothing and says
+                    // the vault is damaged.
+                    Save(fresh);
+
+                    opened = new Opened
+                    {
+                        Info = new KeyInfo(keyid, true, true, new List<string>()),
+                        Root = root,
+                        Ring = record2.Ring,
+                    };
                 }
-
-                var ring = new Dictionary<string, object>
-                {
-                    { "v", (double)Format }, { "write", true }, { "root", B64(root) },
-                };
-
-                var meta = new Dictionary<string, object>
-                {
-                    { "v", (double)Format }, { "master", true }, { "write", true },
-                    { "grants", new List<object>() },
-                };
-
-                var record2 = SealKey(root, keyid, passphrase, iters, ring, meta);
-                fresh.Keys.Add(record2);
-
-                // SAVE FIRST, adopt second. A handle holding the new root over
-                // a file that still holds the old one reads nothing and says
-                // the vault is damaged.
-                Save(fresh);
-
-                opened = new Opened
-                {
-                    Info = new KeyInfo(keyid, true, true, new List<string>()),
-                    Root = root,
-                    Ring = record2.Ring,
-                };
             }
 
             // --- the inside -------------------------------------------------

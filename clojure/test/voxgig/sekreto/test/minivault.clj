@@ -319,6 +319,34 @@
   (refused #(mv/openvault {:file "" :passphrase MASTER}))
   (refused #(mv/openvault {:file (vaultpath) :passphrase ""})))
 
+;; TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each handle is
+;; its own map with its own snapshot, so without the shared per-path lock
+;; both threads finish `vaultload` before either saves and the second
+;; rename discards the first one's secret while reporting success.
+;; DOCS.md promises this within one process.
+(defn twohandleswritingatoncelosenothing []
+  (let [vault (fresh)
+        path (mv/vaultfile vault)
+        rounds 40
+        broke (atom [])
+        writer (fn [tag]
+                 (Thread.
+                  (fn []
+                    (try
+                      (let [mine (mv/openvault {:file path :passphrase MASTER})]
+                        (doseq [round (range rounds)]
+                          (mv/vaultset mine (str "t" tag ".n" round) (str "v" round))))
+                      (catch Exception err (swap! broke conj (.getMessage err)))))))
+        one (writer "one")
+        two (writer "two")]
+    (.start one)
+    (.start two)
+    (.join one)
+    (.join two)
+
+    (same [] @broke "a writer raised")
+    (same (* 2 rounds) (count (mv/vaultlist vault)) "every write survived")))
+
 ;; An EMPTY key is no key, so it means `master`. It is not a contrived
 ;; case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
 ;; expands to the empty string rather than to nothing at all - and
@@ -531,6 +559,7 @@
   (testcase "damaged" adamagedfileisrefused)
   (testcase "createover" creatingoveranexistingvaultisrefused)
   (testcase "needsfile" avaultneedsafileandapassphrase)
+  (testcase "concurrent" twohandleswritingatoncelosenothing)
   (testcase "emptykey" anemptykeymeansthemasterkey)
   (testcase "createflag" createmakesthefileonlywhenasked)
   (testcase "longkeyid" akeyidlongerthantheformatallowsisrefused)

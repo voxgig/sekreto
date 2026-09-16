@@ -518,6 +518,48 @@ internal static class MiniVaultSeam
         // contrived case: the CLI reads SEKRETO_VAULT_KEY, and an unset
         // shell variable expands to the empty string rather than to
         // nothing at all - and `??` answers for null alone.
+        // TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each
+        // Vault is its own object with its own snapshot, so without the
+        // shared per-path lock both threads finish Load() before either
+        // saves and the second move discards the first one's secret while
+        // reporting success. DOCS.md promises this within one process.
+        Case("two handles writing at once lose nothing", () =>
+        {
+            var vault = Fresh();
+            string path = vault.File();
+            const int rounds = 40;
+            var broke = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+            void Writer(string tag)
+            {
+                try
+                {
+                    var mine = MiniVault.OpenVault(new MiniVault.Options
+                    {
+                        File = path, Passphrase = MASTER,
+                    });
+                    for (int round = 0; round < rounds; round++)
+                    {
+                        mine.Set("t" + tag + ".n" + round, "v" + round);
+                    }
+                }
+                catch (Exception err)
+                {
+                    broke.Add(err.ToString());
+                }
+            }
+
+            var one = new System.Threading.Thread(() => Writer("one"));
+            var two = new System.Threading.Thread(() => Writer("two"));
+            one.Start();
+            two.Start();
+            one.Join();
+            two.Join();
+
+            Eq(broke.Count, 0, "a writer raised");
+            Eq(vault.List().Count, 2 * rounds, "every write survived");
+        });
+
         Case("an empty key means the master key", () =>
         {
             var vault = Fresh();

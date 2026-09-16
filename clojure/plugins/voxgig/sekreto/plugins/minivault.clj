@@ -109,6 +109,29 @@
 (defn- utf8 ^bytes [^String text]
   (.getBytes text StandardCharsets/UTF_8))
 
+;; THE LOCK EVERY HANDLE ON ONE FILE SHARES.
+;;
+;; Each handle is its own map, so two handles on one path did not
+;; coordinate: both could finish `vaultload` before either saved, and the
+;; second rename then discarded the first one's change while reporting
+;; success. Keyed by the ABSOLUTE path, so two handles spelled
+;; differently still meet.
+;;
+;; A guarantee WITHIN one process, which is what DOCS.md promises and what
+;; the go port arranges the same way. Two processes still race, and the
+;; format's answer to that is the exclusive create and the atomic rename:
+;; a reader sees one whole vault or the other, never half of one.
+(defonce ^:private LOCKS (atom {}))
+
+(defn- lockfor [file]
+  (let [key (try (.getPath (.getCanonicalFile (File. ^String file)))
+                 (catch Exception _ file))]
+    (or (get @LOCKS key)
+        (get (swap! LOCKS (fn [held] (if (contains? held key)
+                                       held
+                                       (assoc held key (Object.)))))
+             key))))
+
 (defn- wantkey
   "The key a caller asked for, or `MASTERKEY`: an EMPTY key is no key.
 
@@ -591,46 +614,52 @@
   "Write a value. A master writes any name; a restricted key holding
   `write` overwrites the names it was granted, and creates none."
   [vault name value]
-  (core/checkname name)
-  (when-not (string? value) (fail (str "a secret value must be text: " name)))
+  ;; Every write on this file, from any handle in this process,
+  ;; serializes here; see lockfor.
+  (locking (lockfor (:file vault))
+    (core/checkname name)
+    (when-not (string? value) (fail (str "a secret value must be text: " name)))
 
-  (let [[file opened] (vaultload vault)]
-    (when-not (get-in opened [:info "write"])
-      (fail (str "key " (get-in opened [:info "key"]) " is read-only")))
+    (let [[file opened] (vaultload vault)]
+      (when-not (get-in opened [:info "write"])
+        (fail (str "key " (get-in opened [:info "key"]) " is read-only")))
 
-    (let [key (or (keyfor opened name)
-                  (fail (str "key " (get-in opened [:info "key"])
-                             " was not granted " name)))
-          sealedvalue (seal key (utf8 value) (str AAD-SECRET name))
-          id (entryid key)
-          found (findentry file key)
-          entries (if found
-                    (mapv #(if (Arrays/equals ^bytes (:id %) id)
-                             (assoc % :value sealedvalue) %)
-                          (:entries file))
-                    ;; A NEW NAME NEEDS THE NAME KEY, which only a master
-                    ;; holds. So a restricted key with `write` updates what
-                    ;; it was granted and cannot grow the vault.
-                    (let [root (rootof opened (str "creating the secret " name))]
-                      (conj (:entries file)
-                            {:id id
-                             :name (seal (hmac root LABEL-NAMES) (utf8 name) AAD-NAME)
-                             :value sealedvalue})))]
-      (writevault vault (assoc file :entries entries)))))
+      (let [key (or (keyfor opened name)
+                    (fail (str "key " (get-in opened [:info "key"])
+                               " was not granted " name)))
+            sealedvalue (seal key (utf8 value) (str AAD-SECRET name))
+            id (entryid key)
+            found (findentry file key)
+            entries (if found
+                      (mapv #(if (Arrays/equals ^bytes (:id %) id)
+                               (assoc % :value sealedvalue) %)
+                            (:entries file))
+                      ;; A NEW NAME NEEDS THE NAME KEY, which only a master
+                      ;; holds. So a restricted key with `write` updates what
+                      ;; it was granted and cannot grow the vault.
+                      (let [root (rootof opened (str "creating the secret " name))]
+                        (conj (:entries file)
+                              {:id id
+                               :name (seal (hmac root LABEL-NAMES) (utf8 name) AAD-NAME)
+                               :value sealedvalue})))]
+        (writevault vault (assoc file :entries entries))))))
 
 (defn vaultremove
   "Drop a name. Master only."
   [vault name]
-  (core/checkname name)
-  (let [[file opened] (vaultload vault)
-        root (rootof opened "removing a secret")
-        wanted (entryid (secretkey root name))]
-    (when-not (some #(Arrays/equals ^bytes (:id %) wanted) (:entries file))
-      (fail (str "no such secret: " name)))
-    (writevault vault
-                (assoc file :entries
-                       (vec (remove #(Arrays/equals ^bytes (:id %) wanted)
-                                    (:entries file)))))))
+  ;; Every write on this file, from any handle in this process,
+  ;; serializes here; see lockfor.
+  (locking (lockfor (:file vault))
+    (core/checkname name)
+    (let [[file opened] (vaultload vault)
+          root (rootof opened "removing a secret")
+          wanted (entryid (secretkey root name))]
+      (when-not (some #(Arrays/equals ^bytes (:id %) wanted) (:entries file))
+        (fail (str "no such secret: " name)))
+      (writevault vault
+                  (assoc file :entries
+                         (vec (remove #(Arrays/equals ^bytes (:id %) wanted)
+                                      (:entries file))))))))
 
 (defn vaultkeys
   "Every key in the file, with what it may do. Master only."
@@ -649,25 +678,28 @@
 (defn vaultgrant
   "Mint a restricted key. Master only."
   [vault spec]
-  (let [[file opened] (vaultload vault)
-        root (rootof opened "granting a key")
-        want (or spec {})
-        id (checkid (:key want) "a grant needs a key id")
-        phrase (:passphrase want)]
+  ;; Every write on this file, from any handle in this process,
+  ;; serializes here; see lockfor.
+  (locking (lockfor (:file vault))
+    (let [[file opened] (vaultload vault)
+          root (rootof opened "granting a key")
+          want (or spec {})
+          id (checkid (:key want) "a grant needs a key id")
+          phrase (:passphrase want)]
 
-    (when-not (and (string? phrase) (not= "" phrase)) (fail "a grant needs a passphrase"))
-    (when (some #(= id (:id %)) (:keys file)) (fail (str "key already exists: " id)))
+      (when-not (and (string? phrase) (not= "" phrase)) (fail "a grant needs a passphrase"))
+      (when (some #(= id (:id %)) (:keys file)) (fail (str "key already exists: " id)))
 
-    (let [names (vec (sort (or (:names want) [])))
-          grants (reduce (fn [out name]
-                           (core/checkname name)
-                           (assoc out name (b64 (secretkey root name))))
-                         {} names)
-          write (true? (:write want))
-          record (sealkey root id phrase (or (:iterations want) (:iterations vault))
-                          {"v" FORMAT "write" write "grants" grants}
-                          {"v" FORMAT "master" false "write" write "grants" names})]
-      (writevault vault (assoc file :keys (conj (:keys file) record))))))
+      (let [names (vec (sort (or (:names want) [])))
+            grants (reduce (fn [out name]
+                             (core/checkname name)
+                             (assoc out name (b64 (secretkey root name))))
+                           {} names)
+            write (true? (:write want))
+            record (sealkey root id phrase (or (:iterations want) (:iterations vault))
+                            {"v" FORMAT "write" write "grants" grants}
+                            {"v" FORMAT "master" false "write" write "grants" names})]
+        (writevault vault (assoc file :keys (conj (:keys file) record)))))))
 
 (defn vaultrevoke
   "Drop a key. Master only.
@@ -676,12 +708,15 @@
   revoking bars future reads of the LIVE file and `vaultrotate` is what
   takes a secret back."
   [vault key]
-  (let [[file opened] (vaultload vault)]
-    (rootof opened "revoking a key")
-    (when (= key (get-in opened [:info "key"]))
-      (fail (str "a key cannot revoke itself: " key)))
-    (when-not (some #(= key (:id %)) (:keys file)) (fail (str "no such key: " key)))
-    (writevault vault (assoc file :keys (vec (remove #(= key (:id %)) (:keys file)))))))
+  ;; Every write on this file, from any handle in this process,
+  ;; serializes here; see lockfor.
+  (locking (lockfor (:file vault))
+    (let [[file opened] (vaultload vault)]
+      (rootof opened "revoking a key")
+      (when (= key (get-in opened [:info "key"]))
+        (fail (str "a key cannot revoke itself: " key)))
+      (when-not (some #(= key (:id %)) (:keys file)) (fail (str "no such key: " key)))
+      (writevault vault (assoc file :keys (vec (remove #(= key (:id %)) (:keys file))))))))
 
 (defn vaultrotate
   "A new root key, every value re-encrypted under it, and EVERY OTHER KEY
@@ -690,37 +725,40 @@
   The other keys go because they must: their rings are sealed under
   passphrases this process does not have. Re-grant afterwards."
   [vault]
-  (let [[file opened] (vaultload vault)]
-    (rootof opened "rotating the vault")
+  ;; Every write on this file, from any handle in this process,
+  ;; serializes here; see lockfor.
+  (locking (lockfor (:file vault))
+    (let [[file opened] (vaultload vault)]
+      (rootof opened "rotating the vault")
 
-    ;; Read everything out under the old root before anything changes: once
-    ;; the root is replaced the old derived keys are unreachable.
-    (let [plain (mapv (fn [name] [name (vaultget vault name)]) (vaultlist vault))
-          root (randombytes KEYLEN)
-          namekey (hmac root LABEL-NAMES)
-          entries (mapv (fn [[name value]]
-                          (let [key (secretkey root name)]
-                            {:id (entryid key)
-                             :name (seal namekey (utf8 name) AAD-NAME)
-                             :value (seal key (utf8 value) (str AAD-SECRET name))}))
-                        plain)
-          iters (or (:iters (first (filter #(= (:key vault) (:id %)) (:keys file))))
-                    (:iterations vault))
-          record (sealkey root (:key vault) (:passphrase vault) iters
-                          {"v" FORMAT "write" true "root" (b64 root)}
-                          {"v" FORMAT "master" true "write" true "grants" []})]
+      ;; Read everything out under the old root before anything changes: once
+      ;; the root is replaced the old derived keys are unreachable.
+      (let [plain (mapv (fn [name] [name (vaultget vault name)]) (vaultlist vault))
+            root (randombytes KEYLEN)
+            namekey (hmac root LABEL-NAMES)
+            entries (mapv (fn [[name value]]
+                            (let [key (secretkey root name)]
+                              {:id (entryid key)
+                               :name (seal namekey (utf8 name) AAD-NAME)
+                               :value (seal key (utf8 value) (str AAD-SECRET name))}))
+                          plain)
+            iters (or (:iters (first (filter #(= (:key vault) (:id %)) (:keys file))))
+                      (:iterations vault))
+            record (sealkey root (:key vault) (:passphrase vault) iters
+                            {"v" FORMAT "write" true "root" (b64 root)}
+                            {"v" FORMAT "master" true "write" true "grants" []})]
 
-      ;; SAVE FIRST, adopt second. A handle holding the new root over a file
-      ;; that still holds the old one reads nothing and says the vault is
-      ;; damaged.
-      (writevault vault {:keys [record] :entries entries})
+        ;; SAVE FIRST, adopt second. A handle holding the new root over a file
+        ;; that still holds the old one reads nothing and says the vault is
+        ;; damaged.
+        (writevault vault {:keys [record] :entries entries})
 
-      (reset! (:opened vault)
-              {:info {"key" (:key vault) "master" true "write" true "grants" []}
-               :root root
-               :grants {}
-               :ring (:ring record)})
-      nil)))
+        (reset! (:opened vault)
+                {:info {"key" (:key vault) "master" true "write" true "grants" []}
+                 :root root
+                 :grants {}
+                 :ring (:ring record)})
+        nil))))
 
 ;; --- the provider ----------------------------------------------------
 
