@@ -316,4 +316,5 @@ const BUILTIN_KINDS = ['env', 'memory', 'dotenv', 'file'];
 const PLUGIN_KINDS = [
     'hashicorp', 'boru', 'awssecrets', 'awsparams', 'gcpsecrets',
     'azuresecrets', 'onepassword', 'doppler', 'infisical', 'secretspec',
+    'minivault',
 ];

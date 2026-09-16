@@ -12,7 +12,7 @@
  *
  * Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
  *          gcpsecrets azuresecrets onepassword doppler infisical
- *          secretspec chain
+ *          secretspec minivault chain
  *
  * Each source's configuration arrives in the environment variables its
  * own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -138,6 +138,15 @@ function chainfor(string $source): array
         'reason' => getenv('SECRETSPEC_REASON') ?: null,
     ];
 
+    // The mini vault, read-only here: the CLI is an app that needs a
+    // secret, and writing one is a separate act with its own API.
+    $minivaultspec = [
+        'kind' => 'minivault',
+        'file' => getenv('SEKRETO_VAULT_FILE') ?: '',
+        'vaultkey' => getenv('SEKRETO_VAULT_KEY') ?: null,
+        'passphrase' => getenv('SEKRETO_VAULT_PASSPHRASE') ?: '',
+    ];
+
     $infisicalspec = [
         'kind' => 'infisical',
         'addr' => getenv('INFISICAL_ADDR') ?: null,
@@ -164,6 +173,7 @@ function chainfor(string $source): array
         'doppler' => [$dopplerspec],
         'infisical' => [$infisicalspec],
         'secretspec' => [$secretspecspec],
+        'minivault' => [$minivaultspec],
         // The default: the chain an app would actually ship with - local
         // overrides first, shared vaults last.
         default => [$envspec, $dotenvspec, $hashicorpspec, $boruspec],

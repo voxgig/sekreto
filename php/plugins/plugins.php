@@ -49,9 +49,11 @@ function allplugins(): array
     require_once __DIR__ . '/doppler.php';
     require_once __DIR__ . '/infisical.php';
     require_once __DIR__ . '/secretspec.php';
+    require_once __DIR__ . '/minivault.php';
 
     return [
         hashicorp(), boru(), awssecrets(), awsparams(), gcpsecrets(),
         azuresecrets(), onepassword(), doppler(), infisical(), secretspec(),
+        minivault(),
     ];
 }

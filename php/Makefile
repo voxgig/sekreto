@@ -41,6 +41,7 @@ build: deps
 test: deps
 	PLUGIN_HOME=$(PLUGIN) php test/run.php
 	PLUGIN_HOME=$(PLUGIN) php test/plugins.php
+	PLUGIN_HOME=$(PLUGIN) php test/minivault.php
 
 # The boundary, on its own, as a grep of the require graph: requiring the
 # core must pull in nothing under plugins/. test/plugins.php asserts the
