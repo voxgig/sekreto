@@ -15,6 +15,8 @@ implementations.
 | `minivault-cs.skmv` | csharp |
 | `minivault-ex.skmv` | elixir |
 | `minivault-kt.skmv` | kotlin |
+| `minivault-scala.skmv` | scala |
+| `minivault-clj.skmv` | clojure |
 
 **One file per writing port, and every port reads all of them.** A suite
 that reads only what its own port wrote proves the reader agrees with the
@@ -30,7 +32,7 @@ about where a length prefix goes.
 
 ## What is in it
 
-Both files hold the same keys and the same secrets, so a suite asserts
+Every file holds the same keys and the same secrets, so a suite asserts
 the same values whichever it reads.
 
 Written with 1000 PBKDF2 rounds rather than the library default of

@@ -190,4 +190,5 @@
   unknown kind can be told from a plugin that was not loaded."
   {:builtin ["env" "memory" "dotenv" "file"]
    :plugin ["hashicorp" "boru" "awssecrets" "awsparams" "gcpsecrets"
-            "azuresecrets" "onepassword" "doppler" "infisical" "secretspec"]})
+            "azuresecrets" "onepassword" "doppler" "infisical" "secretspec"
+            "minivault"]})

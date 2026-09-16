@@ -138,6 +138,7 @@ test: build check-core
 	$(MAKE) -C $(OMNI)/clojure build
 	$(CLJ) "$(LIBCP):test:$(OMNI)/clojure/src" clojure.main -m voxgig.sekreto.test.main
 	$(CLJ) "$(LIBCP):test" clojure.main -m voxgig.sekreto.test.plugins
+	$(CLJ) "$(LIBCP):test" clojure.main -m voxgig.sekreto.test.minivault
 
 clean:
 	rm -rf build .cpcache
