@@ -659,6 +659,76 @@ fn avaultneedsafileandapassphrase() !void {
     );
 }
 
+// TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each Vault is
+// its own object with its own snapshot, so without the shared per-path
+// lock both threads finish `load` before either saves and the second
+// rename discards the first one's secret while reporting success.
+// DOCS.md promises this within one process.
+//
+// EACH THREAD GETS ITS OWN ARENA over the page allocator, because the
+// suite's `ALLOC` is one arena and an arena is not thread-safe: sharing
+// it would test the allocator rather than the vault.
+const Writer = struct {
+    path: []const u8,
+    tag: []const u8,
+    rounds: usize,
+    broke: bool = false,
+
+    fn run(self: *Writer) void {
+        var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+        defer arena.deinit();
+        const alloc = arena.allocator();
+
+        const mine = switch (mv.openvault(alloc, CONFIG.io, .{
+            .file = self.path,
+            .passphrase = MASTER,
+        }) catch {
+            self.broke = true;
+            return;
+        }) {
+            .err => {
+                self.broke = true;
+                return;
+            },
+            .ok => |made| made,
+        };
+        defer mine.deinit();
+
+        for (0..self.rounds) |round| {
+            const name = std.fmt.allocPrint(alloc, "t{s}.n{d}", .{ self.tag, round }) catch {
+                self.broke = true;
+                return;
+            };
+            switch (mine.set(alloc, name, "v") catch {
+                self.broke = true;
+                return;
+            }) {
+                .err => self.broke = true,
+                .ok => {},
+            }
+        }
+    }
+};
+
+fn twohandleswritingatoncelosenothing() !void {
+    const vault = try fresh();
+    defer vault.deinit();
+
+    const rounds: usize = 40;
+    var one = Writer{ .path = vault.vaultfile(), .tag = "one", .rounds = rounds };
+    var two = Writer{ .path = vault.vaultfile(), .tag = "two", .rounds = rounds };
+
+    const first = try std.Thread.spawn(.{}, Writer.run, .{&one});
+    const second = try std.Thread.spawn(.{}, Writer.run, .{&two});
+    first.join();
+    second.join();
+
+    try is(false, one.broke or two.broke, "a writer raised");
+
+    const names = try ok([]const []const u8, try vault.list(ALLOC));
+    try same(say("{d}", .{2 * rounds}), say("{d}", .{names.len}), "every write survived");
+}
+
 // An EMPTY key is no key, so it means `master`. It is not a contrived
 // case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
 // expands to the empty string rather than to nothing at all.
@@ -1091,6 +1161,7 @@ const CASES = [_]Case{
     .{ .name = "damaged", .check = adamagedfileisrefused },
     .{ .name = "createover", .check = creatingoveranexistingvaultisrefused },
     .{ .name = "needsfile", .check = avaultneedsafileandapassphrase },
+    .{ .name = "concurrent", .check = twohandleswritingatoncelosenothing },
     .{ .name = "emptykey", .check = anemptykeymeansthemasterkey },
     .{ .name = "createflag", .check = createmakesthefileonlywhenasked },
     .{ .name = "longkeyid", .check = akeyidlongerthantheformatallows },

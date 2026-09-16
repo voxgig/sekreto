@@ -1061,6 +1061,12 @@ pub const Vault = struct {
     /// Writes a value. A master writes any name; a restricted key holding
     /// `write` overwrites the names it was granted, and creates none.
     pub fn set(self: *Vault, alloc: Allocator, name: []const u8, value: []const u8) Allocator.Error!Answer(void) {
+        // Every write on this file, from any handle in this process,
+        // serializes here; see lockfor.
+        const onefile = try lockfor(self.io, self.file);
+        onefile.lockUncancelable(self.io);
+        defer onefile.unlock(self.io);
+
         switch (try sekreto.checkname(alloc, name)) {
             .err => |message| return .{ .err = message },
             .ok => {},
@@ -1123,6 +1129,12 @@ pub const Vault = struct {
 
     /// Drops a name. Master only.
     pub fn remove(self: *Vault, alloc: Allocator, name: []const u8) Allocator.Error!Answer(void) {
+        // Every write on this file, from any handle in this process,
+        // serializes here; see lockfor.
+        const onefile = try lockfor(self.io, self.file);
+        onefile.lockUncancelable(self.io);
+        defer onefile.unlock(self.io);
+
         switch (try sekreto.checkname(alloc, name)) {
             .err => |message| return .{ .err = message },
             .ok => {},
@@ -1232,6 +1244,12 @@ pub const Vault = struct {
 
     /// Mints a restricted key. Master only.
     pub fn grant(self: *Vault, alloc: Allocator, spec: GrantSpec) Allocator.Error!Answer(void) {
+        // Every write on this file, from any handle in this process,
+        // serializes here; see lockfor.
+        const onefile = try lockfor(self.io, self.file);
+        onefile.lockUncancelable(self.io);
+        defer onefile.unlock(self.io);
+
         var work = std.heap.ArenaAllocator.init(self.alloc);
         defer work.deinit();
         const scratch = work.allocator();
@@ -1323,6 +1341,12 @@ pub const Vault = struct {
     /// read, so revoking bars future reads of the LIVE file and `rotate`
     /// is what takes a secret back.
     pub fn revoke(self: *Vault, alloc: Allocator, key: []const u8) Allocator.Error!Answer(void) {
+        // Every write on this file, from any handle in this process,
+        // serializes here; see lockfor.
+        const onefile = try lockfor(self.io, self.file);
+        onefile.lockUncancelable(self.io);
+        defer onefile.unlock(self.io);
+
         var work = std.heap.ArenaAllocator.init(self.alloc);
         defer work.deinit();
         const scratch = work.allocator();
@@ -1365,6 +1389,12 @@ pub const Vault = struct {
     /// passphrases this process does not have, so there is no way to hand
     /// them keys they can unwrap. Re-grant afterwards.
     pub fn rotate(self: *Vault, alloc: Allocator) Allocator.Error!Answer(void) {
+        // Every write on this file, from any handle in this process,
+        // serializes here; see lockfor.
+        const onefile = try lockfor(self.io, self.file);
+        onefile.lockUncancelable(self.io);
+        defer onefile.unlock(self.io);
+
         var work = std.heap.ArenaAllocator.init(self.alloc);
         defer work.deinit();
         const scratch = work.allocator();
@@ -1576,6 +1606,61 @@ fn masterkey(
 }
 
 // --- opening and creating ---------------------------------------------
+
+/// THE LOCK EVERY HANDLE ON ONE FILE SHARES.
+///
+/// Each `Vault` is its own object, so two handles on one path did not
+/// coordinate: both could finish `load` before either saved, and the
+/// second rename then discarded the first one's change while reporting
+/// success.
+///
+/// Keyed by the path AS THE HANDLE HOLDS IT. Every other port keys by the
+/// absolute path so that two spellings of one file still meet; realpath
+/// at this level would want an allocator and a syscall per write, and
+/// this port says what it does rather than implying the stronger thing.
+///
+/// A guarantee WITHIN one process, which is what DOCS.md promises and
+/// what the go port arranges the same way. Two processes still race, and
+/// the format's answer to that is the exclusive create and the atomic
+/// rename: a reader sees one whole vault or the other, never half of one.
+var LOCKSMUTEX: std.Io.Mutex = .init;
+var LOCKS: std.ArrayList(Held) = .empty;
+
+const Held = struct {
+    file: []const u8,
+    lock: *std.Io.Mutex,
+};
+
+/// The lock for one path, made once and never dropped: a mutex is two
+/// words, a process opens few vaults, and freeing one a thread might
+/// still be waiting on is the bug this exists to avoid.
+///
+/// FROM THE PAGE ALLOCATOR, NOT THE CALLER'S. This table outlives every
+/// handle in it, and the callers are two different threads with two
+/// different arenas; taking the memory from whichever got here first
+/// would leave the other holding a pointer into a freed arena. The page
+/// allocator is process-lifetime and thread-safe, which is exactly what
+/// process-global state wants.
+fn lockfor(io: std.Io, file: []const u8) Allocator.Error!*std.Io.Mutex {
+    const alloc = std.heap.page_allocator;
+
+    LOCKSMUTEX.lockUncancelable(io);
+    defer LOCKSMUTEX.unlock(io);
+
+
+    for (LOCKS.items) |held| {
+        if (std.mem.eql(u8, held.file, file)) {
+            return held.lock;
+        }
+    }
+
+    const owned = try alloc.dupe(u8, file);
+    const made = try alloc.create(std.Io.Mutex);
+    made.* = .init;
+    try LOCKS.append(alloc, .{ .file = owned, .lock = made });
+
+    return made;
+}
 
 /// The vaults this module has built.
 ///
