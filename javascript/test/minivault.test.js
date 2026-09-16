@@ -8,20 +8,20 @@
 // entry naming `minivault` would fail twenty-one ports that have no such
 // provider. What the shared corpus would have carried is here instead,
 // plus the one thing it could not carry either way: a file written by
-// this port and read by another, pinned by test/fixture/minivault.skmv.
+// this port and read by another, pinned by test/fixture/*.skmv.
 
-import { before, describe, test } from 'node:test'
-import assert from 'node:assert'
-import {
+const { before, describe, test } = require('node:test')
+const assert = require('node:assert')
+const {
   copyFileSync, existsSync, mkdtempSync, readFileSync, readdirSync, writeFileSync,
-} from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+} = require('node:fs')
+const { tmpdir } = require('node:os')
+const { join } = require('node:path')
 
-import { Sekreto, SekretoError } from '../src'
-import {
-  MASTERKEY, MiniVault, createvault, minivault, openvault, vaultof,
-} from '../plugins/minivault'
+const { Sekreto, SekretoError } = require('../src')
+const {
+  MASTERKEY, createvault, minivault, openvault, vaultof,
+} = require('../plugins/minivault')
 
 const MASTER = 'master-passphrase'
 
@@ -29,20 +29,20 @@ const MASTER = 'master-passphrase'
  * is the point of PBKDF2 and the wrong thing to pay per assertion. */
 const ROUNDS = 1000
 
-let work: string
+let work
 let count = 0
 
-function vaultpath(): string {
+function vaultpath() {
   count += 1
   return join(work, 'vault' + count + '.skmv')
 }
 
-function fresh(): MiniVault {
+function fresh() {
   return createvault({ file: vaultpath(), passphrase: MASTER, iterations: ROUNDS })
 }
 
 /** Where the committed vaults live, found by walking up. */
-function fixturedir(): string {
+function fixturedir() {
   let dir = __dirname
 
   for (let step = 0; step < 8; step++) {
@@ -60,13 +60,13 @@ function fixturedir(): string {
  * A hard-coded list is one more place to edit when a port lands, and the
  * edit that gets forgotten is the one that makes this suite stop
  * checking the port that just arrived. */
-function fixtures(): string[] {
+function fixtures() {
   return readdirSync(fixturedir()).filter((n) => n.endsWith('.skmv')).sort()
 }
 
 /** A committed vault, copied so that a test which writes cannot edit the
  * bytes the format contract is made of. */
-function fixture(name: string): string {
+function fixture(name) {
   let dir = __dirname
 
   for (let step = 0; step < 8; step++) {
@@ -617,10 +617,10 @@ describe('minivault', () => {
   // because it publishes two exports, so this is the half of
   // `providerplugin` it has to reproduce.
   test('a chain missing the file or the passphrase is refused at construction', () => {
-    let caught: any
+    let caught
     try {
       new Sekreto({ plugins: [minivault], providers: [{ kind: 'minivault' }] })
-    } catch (err: any) {
+    } catch (err) {
       caught = err
     }
 

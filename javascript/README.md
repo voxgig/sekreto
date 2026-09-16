@@ -65,6 +65,42 @@ The one dependency is `@voxgig/plugin-js`, which itself has none.
 the one point a chain is built. CommonJS resolves the cycle that way
 round; the other way, `support.js` would destructure a half-built module.
 
+## The mini vault
+
+`plugins/minivault.js` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the port's
+worked example of a definition publishing an API beside its provider.
+
+```js
+const { Sekreto } = require('@voxgig/sekreto-js')
+const {
+  createvault, minivault, vaultof,
+} = require('@voxgig/sekreto-js/plugins/minivault')
+
+const vault = createvault({ file: 'app.skmv', passphrase: MASTER })
+vault.set('api.token', 'tok01')
+vault.grant({ key: 'ci', passphrase: CI, names: ['api.token'] })
+
+const secrets = new Sekreto({
+  plugins: [minivault],
+  providers: [{ kind: 'minivault', file: 'app.skmv', vaultkey: 'ci', passphrase: CI }],
+})
+
+await secrets.get('api.token')     // the chain reads
+vaultof(secrets).list()            // ['api.token'] — as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `secrets.host`. What each key may do, what the file holds, and what
+the whole thing does and does not protect are in
+[DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
+
+Ports carrying this kind read each other's files, which
+`test/minivault.test.js` checks against every committed vault in
+`test/fixture/`, including the one this port wrote.
+
 ## Layout
 
 | | |
@@ -76,9 +112,11 @@ round; the other way, `support.js` would destructure a half-built module.
 | `src/provider/addr.js` | `checkaddr`, the plaintext-address guard — pure, and on the spec |
 | `plugins/<name>.js` | one plugin each; `plugins/aws.js` carries `sigv4.js` beside it |
 | `plugins/httpjson.js` | the bounded, redirect-refusing HTTP round-trip every wire plugin shares |
+| `plugins/minivault.js` | the mini vault: the format, the keys, the API, the definition |
 | `plugins/index.js` | the full set |
 | `test/sekreto.test.js` | the conformance suite, on `@voxgig/omni-js` from npm |
 | `test/plugins.test.js`, `test/lazyload.test.js` | the plugin seam, from both sides |
+| `test/minivault.test.js` | the mini vault, and the committed files every port reads |
 | `cli/sekreto-cli.js` | the app that needs a secret |
 
 ## Testing

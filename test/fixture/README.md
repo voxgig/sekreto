@@ -8,12 +8,14 @@ implementations.
 |---|---|
 | `minivault.skmv` | typescript, the canonical port |
 | `minivault-go.skmv` | go |
+| `minivault-js.skmv` | javascript |
 
 **One file per writing port, and every port reads all of them.** A suite
 that reads only what its own port wrote proves the reader agrees with the
 writer beside it, which a port whose serializer and parser share a
 mistake satisfies perfectly. A port joins this directory by adding its
-own file and reading the others.
+own file; the suites read the directory rather than a list, so nothing
+else has to be edited for a new one to be checked everywhere.
 
 A format two implementations merely agree about is a format that drifts,
 and nothing else in either suite would notice: each port can write and

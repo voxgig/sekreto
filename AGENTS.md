@@ -43,12 +43,41 @@ so those twenty-three stay one.
    leaving each port to clone it. That is the whole list. voxgig/omni is not on it: it drives the tests and no shipped
    manifest may name it (`tools/omni_isolation.py` proves that).
 
-   The exception is **cryptographic transport**, and it is a principle
-   rather than a list. Where a port's standard library has TLS, it uses it.
-   Where it does not, it binds the platform's audited TLS library — the
-   same one that language's own ecosystem binds. Hand-rolling TLS in a
-   secrets library would be far worse than depending on an audited
+   The exception is **cryptography**, and it is a principle rather than a
+   list. Where a port's standard library has TLS, it uses it. Where it
+   does not, it binds the platform's audited TLS library — the same one
+   that language's own ecosystem binds. Hand-rolling TLS in a secrets
+   library would be far worse than depending on an audited
    implementation, and no community these ports live in does otherwise.
+
+   **This used to say cryptographic TRANSPORT**, and the narrower reading
+   is why `rust/plugins/aws/src/crypto.rs`, `cpp/plugins/Crypto.hpp`,
+   `ocaml/plugins/crypto.ml` and their siblings carry SHA-256 and
+   HMAC-SHA256 in-tree beside a linked libcrypto that already has both.
+   That was affordable: SigV4 is a signature, its correctness is settled
+   by known-answer vectors, and a wrong bit fails loudly at the first one.
+
+   The mini vault is where it stopped being affordable. It needs
+   AES-256-GCM to protect secrets **at rest**, and a block cipher has
+   properties no vector can check: a table-driven AES passes every
+   known-answer test in the world and still hands its key to anyone who
+   can time a cache. The rationale in the paragraph above — that
+   hand-rolling is far worse than depending on an audited implementation
+   — was always an argument about cryptography rather than about
+   transport, so the rule now says what the rationale says.
+
+   So: a port takes its AES-256-GCM, PBKDF2-HMAC-SHA256, HMAC-SHA256 and
+   SHA-256 from its standard library where it has them, and otherwise
+   from the audited library it already links for TLS. Reaching for
+   libcrypto's `EVP_*` is now correct in the six ports that link it, and
+   the in-tree SigV4 digests stay where they are: they work, they are
+   pinned by vectors, and rewriting them buys nothing.
+
+   What does NOT widen: a port still takes no new package for this. If a
+   language has neither an audited implementation in its standard library
+   nor one already linked, it does not get the mini vault yet — see
+   `docs/design/plugin-providers.md` for which ports those are and why
+   the kind set is uneven.
 
    Rust is the instance you can already read: `rustls`, plus `webpki-roots`
    for the trust anchors, because rustls deliberately ships no root set and

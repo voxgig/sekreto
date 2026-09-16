@@ -9,7 +9,7 @@
 //
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 //          gcpsecrets azuresecrets onepassword doppler infisical
-//          secretspec chain
+//          secretspec minivault chain
 //
 // Each source's configuration arrives in the environment variables its
 // own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -129,6 +129,15 @@ function chainfor(source) {
     reason: env.SECRETSPEC_REASON,
   }
 
+  // The mini vault, read-only here: the CLI is an app that needs a
+  // secret, and writing one is a separate act with its own API.
+  const minivaultspec = {
+    kind: 'minivault',
+    file: env.SEKRETO_VAULT_FILE || '',
+    vaultkey: env.SEKRETO_VAULT_KEY,
+    passphrase: env.SEKRETO_VAULT_PASSPHRASE || '',
+  }
+
   const infisicalspec = {
     kind: 'infisical',
     addr: env.INFISICAL_ADDR,
@@ -155,6 +164,7 @@ function chainfor(source) {
     doppler: [dopplerspec],
     infisical: [infisicalspec],
     secretspec: [secretspecspec],
+    minivault: [minivaultspec],
   }
 
   const found = bysource[source]
