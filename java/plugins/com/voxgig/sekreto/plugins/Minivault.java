@@ -890,8 +890,12 @@ public final class Minivault {
       List<String> names = new ArrayList<>(want.names);
       names.sort(null);
 
-      // A TreeMap, so the ring's key order is the sorted one every port
-      // writes. The bytes differ otherwise, and a fixture is bytes.
+      // A TreeMap, for a ring whose JSON is the same text on every run.
+      // It is NOT an interop requirement - the ring is sealed under a
+      // fresh nonce, so its ciphertext differs per write whatever the key
+      // order is, and a reader parses it back into a map. It is so that
+      // two runs of this port over the same grant produce the same
+      // plaintext, which is the property a reader of this code expects.
       Map<String, Object> grants = new TreeMap<>();
       for (String name : names) {
         Sekreto.checkname(name);
