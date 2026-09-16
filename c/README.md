@@ -20,7 +20,10 @@ Two dependencies, and each belongs to one layer. The core depends on
 no package manager, so the Makefile finds a checkout the way it finds
 omni (`PLUGIN_HOME`, the usual sibling paths, or a shallow clone `make
 deps` fetches) and compiles it into `build/`. The plugins depend on the
-transport: `-lssl -lcrypto`. C has no TLS
+transport and the vault's cryptography: `-lssl -lcrypto`, plus
+`-lpthread` for the lock every handle on one vault file shares — which on
+glibc 2.34 and later resolves inside libc, so `ldd` below names no
+library for it. C has no TLS
 and a secrets library must not hand-roll it, so this port binds the
 platform's audited OpenSSL — the same library the whole C ecosystem
 binds — and the audit surface is the distribution's own build, pinned to

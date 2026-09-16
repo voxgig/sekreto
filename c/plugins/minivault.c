@@ -66,6 +66,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <pthread.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -715,6 +716,91 @@ typedef struct {
   mvbytes key;
 } mvgrant;
 
+/* THE LOCK EVERY HANDLE ON ONE FILE SHARES.
+ *
+ * Each handle is its own object, so two handles on one path did not
+ * coordinate: both could finish `mvload` before either saved, and the
+ * second rename then discarded the first one's change while reporting
+ * success. Keyed by the ABSOLUTE path, so two handles spelled differently
+ * still meet.
+ *
+ * A guarantee WITHIN one process, which is what DOCS.md promises and what
+ * the go port arranges the same way. Two processes still race, and the
+ * format's answer to that is the exclusive create and the atomic rename:
+ * a reader sees one whole vault or the other, never half of one.
+ *
+ * MALLOC, NOT A POOL. This table outlives every handle in it and every
+ * pool a caller owns, and freeing a mutex a thread might still be waiting
+ * on is the bug it exists to avoid. A mutex is small and a process opens
+ * few vaults, so it is made once and never dropped.
+ *
+ * THE PORT LINKS -lpthread FOR THIS, and nothing else. On glibc 2.34 and
+ * later those symbols are in libc and the flag is a no-op; elsewhere it
+ * is what a POSIX program links to hold a lock. */
+typedef struct {
+  char *file;
+  /* A POINTER, and the table holds pointers rather than mutexes by value:
+   * `realloc` MOVES the array, and every caller already holding a lock
+   * would be holding one at the old address. */
+  pthread_mutex_t *lock;
+} mvheld;
+
+static pthread_mutex_t MV_LOCKSMUTEX = PTHREAD_MUTEX_INITIALIZER;
+static mvheld *MV_LOCKS = NULL;
+static size_t MV_LOCKCOUNT = 0;
+
+static pthread_mutex_t *mvlockfor(const char *file) {
+  char *key = realpath(file, NULL);
+  const char *want = NULL == key ? file : key;
+  pthread_mutex_t *made = NULL;
+  char *owned = NULL;
+  mvheld *grown;
+  size_t at;
+
+  pthread_mutex_lock(&MV_LOCKSMUTEX);
+
+  for (at = 0; at < MV_LOCKCOUNT; at++) {
+    if (0 == strcmp(MV_LOCKS[at].file, want)) {
+      pthread_mutex_t *found = MV_LOCKS[at].lock;
+      pthread_mutex_unlock(&MV_LOCKSMUTEX);
+      free(key);
+      return found;
+    }
+  }
+
+  if (NULL != key) {
+    owned = key;
+  } else {
+    owned = malloc(strlen(want) + 1);
+    if (NULL != owned) {
+      memcpy(owned, want, strlen(want) + 1);
+    }
+  }
+
+  made = malloc(sizeof(pthread_mutex_t));
+  grown = realloc(MV_LOCKS, (MV_LOCKCOUNT + 1) * sizeof(mvheld));
+
+  if (NULL == owned || NULL == made || NULL == grown) {
+    if (NULL != grown) {
+      MV_LOCKS = grown;
+    }
+    pthread_mutex_unlock(&MV_LOCKSMUTEX);
+    free(owned);
+    free(made);
+    return NULL;
+  }
+
+  MV_LOCKS = grown;
+  pthread_mutex_init(made, NULL);
+  MV_LOCKS[MV_LOCKCOUNT].file = owned;
+  MV_LOCKS[MV_LOCKCOUNT].lock = made;
+  MV_LOCKCOUNT++;
+
+  pthread_mutex_unlock(&MV_LOCKSMUTEX);
+
+  return made;
+}
+
 struct sek_minivault {
   sek_pool *pool;
   const char *file;
@@ -1322,7 +1408,7 @@ sek_err sek_vault_has(sek_minivault *vault, const char *name, int *out) {
   return err;
 }
 
-sek_err sek_vault_set(sek_minivault *vault, const char *name, const char *value) {
+static sek_err mvset(sek_minivault *vault, const char *name, const char *value) {
   sek_pool *work;
   mvfile file;
   mvbytes key, id;
@@ -1390,7 +1476,24 @@ sek_err sek_vault_set(sek_minivault *vault, const char *name, const char *value)
   return err;
 }
 
-sek_err sek_vault_remove(sek_minivault *vault, const char *name) {
+/* Every write on this file, from any handle in this process, serializes
+ * here; see mvlockfor. */
+sek_err sek_vault_set(sek_minivault *vault, const char *name, const char *value) {
+  sek_err err;
+  pthread_mutex_t *one = mvlockfor(vault->file);
+
+  if (NULL == one) {
+    return mvfail(vault->pool, "out of memory");
+  }
+
+  pthread_mutex_lock(one);
+  err = mvset(vault, name, value);
+  pthread_mutex_unlock(one);
+
+  return err;
+}
+
+static sek_err mvremove(sek_minivault *vault, const char *name) {
   sek_pool *work;
   mvfile file;
   mvbytes root, want;
@@ -1429,6 +1532,23 @@ sek_err sek_vault_remove(sek_minivault *vault, const char *name) {
   }
 
   sek_pool_free(work);
+
+  return err;
+}
+
+/* Every write on this file, from any handle in this process, serializes
+ * here; see mvlockfor. */
+sek_err sek_vault_remove(sek_minivault *vault, const char *name) {
+  sek_err err;
+  pthread_mutex_t *one = mvlockfor(vault->file);
+
+  if (NULL == one) {
+    return mvfail(vault->pool, "out of memory");
+  }
+
+  pthread_mutex_lock(one);
+  err = mvremove(vault, name);
+  pthread_mutex_unlock(one);
 
   return err;
 }
@@ -1503,7 +1623,7 @@ sek_err sek_vault_keys(sek_minivault *vault, sek_vaultinfo ***out, size_t *count
   return err;
 }
 
-sek_err sek_vault_grant(sek_minivault *vault, const sek_vaultgrant *spec) {
+static sek_err mvmakegrant(sek_minivault *vault, const sek_vaultgrant *spec) {
   sek_pool *work = sek_pool_new();
   mvfile file;
   mvbytes root;
@@ -1593,7 +1713,24 @@ sek_err sek_vault_grant(sek_minivault *vault, const sek_vaultgrant *spec) {
   return err;
 }
 
-sek_err sek_vault_revoke(sek_minivault *vault, const char *key) {
+/* Every write on this file, from any handle in this process, serializes
+ * here; see mvlockfor. */
+sek_err sek_vault_grant(sek_minivault *vault, const sek_vaultgrant *spec) {
+  sek_err err;
+  pthread_mutex_t *one = mvlockfor(vault->file);
+
+  if (NULL == one) {
+    return mvfail(vault->pool, "out of memory");
+  }
+
+  pthread_mutex_lock(one);
+  err = mvmakegrant(vault, spec);
+  pthread_mutex_unlock(one);
+
+  return err;
+}
+
+static sek_err mvrevoke(sek_minivault *vault, const char *key) {
   sek_pool *work = sek_pool_new();
   mvfile file;
   mvbytes root;
@@ -1626,7 +1763,24 @@ sek_err sek_vault_revoke(sek_minivault *vault, const char *key) {
   return err;
 }
 
-sek_err sek_vault_rotate(sek_minivault *vault) {
+/* Every write on this file, from any handle in this process, serializes
+ * here; see mvlockfor. */
+sek_err sek_vault_revoke(sek_minivault *vault, const char *key) {
+  sek_err err;
+  pthread_mutex_t *one = mvlockfor(vault->file);
+
+  if (NULL == one) {
+    return mvfail(vault->pool, "out of memory");
+  }
+
+  pthread_mutex_lock(one);
+  err = mvrevoke(vault, key);
+  pthread_mutex_unlock(one);
+
+  return err;
+}
+
+static sek_err mvrotate(sek_minivault *vault) {
   sek_pool *work = sek_pool_new();
   mvfile file, fresh;
   mvbytes oldroot, oldnamekey, root, namekey;
@@ -1725,6 +1879,23 @@ sek_err sek_vault_rotate(sek_minivault *vault) {
   }
 
   sek_pool_free(work);
+
+  return err;
+}
+
+/* Every write on this file, from any handle in this process, serializes
+ * here; see mvlockfor. */
+sek_err sek_vault_rotate(sek_minivault *vault) {
+  sek_err err;
+  pthread_mutex_t *one = mvlockfor(vault->file);
+
+  if (NULL == one) {
+    return mvfail(vault->pool, "out of memory");
+  }
+
+  pthread_mutex_lock(one);
+  err = mvrotate(vault);
+  pthread_mutex_unlock(one);
 
   return err;
 }

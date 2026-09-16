@@ -56,7 +56,7 @@ INCLUDES = -I src -I plugins -I $(PLUGIN)/c/src
 # THE CORE LINKS NEITHER. A consumer whose chain is `env` and `dotenv`
 # needs libc and nothing else; only a binary that links a plugin needs
 # these, which is what the split is for.
-LDLIBS = -lssl -lcrypto
+LDLIBS = -lssl -lcrypto -lpthread
 
 # THREE ARCHIVES, AND THE MIDDLE ONE IS THE BOUNDARY.
 #

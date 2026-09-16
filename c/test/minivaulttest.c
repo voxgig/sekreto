@@ -17,6 +17,7 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include <dirent.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1089,6 +1090,93 @@ static const char *avaultneedsafileandapassphrase(void) {
                "a vault needs a passphrase", "no passphrase");
 }
 
+/* TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each handle is
+ * its own object with its own snapshot, so without the shared per-path
+ * lock both threads finish `mvload` before either saves and the second
+ * rename discards the first one's secret while reporting success.
+ * DOCS.md promises this within one process.
+ *
+ * EACH THREAD GETS ITS OWN POOL, because a pool is not thread-safe:
+ * sharing one would test the allocator rather than the vault. */
+#define MV_ROUNDS 40
+
+typedef struct {
+  const char *path;
+  const char *tag;
+  int broke;
+} mvwriter;
+
+static void *writerrun(void *given) {
+  mvwriter *self = (mvwriter *)given;
+  sek_pool *pool = sek_pool_new();
+  sek_vaultoptions *options = (sek_vaultoptions *)sek_alloc(pool, sizeof(sek_vaultoptions));
+  sek_minivault *mine = NULL;
+  int round;
+
+  memset(options, 0, sizeof(*options));
+  options->file = self->path;
+  options->passphrase = MASTER;
+
+  if (NULL != sek_vault_open(pool, options, &mine)) {
+    self->broke = 1;
+    sek_pool_free(pool);
+    return NULL;
+  }
+
+  for (round = 0; round < MV_ROUNDS; round++) {
+    char name[64];
+    snprintf(name, sizeof(name), "t%s.n%d", self->tag, round);
+    if (NULL != sek_vault_set(mine, name, "v")) {
+      self->broke = 1;
+      break;
+    }
+  }
+
+  sek_pool_free(pool);
+
+  return NULL;
+}
+
+static const char *twohandleswritingatoncelosenothing(void) {
+  const char *why;
+  sek_minivault *vault = fresh(&why);
+  sek_list *names = NULL;
+  mvwriter one, two;
+  pthread_t first, second;
+  char count[32];
+  char got[32];
+
+  if (NULL != why) {
+    return why;
+  }
+
+  one.path = sek_vault_file(vault);
+  one.tag = "one";
+  one.broke = 0;
+  two = one;
+  two.tag = "two";
+
+  if (0 != pthread_create(&first, NULL, writerrun, &one) ||
+      0 != pthread_create(&second, NULL, writerrun, &two)) {
+    return "a thread would not start";
+  }
+  pthread_join(first, NULL);
+  pthread_join(second, NULL);
+
+  if (NULL != (why = truth(!one.broke && !two.broke, "a writer raised"))) {
+    return why;
+  }
+
+  if (NULL != (why = sek_vault_list(vault, &names))) {
+    return why;
+  }
+
+  snprintf(count, sizeof(count), "%d", 2 * MV_ROUNDS);
+  snprintf(got, sizeof(got), "%lu", (unsigned long) (NULL == names ? 0 : names->len));
+
+  return same(count, got, "every write survived");
+}
+
 /* An EMPTY key is no key, so it means `master`. It is not a contrived
  * case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
  * expands to the empty string rather than to nothing at all. */
@@ -1793,6 +1881,7 @@ int main(int argc, char **argv) {
   runcase("damaged", adamagedfileisrefused);
   runcase("createover", creatingoveranexistingvaultisrefused);
   runcase("needsfile", avaultneedsafileandapassphrase);
+  runcase("concurrent", twohandleswritingatoncelosenothing);
   runcase("emptykey", anemptykeymeansthemasterkey);
   runcase("createflag", createmakesthefileonlywhenasked);
   runcase("longkeyid", akeyidlongerthantheformatallows);
