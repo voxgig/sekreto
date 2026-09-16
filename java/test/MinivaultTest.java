@@ -429,6 +429,48 @@ public final class MinivaultTest {
    * variable expands to the empty string rather than to nothing at all -
    * and {@code null ==} answers for null alone.
    */
+  /**
+   * TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each Vault is its own object with its
+   * own snapshot, so without the shared per-path lock both threads finish {@code load()} before
+   * either saves and the second rename discards the first one's secret while reporting success.
+   *
+   * <p>DOCS.md promises this within one process. Run against a build with the lock taken out, this
+   * case fails on the first attempt.
+   */
+  static void twohandleswritingatoncelosenothing() throws Exception {
+    Minivault.Vault vault = fresh();
+    String file = vault.file();
+
+    int rounds = 40;
+    java.util.List<Throwable> broke = java.util.Collections.synchronizedList(new ArrayList<>());
+
+    Runnable writer =
+        () -> {
+          try {
+            Minivault.Vault mine =
+                Minivault.openvault(new Minivault.Options().file(file).passphrase(MASTER));
+            for (int round = 0; round < rounds; round++) {
+              mine.set("t" + Thread.currentThread().getName() + ".n" + round, "v" + round);
+            }
+          } catch (Throwable err) {
+            broke.add(err);
+          }
+        };
+
+    Thread one = new Thread(writer, "one");
+    Thread two = new Thread(writer, "two");
+    one.start();
+    two.start();
+    one.join();
+    two.join();
+
+    if (!broke.isEmpty()) {
+      throw new IllegalStateException("a writer raised: " + broke.get(0));
+    }
+
+    same(2 * rounds, vault.list().size(), "every write survived");
+  }
+
   static void anemptykeymeansthemasterkey() {
     Minivault.Vault vault = fresh();
     vault.set("api.token", "tok01");
@@ -807,6 +849,7 @@ public final class MinivaultTest {
     testcase("damaged", MinivaultTest::adamagedfileisrefused);
     testcase("createover", MinivaultTest::creatingoveranexistingvaultisrefused);
     testcase("needsfile", MinivaultTest::avaultneedsafileandapassphrase);
+    testcase("concurrent", MinivaultTest::twohandleswritingatoncelosenothing);
     testcase("emptykey", MinivaultTest::anemptykeymeansthemasterkey);
     testcase("createflag", MinivaultTest::createmakesthefileonlywhenasked);
     testcase("longkeyid", MinivaultTest::akeyidlongerthantheformatallowsisrefused);

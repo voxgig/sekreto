@@ -648,17 +648,83 @@ public final class Minivault {
   static void putnew(String file, VaultFile vault) {
     Path path = Path.of(file);
     try {
-      Files.write(
-          path,
-          writefile(vault),
-          java.nio.file.StandardOpenOption.CREATE_NEW,
-          java.nio.file.StandardOpenOption.WRITE);
-      owneronly(path);
+      spill(path, writefile(vault));
     } catch (FileAlreadyExistsException err) {
       throw fail("vault file already exists: " + file);
     } catch (IOException err) {
       throw fail("cannot write " + file + ": " + err.getMessage());
     }
+  }
+
+  /**
+   * The lock every handle on one file shares.
+   *
+   * <p>Each {@code Vault} is its own object, so two handles on one path did not coordinate: both
+   * could finish {@code load()} before either saved, and the second {@code Files.move} then
+   * discarded the first one's change while reporting success. Keyed by the ABSOLUTE path, so two
+   * handles spelled differently still meet.
+   *
+   * <p>This is a guarantee WITHIN one process, which is what DOCS.md promises and what the go port
+   * arranges the same way. Two processes still race, and the format's answer to that is the
+   * exclusive create and the atomic rename: a reader sees one whole vault or the other, never half
+   * of one.
+   */
+  private static final java.util.concurrent.ConcurrentHashMap<String, Object> LOCKS =
+      new java.util.concurrent.ConcurrentHashMap<>();
+
+  private static Object lockfor(String file) {
+    String key;
+    try {
+      key = Path.of(file).toAbsolutePath().normalize().toString();
+    } catch (RuntimeException err) {
+      key = file;
+    }
+
+    return LOCKS.computeIfAbsent(key, ignored -> new Object());
+  }
+
+  /**
+   * Create {@code path} and write {@code raw} to it, owner-only, refusing a path that is already
+   * there.
+   *
+   * <p>THE MODE IS ASKED FOR AT CREATION, not set afterwards. {@code Files.write(CREATE_NEW)}
+   * followed by {@code setPosixFilePermissions} leaves the file at the provider default - 0666
+   * &amp; ~umask on a POSIX filesystem - for as long as it takes to write every byte, and another
+   * local user watching a shared directory can open it for writing in that window and keep the
+   * descriptor after the permissions narrow. A {@code FileAttribute} passed to the create is what
+   * closes it.
+   *
+   * <p>On a filesystem with no POSIX permissions the attribute is refused, and the fallback is the
+   * old shape: create, write, then narrow if the filesystem will have it. That is not a weaker
+   * guarantee than before, and it is the only one such a filesystem offers.
+   */
+  private static void spill(Path path, byte[] raw) throws IOException {
+    java.nio.file.attribute.FileAttribute<?> mode = null;
+    try {
+      mode =
+          java.nio.file.attribute.PosixFilePermissions.asFileAttribute(
+              java.nio.file.attribute.PosixFilePermissions.fromString("rw-------"));
+    } catch (UnsupportedOperationException err) {
+      mode = null;
+    }
+
+    if (null != mode) {
+      try (java.io.OutputStream out =
+          Files.newOutputStream(
+              Files.createFile(path, mode), java.nio.file.StandardOpenOption.WRITE)) {
+        out.write(raw);
+        return;
+      } catch (UnsupportedOperationException err) {
+        // Fall through: this filesystem has no POSIX permissions.
+      }
+    }
+
+    Files.write(
+        path,
+        raw,
+        java.nio.file.StandardOpenOption.CREATE_NEW,
+        java.nio.file.StandardOpenOption.WRITE);
+    owneronly(path);
   }
 
   private static void owneronly(Path path) {
@@ -792,63 +858,71 @@ public final class Minivault {
      * names it was granted, and creates none.
      */
     public void set(String name, String value) {
-      Sekreto.checkname(name);
-      if (null == value) {
-        throw fail("a secret value must be text: " + name);
+      // Every write on this file, from any handle in this process,
+      // serializes here; see lockfor.
+      synchronized (lockfor(file)) {
+        Sekreto.checkname(name);
+        if (null == value) {
+          throw fail("a secret value must be text: " + name);
+        }
+
+        Loaded state = load();
+
+        if (!state.opened.info.write) {
+          throw fail("key " + state.opened.info.key + " is read-only");
+        }
+
+        byte[] key = keyfor(state.opened, name);
+        if (null == key) {
+          throw fail("key " + state.opened.info.key + " was not granted " + name);
+        }
+
+        Sealed sealedvalue = seal(key, utf8(value), AAD_SECRET + name);
+        byte[] id = entryid(key);
+
+        EntryRecord found = findentry(state.vault, key);
+        if (null != found) {
+          found.value = sealedvalue;
+        } else {
+          // A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
+          // restricted key with `write` updates what it was granted and
+          // cannot grow the vault.
+          byte[] root = rootof(state.opened, "creating the secret " + name);
+          EntryRecord entry = new EntryRecord();
+          entry.id = id;
+          entry.name = seal(hmac(root, LABEL_NAMES), utf8(name), AAD_NAME);
+          entry.value = sealedvalue;
+          state.vault.entries.add(entry);
+        }
+
+        save(state.vault);
       }
-
-      Loaded state = load();
-
-      if (!state.opened.info.write) {
-        throw fail("key " + state.opened.info.key + " is read-only");
-      }
-
-      byte[] key = keyfor(state.opened, name);
-      if (null == key) {
-        throw fail("key " + state.opened.info.key + " was not granted " + name);
-      }
-
-      Sealed sealedvalue = seal(key, utf8(value), AAD_SECRET + name);
-      byte[] id = entryid(key);
-
-      EntryRecord found = findentry(state.vault, key);
-      if (null != found) {
-        found.value = sealedvalue;
-      } else {
-        // A NEW NAME NEEDS THE NAME KEY, which only a master holds. So a
-        // restricted key with `write` updates what it was granted and
-        // cannot grow the vault.
-        byte[] root = rootof(state.opened, "creating the secret " + name);
-        EntryRecord entry = new EntryRecord();
-        entry.id = id;
-        entry.name = seal(hmac(root, LABEL_NAMES), utf8(name), AAD_NAME);
-        entry.value = sealedvalue;
-        state.vault.entries.add(entry);
-      }
-
-      save(state.vault);
     }
 
     /** Drop a name. Master only. */
     public void remove(String name) {
-      Sekreto.checkname(name);
-      Loaded state = load();
-      byte[] root = rootof(state.opened, "removing a secret");
+      // Every write on this file, from any handle in this process,
+      // serializes here; see lockfor.
+      synchronized (lockfor(file)) {
+        Sekreto.checkname(name);
+        Loaded state = load();
+        byte[] root = rootof(state.opened, "removing a secret");
 
-      byte[] wanted = entryid(secretkey(root, name));
-      EntryRecord found = null;
-      for (EntryRecord entry : state.vault.entries) {
-        if (Arrays.equals(entry.id, wanted)) {
-          found = entry;
-          break;
+        byte[] wanted = entryid(secretkey(root, name));
+        EntryRecord found = null;
+        for (EntryRecord entry : state.vault.entries) {
+          if (Arrays.equals(entry.id, wanted)) {
+            found = entry;
+            break;
+          }
         }
-      }
-      if (null == found) {
-        throw fail("no such secret: " + name);
-      }
+        if (null == found) {
+          throw fail("no such secret: " + name);
+        }
 
-      state.vault.entries.remove(found);
-      save(state.vault);
+        state.vault.entries.remove(found);
+        save(state.vault);
+      }
     }
 
     /** Every key in the file, with what it may do. Master only. */
@@ -883,56 +957,60 @@ public final class Minivault {
 
     /** Mint a restricted key. Master only. */
     public void grant(Grant spec) {
-      Loaded state = load();
-      byte[] root = rootof(state.opened, "granting a key");
+      // Every write on this file, from any handle in this process,
+      // serializes here; see lockfor.
+      synchronized (lockfor(file)) {
+        Loaded state = load();
+        byte[] root = rootof(state.opened, "granting a key");
 
-      Grant want = null == spec ? new Grant() : spec;
-      String id = checkid(want.key, "a grant needs a key id");
-      if (null == want.passphrase || want.passphrase.isEmpty()) {
-        throw fail("a grant needs a passphrase");
-      }
-      for (KeyRecord record : state.vault.keys) {
-        if (record.id.equals(id)) {
-          throw fail("key already exists: " + id);
+        Grant want = null == spec ? new Grant() : spec;
+        String id = checkid(want.key, "a grant needs a key id");
+        if (null == want.passphrase || want.passphrase.isEmpty()) {
+          throw fail("a grant needs a passphrase");
         }
+        for (KeyRecord record : state.vault.keys) {
+          if (record.id.equals(id)) {
+            throw fail("key already exists: " + id);
+          }
+        }
+
+        List<String> names = new ArrayList<>(want.names);
+        names.sort(null);
+
+        // A TreeMap, for a ring whose JSON is the same text on every run.
+        // It is NOT an interop requirement - the ring is sealed under a
+        // fresh nonce, so its ciphertext differs per write whatever the key
+        // order is, and a reader parses it back into a map. It is so that
+        // two runs of this port over the same grant produce the same
+        // plaintext, which is the property a reader of this code expects.
+        Map<String, Object> grants = new TreeMap<>();
+        for (String name : names) {
+          Sekreto.checkname(name);
+          grants.put(name, b64(secretkey(root, name)));
+        }
+
+        Map<String, Object> ring = new LinkedHashMap<>();
+        ring.put("v", FORMAT);
+        ring.put("write", want.write);
+        ring.put("grants", grants);
+
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("v", FORMAT);
+        meta.put("master", false);
+        meta.put("write", want.write);
+        meta.put("grants", names);
+
+        state.vault.keys.add(
+            sealkey(
+                root,
+                id,
+                want.passphrase,
+                null == want.iterations ? iterations : want.iterations,
+                ring,
+                meta));
+
+        save(state.vault);
       }
-
-      List<String> names = new ArrayList<>(want.names);
-      names.sort(null);
-
-      // A TreeMap, for a ring whose JSON is the same text on every run.
-      // It is NOT an interop requirement - the ring is sealed under a
-      // fresh nonce, so its ciphertext differs per write whatever the key
-      // order is, and a reader parses it back into a map. It is so that
-      // two runs of this port over the same grant produce the same
-      // plaintext, which is the property a reader of this code expects.
-      Map<String, Object> grants = new TreeMap<>();
-      for (String name : names) {
-        Sekreto.checkname(name);
-        grants.put(name, b64(secretkey(root, name)));
-      }
-
-      Map<String, Object> ring = new LinkedHashMap<>();
-      ring.put("v", FORMAT);
-      ring.put("write", want.write);
-      ring.put("grants", grants);
-
-      Map<String, Object> meta = new LinkedHashMap<>();
-      meta.put("v", FORMAT);
-      meta.put("master", false);
-      meta.put("write", want.write);
-      meta.put("grants", names);
-
-      state.vault.keys.add(
-          sealkey(
-              root,
-              id,
-              want.passphrase,
-              null == want.iterations ? iterations : want.iterations,
-              ring,
-              meta));
-
-      save(state.vault);
     }
 
     /**
@@ -942,26 +1020,30 @@ public final class Minivault {
      * future reads of the LIVE file and `rotate` is what takes a secret back.
      */
     public void revoke(String key) {
-      Loaded state = load();
-      rootof(state.opened, "revoking a key");
+      // Every write on this file, from any handle in this process,
+      // serializes here; see lockfor.
+      synchronized (lockfor(file)) {
+        Loaded state = load();
+        rootof(state.opened, "revoking a key");
 
-      if (key.equals(state.opened.info.key)) {
-        throw fail("a key cannot revoke itself: " + key);
-      }
-
-      KeyRecord found = null;
-      for (KeyRecord record : state.vault.keys) {
-        if (record.id.equals(key)) {
-          found = record;
-          break;
+        if (key.equals(state.opened.info.key)) {
+          throw fail("a key cannot revoke itself: " + key);
         }
-      }
-      if (null == found) {
-        throw fail("no such key: " + key);
-      }
 
-      state.vault.keys.remove(found);
-      save(state.vault);
+        KeyRecord found = null;
+        for (KeyRecord record : state.vault.keys) {
+          if (record.id.equals(key)) {
+            found = record;
+            break;
+          }
+        }
+        if (null == found) {
+          throw fail("no such key: " + key);
+        }
+
+        state.vault.keys.remove(found);
+        save(state.vault);
+      }
     }
 
     /**
@@ -971,60 +1053,64 @@ public final class Minivault {
      * does not have. Re-grant afterwards.
      */
     public void rotate() {
-      Loaded state = load();
-      rootof(state.opened, "rotating the vault");
+      // Every write on this file, from any handle in this process,
+      // serializes here; see lockfor.
+      synchronized (lockfor(file)) {
+        Loaded state = load();
+        rootof(state.opened, "rotating the vault");
 
-      // Read everything out under the old root before anything changes:
-      // once the root is replaced the old derived keys are unreachable.
-      Map<String, String> plain = new LinkedHashMap<>();
-      for (String name : list()) {
-        plain.put(name, get(name));
-      }
-
-      byte[] root = random(KEYLEN);
-      byte[] namekey = hmac(root, LABEL_NAMES);
-
-      VaultFile fresh = new VaultFile();
-      for (Map.Entry<String, String> secret : plain.entrySet()) {
-        byte[] key = secretkey(root, secret.getKey());
-        EntryRecord entry = new EntryRecord();
-        entry.id = entryid(key);
-        entry.name = seal(namekey, utf8(secret.getKey()), AAD_NAME);
-        entry.value = seal(key, utf8(secret.getValue()), AAD_SECRET + secret.getKey());
-        fresh.entries.add(entry);
-      }
-
-      int iters = iterations;
-      for (KeyRecord record : state.vault.keys) {
-        if (record.id.equals(keyid)) {
-          iters = record.iters;
+        // Read everything out under the old root before anything changes:
+        // once the root is replaced the old derived keys are unreachable.
+        Map<String, String> plain = new LinkedHashMap<>();
+        for (String name : list()) {
+          plain.put(name, get(name));
         }
+
+        byte[] root = random(KEYLEN);
+        byte[] namekey = hmac(root, LABEL_NAMES);
+
+        VaultFile fresh = new VaultFile();
+        for (Map.Entry<String, String> secret : plain.entrySet()) {
+          byte[] key = secretkey(root, secret.getKey());
+          EntryRecord entry = new EntryRecord();
+          entry.id = entryid(key);
+          entry.name = seal(namekey, utf8(secret.getKey()), AAD_NAME);
+          entry.value = seal(key, utf8(secret.getValue()), AAD_SECRET + secret.getKey());
+          fresh.entries.add(entry);
+        }
+
+        int iters = iterations;
+        for (KeyRecord record : state.vault.keys) {
+          if (record.id.equals(keyid)) {
+            iters = record.iters;
+          }
+        }
+
+        Map<String, Object> ring = new LinkedHashMap<>();
+        ring.put("v", FORMAT);
+        ring.put("write", true);
+        ring.put("root", b64(root));
+
+        Map<String, Object> meta = new LinkedHashMap<>();
+        meta.put("v", FORMAT);
+        meta.put("master", true);
+        meta.put("write", true);
+        meta.put("grants", List.of());
+
+        KeyRecord record = sealkey(root, keyid, passphrase, iters, ring, meta);
+        fresh.keys.add(record);
+
+        // SAVE FIRST, adopt second. A handle holding the new root over a file
+        // that still holds the old one reads nothing and says the vault is
+        // damaged.
+        save(fresh);
+
+        Opened next = new Opened();
+        next.info = new KeyInfo(keyid, true, true, List.of());
+        next.root = root;
+        next.ring = record.ring;
+        opened = next;
       }
-
-      Map<String, Object> ring = new LinkedHashMap<>();
-      ring.put("v", FORMAT);
-      ring.put("write", true);
-      ring.put("root", b64(root));
-
-      Map<String, Object> meta = new LinkedHashMap<>();
-      meta.put("v", FORMAT);
-      meta.put("master", true);
-      meta.put("write", true);
-      meta.put("grants", List.of());
-
-      KeyRecord record = sealkey(root, keyid, passphrase, iters, ring, meta);
-      fresh.keys.add(record);
-
-      // SAVE FIRST, adopt second. A handle holding the new root over a file
-      // that still holds the old one reads nothing and says the vault is
-      // damaged.
-      save(fresh);
-
-      Opened next = new Opened();
-      next.info = new KeyInfo(keyid, true, true, List.of());
-      next.root = root;
-      next.ring = record.ring;
-      opened = next;
     }
 
     // --- the inside ----------------------------------------------------
@@ -1198,12 +1284,7 @@ public final class Minivault {
       Path temp = Path.of(file + "." + suffix + ".tmp");
 
       try {
-        Files.write(
-            temp,
-            writefile(vault),
-            java.nio.file.StandardOpenOption.CREATE_NEW,
-            java.nio.file.StandardOpenOption.WRITE);
-        owneronly(temp);
+        spill(temp, writefile(vault));
         Files.move(temp, Path.of(file), StandardCopyOption.REPLACE_EXISTING);
       } catch (IOException err) {
         try {
