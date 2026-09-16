@@ -10,7 +10,7 @@
 --
 -- Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 --          gcpsecrets azuresecrets onepassword doppler infisical
---          secretspec chain
+--          secretspec minivault chain
 --
 -- Each source's configuration arrives in the environment variables its
 -- own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
@@ -162,6 +162,15 @@ local function chainfor(source)
     reason = envopt('SECRETSPEC_REASON'),
   })
 
+  -- The mini vault, read-only here: the CLI is an app that needs a
+  -- secret, and writing one is a separate act with its own API.
+  local minivaultspec = sekreto.spec({
+    kind = 'minivault',
+    file = envopt('SEKRETO_VAULT_FILE'),
+    vaultkey = envopt('SEKRETO_VAULT_KEY'),
+    passphrase = envopt('SEKRETO_VAULT_PASSPHRASE'),
+  })
+
   local infisicalspec = sekreto.spec({
     kind = 'infisical',
     addr = envopt('INFISICAL_ADDR'),
@@ -188,6 +197,7 @@ local function chainfor(source)
     doppler = { dopplerspec },
     infisical = { infisicalspec },
     secretspec = { secretspecspec },
+    minivault = { minivaultspec },
   }
 
   -- The default: the chain an app would actually ship with - local

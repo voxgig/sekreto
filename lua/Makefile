@@ -1,4 +1,4 @@
-.PHONY: build test conformance plugins tlscheck deps clean inspect
+.PHONY: build test conformance plugins vaulttest tlscheck deps clean inspect
 
 # voxgig/omni is a sibling checkout, not a published artifact, and it may
 # sit anywhere. Find it, and build it if it has not been built yet.
@@ -59,7 +59,7 @@ deps:
 # otherwise ship, and after the core/plugin split most files are in
 # exactly that position - so it runs every time, not only when the C
 # source changed.
-build: deps build/sekreto-net
+build: deps build/sekreto-net build/sekretovault.so
 	@for f in $$(find src cli test -name '*.lua'); do \
 	  $(LUAC) -p "$$f" >/dev/null || exit 1; \
 	done
@@ -72,11 +72,26 @@ build/sekreto-net: native/sekretonet.c
 	mkdir -p build
 	$(CC) $(CFLAGS) -o $@ native/sekretonet.c $(LDLIBS)
 
+# The mini vault's four primitives, as a LOADABLE MODULE rather than a
+# second helper program. `sekretonet.c` is a process because one HTTP
+# round-trip is one spawn and the cost disappears into the network; a
+# vault `list` over a hundred secrets is a hundred AEAD opens, and a
+# hundred spawns is not a store anybody would use.
+#
+# It needs the Lua headers - `liblua5.4-dev` - which is a BUILD-time
+# package for this port's own C, exactly as `libssl-dev` is. Nothing new
+# is linked at run time: `-lcrypto`, which `sekreto-net` already has.
+LUACFLAGS ?= $(shell pkg-config --cflags lua5.4 2>/dev/null || echo -I/usr/include/lua5.4)
+
+build/sekretovault.so: native/sekretovault.c
+	mkdir -p build
+	$(CC) $(CFLAGS) -fPIC -shared $(LUACFLAGS) -o $@ native/sekretovault.c -lcrypto
+
 # Two suites, because one of them cannot see the thing this port most
 # needs proved. No corpus case opens a socket, so `conformance` would pass
 # on a build with no transport at all; `tlscheck` is what says the TLS
 # binding verifies rather than merely connects.
-test: conformance plugins tlscheck
+test: conformance plugins vaulttest tlscheck
 
 # The conformance suite needs omni; the library and the CLI do not, and
 # omni is only ever on the test's own package.path.
@@ -91,6 +106,12 @@ conformance: build
 # plugin. These do.
 plugins: build
 	PLUGIN_HOME=$(PLUGIN) $(LUA) test/test_plugins.lua $(SEAM)
+
+# The mini vault, which the shared spec cannot carry until every port
+# ships the kind, and the committed files every port reads. It needs no
+# omni.
+vaulttest: build
+	PLUGIN_HOME=$(PLUGIN) $(LUA) test/test_minivault.lua $(CASE)
 
 # The TLS obligations, against `openssl s_server`: the chain, the
 # hostname (a different call for an address than for a name), and

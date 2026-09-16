@@ -309,13 +309,15 @@ jobs:
       - name: Setup OpenSSL headers
         if: matrix.lang == 'cpp' || matrix.lang == 'c'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libssl-dev
-      # lua5.4 from the Ubuntu archive, and the OpenSSL headers the port's
-      # own transport needs. Lua has no sockets at all, so the Makefile
-      # compiles native/sekretonet.c into a helper the library runs -- the
-      # -dev package is a BUILD requirement here, not an optional extra.
+      # lua5.4 from the Ubuntu archive, and the OpenSSL and Lua headers
+      # the port's own C needs. Lua has no sockets and no cryptography at
+      # all, so the Makefile compiles native/sekretonet.c into a helper
+      # the library runs and native/sekretovault.c into a module it loads
+      # -- both -dev packages are BUILD requirements here, not optional
+      # extras.
       - name: Setup Lua
         if: matrix.lang == 'lua'
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 libssl-dev
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 liblua5.4-dev libssl-dev
       # ocaml and haskell from the Ubuntu archive; neither port uses a
       # package manager, so the compiler is all that is needed. libssl-dev
       # is a BUILD requirement for both -- ocaml binds OpenSSL through C
@@ -537,12 +539,14 @@ jobs:
       # missing toolchain, which reads as a port bug and is not one.
       - name: Setup OpenSSL headers
         run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends libssl-dev
-      # lua5.4 from the Ubuntu archive, and the OpenSSL headers the port's
-      # own transport needs. Lua has no sockets at all, so the Makefile
-      # compiles native/sekretonet.c into a helper the library runs -- the
-      # -dev package is a BUILD requirement here, not an optional extra.
+      # lua5.4 from the Ubuntu archive, and the OpenSSL and Lua headers
+      # the port's own C needs. Lua has no sockets and no cryptography at
+      # all, so the Makefile compiles native/sekretonet.c into a helper
+      # the library runs and native/sekretovault.c into a module it loads
+      # -- both -dev packages are BUILD requirements here, not optional
+      # extras.
       - name: Setup Lua
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 libssl-dev
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends lua5.4 liblua5.4-dev libssl-dev
       # ocaml and haskell from the Ubuntu archive; neither port uses a
       # package manager, so the compiler is all that is needed. libssl-dev
       # is a BUILD requirement for both -- ocaml binds OpenSSL through C

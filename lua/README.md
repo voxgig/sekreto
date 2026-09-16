@@ -17,13 +17,26 @@ and there is no luarocks dependency: LuaSec and LuaSocket are both
 absent, and LuaSocket would not have been covered by the rule in any
 case, since a socket library is not cryptographic transport.
 
+A second C file, `native/sekretovault.c`, carries the mini vault's four
+primitives — AES-256-GCM, PBKDF2-HMAC-SHA256, HMAC-SHA256 and the entropy
+under them — and it is a **loadable module** rather than a second helper
+program. The transport helper is a process because one HTTP round-trip is
+one spawn and the cost disappears into the network; a vault `list` over a
+hundred secrets is a hundred AEAD opens, and a hundred spawns is not a
+store anybody would use. It needs the Lua headers to compile
+(`liblua5.4-dev`), which is a build-time package for this port's own C
+exactly as `libssl-dev` is, and it links the `-lcrypto` the port already
+had.
+
 Everything the rule leaves in-tree is in-tree. The JSON, the HTTP/1.1
 framing, SHA-256, HMAC-SHA256, hex and base64 are Lua, in
 `src/sekreto/plugins/`. In particular the digests SigV4 signs with are
-**not** taken from the libcrypto that is already linked: the exception
-covers transport and nothing else, which is the decision the rust port
-took with `ring` already inside rustls's closure. Only the conformance
-suite needs voxgig/omni, and only on its own `package.path`.
+**not** taken from the libcrypto that is already linked: the rule used to
+cover transport and nothing else, it now covers cryptography — because a
+block cipher protecting secrets at rest has properties no known-answer
+vector can check — and it says outright that those two stay where they
+are, since they work and are pinned by published vectors. Only the
+conformance suite needs voxgig/omni, and only on its own `package.path`.
 
 The one dependency the library itself takes is
 [voxgig/plugin](https://github.com/voxgig/plugin), which takes nothing:
@@ -45,7 +58,7 @@ request headers, the JSON object writer, and the ordered map `sigv4`
 answers. `parsedotenv` returns its values table and the key order
 separately, for the same reason.
 
-## Four built in, ten plugins
+## Four built in, eleven plugins
 
 **The line is "reads at most a local file".** `env`, `memory`, `dotenv`
 and `file` are built in and live in `src/sekreto/providers.lua`. The ten
@@ -133,7 +146,7 @@ advances nothing.
 | `src/sekreto/addr.lua` | `checkaddr` and `safeaddr` |
 | `src/sekreto/err.lua` | `SekretoError` |
 | **the plugins** — required only by a program that names one | |
-| `src/sekreto/plugins.lua` | `allplugins`, the full set, and the only file that names all ten |
+| `src/sekreto/plugins.lua` | `allplugins`, the full set, and the only file that names all eleven |
 | `src/sekreto/plugins/<kind>.lua` | one module per kind; `aws.lua` holds both AWS kinds |
 | `src/sekreto/plugins/sigv4.lua` | AWS request signing, reached from `aws.lua` alone |
 | `src/sekreto/plugins/crypto.lua` | SHA-256, HMAC-SHA256, hex, strict base64 |
@@ -141,13 +154,71 @@ advances nothing.
 | `src/sekreto/plugins/httpjson.lua` | HTTP/1.1 framing and the one JSON round-trip |
 | `src/sekreto/plugins/net.lua` | the bridge to the transport helper, and child processes |
 | `src/sekreto/plugins/support.lua` | the pure helpers the store clients share; requires nothing |
+| `src/sekreto/plugins/minivault.lua` | the mini vault: the SKMV format and the key model |
 | `native/sekretonet.c` | the socket, the TLS binding, and child processes |
+| `native/sekretovault.c` | the mini vault's four primitives, as a loadable module |
 | **the rest** | |
 | `test/sekreto_test.lua` | the conformance suite |
 | `test/test_plugins.lua` | the plugin seam, from both sides |
+| `test/test_minivault.lua` | the mini vault, and the committed files every port reads |
 | `test/pluginhome.lua` | where voxgig/plugin is, for the tests and the CLI |
 | `test/tlscheck.sh` | the TLS obligations, against `openssl s_server` |
 | `cli/sekreto-cli.lua` | the app that needs a secret |
+
+## The mini vault
+
+`src/sekreto/plugins/minivault.lua` is a store this port owns outright
+rather than a client for a server somebody else runs: every secret,
+encrypted, in one binary file. It has a master key and restricted keys,
+and it is the port's worked example of a definition publishing an API
+beside its provider.
+
+```lua
+local mv = require('sekreto.plugins.minivault')
+
+local vault = mv.createvault({ file = 'app.skmv', passphrase = master })
+vault:set('api.token', 'tok01')
+vault:grant({ key = 'ci', passphrase = ci, names = { 'api.token' } })
+
+local secrets = sekreto.sekreto({
+  plugins = { mv.minivault },
+  providers = {
+    { kind = 'minivault', file = 'app.skmv', vaultkey = 'ci', passphrase = ci },
+  },
+})
+
+secrets:get('api.token')            -- the chain reads
+mv.vaultof(secrets):list()          -- { 'api.token' } - as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `secrets.host`. This port exports the handle itself rather than a
+ticket, because voxgig/plugin's Lua port carries Lua values and a table
+is one — which is why there is no slot table here and no lifecycle to go
+with it.
+
+`open()` builds a fresh table every call, which is how this port answers
+the defect the review round found in the canonical: a caller handed the
+live permission record could flip its own `write` bit. Here it edits a
+copy, and the test asserts that the vault still reads its own.
+
+**What this port cannot do, stated rather than implied.** Lua's `io.open`
+has `w` and nothing else: no exclusive create, and no way to set a mode.
+So the vault file is created under the process umask rather than at
+`0600`, and `createvault` refuses an existing file by looking first —
+a check-then-write that two processes racing could both pass, where every
+other port refuses in one syscall. A deployment that needs `0600` on a
+shared host sets its umask.
+
+Ports carrying this kind read each other's files, which
+`test/test_minivault.lua` checks against every committed vault in
+`test/fixture/`, including the one this port wrote:
+
+```sh
+make vaulttest                                    # all of it
+lua5.4 test/test_minivault.lua restricted         # one case
+```
 
 ## Testing
 

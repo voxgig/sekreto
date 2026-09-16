@@ -22,6 +22,7 @@ implementations.
 | `minivault-cpp.skmv` | cpp |
 | `minivault-ml.skmv` | ocaml |
 | `minivault-hs.skmv` | haskell |
+| `minivault-lua.skmv` | lua |
 
 **One file per writing port, and every port reads all of them.** A suite
 that reads only what its own port wrote proves the reader agrees with the
