@@ -343,7 +343,7 @@ const Kinds& KINDS() {
   static const Kinds one{
       {"env", "memory", "dotenv", "file"},
       {"hashicorp", "boru", "awssecrets", "awsparams", "gcpsecrets", "azuresecrets",
-       "onepassword", "doppler", "infisical", "secretspec"},
+       "onepassword", "doppler", "infisical", "secretspec", "minivault"},
   };
   return one;
 }

@@ -1,4 +1,4 @@
-.PHONY: build deps test lean check-core clean inspect
+.PHONY: build deps test lean vaulttest check-core clean inspect
 
 # voxgig/omni is a sibling checkout, not a published artifact, and it may
 # sit anywhere. Find it, and build it if it has not been built yet.
@@ -245,9 +245,21 @@ lean: build/libsekreto.a build/libvoxgigplugin.a $(KINDOBJ)
 	  echo "sekreto: aws linked without its signing - the lean check has no teeth" >&2; \
 	  exit 1; \
 	else echo "lean: and aws does not link without its signing"; fi
+	@$(CXX) $(CXXFLAGS) -Isrc -Iplugins -I$(PLUGIN)/cpp/src -o build/lean/Minivault \
+	  test/LeanPlugin.cpp build/obj/plugins/Minivault.o \
+	  build/libsekreto.a build/libvoxgigplugin.a $(LIBS)
+	@echo "lean: Minivault - alone, with no transport and no child process"
+	@if nm -C -u build/obj/plugins/Minivault.o \
+	     | grep -qE 'socket|connect|getaddrinfo|SSL_|sekreto::runcmd|sekreto::sha256'; then \
+	  echo "sekreto: the mini vault reaches the network, a child process or the signer" >&2; \
+	  exit 1; \
+	else echo "lean: and it reaches no socket, no TLS, no child process, no SigV4 digest"; fi
+	@if ! nm -u build/obj/plugins/Minivault.o | grep -q 'EVP_EncryptInit_ex'; then \
+	  echo "sekreto: the mini vault needs no AEAD - the read is wrong" >&2; exit 1; \
+	else echo "lean: and it does need an AEAD, so the read above has teeth"; fi
 	@echo "== no plugin but aws needs a digest"
 	@set -e; for kind in Hashicorp Boru Onepassword Doppler Infisical Azuresecrets \
-	                     Gcpsecrets Secretspec; do \
+	                     Gcpsecrets Secretspec Minivault; do \
 	  if nm -C -u build/obj/plugins/$$kind.o | grep -q 'sekreto::sha256\|sekreto::hmacsha256'; then \
 	    echo "sekreto: $$kind needs a digest - only aws signs" >&2; exit 1; \
 	  fi; \
@@ -256,7 +268,16 @@ lean: build/libsekreto.a build/libvoxgigplugin.a $(KINDOBJ)
 
 # The suite links the archives `build` just made, so the library is compiled
 # once however many times the tests are run.
-test: build check-core lean build/sekreto-tlstest build/sekreto-plugintest
+# The mini vault, which the shared spec cannot carry until every port
+# ships the kind, and the committed files every port reads. Its own
+# binary, so it runs on a machine with no omni checkout.
+vaulttest: build
+	$(CXX) $(CXXFLAGS) -Isrc -Iplugins -I$(PLUGIN)/cpp/src -o build/sekreto-minivaulttest \
+	  test/MinivaultTest.cpp build/libsekretoplugins.a build/libsekreto.a \
+	  build/libvoxgigplugin.a $(LIBS)
+	./build/sekreto-minivaulttest $(CASE)
+
+test: build check-core lean vaulttest build/sekreto-tlstest build/sekreto-plugintest
 	@test -n "$(OMNI)" || { echo "sekreto: voxgig/omni not found - set OMNI_HOME" >&2; exit 1; }
 	$(MAKE) -C $(OMNI)/cpp build
 	$(CXX) $(CXXFLAGS) -Isrc -Iplugins -I$(PLUGIN)/cpp/src -I$(OMNI)/cpp/src \

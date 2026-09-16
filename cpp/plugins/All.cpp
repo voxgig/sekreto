@@ -7,6 +7,7 @@
 #include "Gcpsecrets.hpp"
 #include "Hashicorp.hpp"
 #include "Infisical.hpp"
+#include "Minivault.hpp"
 #include "Onepassword.hpp"
 #include "Secretspec.hpp"
 
@@ -14,8 +15,9 @@ namespace sekreto {
 
 std::vector<Definition> allplugins() {
   return {
-      hashicorp(), boru(),        awssecrets(), awsparams(), gcpsecrets(),
+      hashicorp(),    boru(),        awssecrets(), awsparams(), gcpsecrets(),
       azuresecrets(), onepassword(), doppler(),    infisical(), secretspec(),
+      minivault(),
   };
 }
 

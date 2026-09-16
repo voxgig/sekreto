@@ -19,6 +19,7 @@ implementations.
 | `minivault-clj.skmv` | clojure |
 | `minivault-zig.skmv` | zig |
 | `minivault-c.skmv` | c |
+| `minivault-cpp.skmv` | cpp |
 
 **One file per writing port, and every port reads all of them.** A suite
 that reads only what its own port wrote proves the reader agrees with the
