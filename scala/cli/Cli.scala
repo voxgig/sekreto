@@ -10,7 +10,7 @@
 //
 // Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
 //          gcpsecrets azuresecrets onepassword doppler infisical
-//          secretspec chain
+//          secretspec minivault chain
 //
 // Each source's configuration arrives in the environment variables its own
 // ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed in
@@ -157,6 +157,15 @@ object Cli:
     // (SECRETSPEC_FILE, _PROFILE, _PROVIDER, _REASON are read by the
     // secretspec CLI itself), so a shell already set up for secretspec needs
     // nothing further.
+    // The mini vault, read-only here: the CLI is an app that needs a
+    // secret, and writing one is a separate act with its own API.
+    val minivaultspec = ProviderSpec(
+      kind = "minivault",
+      file = Some(sys.env.getOrElse("SEKRETO_VAULT_FILE", "")),
+      vaultkey = sys.env.get("SEKRETO_VAULT_KEY"),
+      passphrase = Some(sys.env.getOrElse("SEKRETO_VAULT_PASSPHRASE", "")),
+    )
+
     val secretspecspec = ProviderSpec(
       kind = "secretspec",
       command = Some(envor("SECRETSPEC_COMMAND", "secretspec")),
@@ -192,6 +201,7 @@ object Cli:
       case "doppler"      => List(dopplerspec)
       case "infisical"    => List(infisicalspec)
       case "secretspec"   => List(secretspecspec)
+      case "minivault"    => List(minivaultspec)
       // The default: the chain an app would actually ship with - local
       // overrides first, shared vaults last.
       case _ => List(envspec, dotenvspec, hashicorpspec, boruspec)

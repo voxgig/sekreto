@@ -109,6 +109,17 @@ case class ProviderSpec(
     /** infisical: the environment slug and secret path. */
     environment: Option[String] = None,
     path: Option[String] = None,
+    /** minivault: the passphrase that unwraps `vaultkey`. */
+    passphrase: Option[String] = None,
+    /** minivault: which key in the vault file to open with, defaulting to
+      * `master`. Named apart from `key` and `keyid` because those already
+      * mean a secret name and an AWS access key id.
+      */
+    vaultkey: Option[String] = None,
+    /** minivault: PBKDF2 rounds, used only when a key is created. */
+    iterations: Option[Int] = None,
+    /** minivault: make the vault file if it is not there. */
+    create: Option[Boolean] = None,
 ):
 
   /** Printed without its credentials. See AuthSpec.toString: the generated

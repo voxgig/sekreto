@@ -58,6 +58,7 @@ object PluginsTest:
     "gcpsecrets",
     "hashicorp",
     "infisical",
+    "minivault",
     "onepassword",
     "secretspec",
   )
@@ -76,6 +77,7 @@ object PluginsTest:
     "Gcpsecrets",
     "Hashicorp",
     "Infisical",
+    "Minivault",
     "Onepassword",
     "Secretspec",
   )
@@ -204,11 +206,14 @@ object PluginsTest:
       eq(PLUGINS, Plugins.ALL.map(_.name).sorted, "Plugins.ALL")
       eq(KINDS.builtin, BUILTINS.map(_.name), "BUILTINS")
       eq(PLUGINS, KINDS.plugin.sorted, "KINDS.plugin")
-      eq(10, Plugins.ALL.length, "ten plugins")
+      eq(11, Plugins.ALL.length, "eleven plugins")
 
     // Naming a kind is not enough: a kind can be in the catalog and still
     // fail to build. Construction is what the CLI does before any network.
     testcase("every kind builds from a spec"):
+      // One spec that satisfies every kind's configuration check. The
+      // vault's file is not opened here: its handle is lazy, and nothing
+      // reaches a store until a lookup.
       val chain = EVERY.map: kind =>
         ProviderSpec(
           kind = kind,
@@ -217,6 +222,7 @@ object PluginsTest:
           dir = Some("/tmp"),
           file = Some("/tmp/.env"),
           values = Some(Map.empty),
+          passphrase = Some("p"),
         )
 
       val secrets = Sekreto(providers = chain, plugins = Plugins.ALL)
@@ -504,6 +510,10 @@ object PluginsTest:
         config = Some("cf"),
         environment = Some("dev"),
         path = Some("/p"),
+        passphrase = Some("pp"),
+        vaultkey = Some("vk"),
+        iterations = Some(1000),
+        create = Some(true),
       )
 
       eq(full, specof(optionsof(full)), "the round trip")
@@ -625,7 +635,7 @@ object PluginsTest:
       val loaded = Using.resource(recorder): loader =>
         count(toplevel(loader, "com.voxgig.sekreto.plugins.Plugins", "ALL"))
 
-      eq(10, loaded, "the full set is ten")
+      eq(11, loaded, "the full set is eleven")
       eq(KINDFILES, recorder.files(), "reaching the full set loads every plugin file")
 
     println(s"\n$passcount passed, $failcount failed")
