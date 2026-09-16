@@ -16,6 +16,17 @@
 
 #define _POSIX_C_SOURCE 200809L
 
+/* mkdtemp is POSIX.1-2008, but on Apple's headers _POSIX_C_SOURCE alone
+ * NARROWS the visible namespace rather than widening it: __DARWIN_C_LEVEL
+ * drops to the POSIX level and <unistd.h> stops declaring it, so a strict
+ * -std=c99 build fails with "call to undeclared function 'mkdtemp'" and
+ * then, because the implicit return is int, a pointer/integer comparison.
+ * _DARWIN_C_SOURCE restores the declaration. It is Apple-only by name, so
+ * it is guarded rather than defined unconditionally. */
+#if defined(__APPLE__)
+#define _DARWIN_C_SOURCE 1
+#endif
+
 #include <dirent.h>
 #include <pthread.h>
 #include <stdio.h>
