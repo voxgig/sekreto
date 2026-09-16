@@ -111,8 +111,9 @@ so those twenty-three stay one.
    mechanism follows the language.
 
    **`minivault` is the eleventh kind and the one exception to that,
-   deliberately.** It ships in typescript and go; the other twenty-one
-   follow. It is the first kind sekreto owns rather than a client for
+   deliberately.** Eighteen ports ship it; python, rust, perl, dart and
+   swift follow, and they are waiting on rule 3 — none of them has a
+   stdlib AEAD or one already linked. It is the first kind sekreto owns rather than a client for
    somebody else's server, so it is also the first that is WRITTEN to:
    its definition publishes two exports, `provider` for the chain and
    `vault` for the programmatic API, which is why it writes its `define`
@@ -121,12 +122,13 @@ so those twenty-three stay one.
 
    A `minivault` case cannot go in `spec/sekreto.json` until the last
    port has the kind — the spec runs against all twenty-three. Until
-   then `test/fixture/minivault.skmv`, a vault written by the canonical
-   port, is what pins the on-disk format: a port that reads it key by
-   key, and writes a vault the others read, has the format right. Every
-   port can write and read its own vault perfectly while disagreeing
-   with every other about where a length prefix goes, and only the
-   fixture sees that.
+   then `test/fixture/` is what pins the on-disk format: ONE VAULT FILE
+   PER WRITING PORT, and every port's suite reads ALL of them, by
+   scanning the directory rather than by a list somebody has to edit. A
+   port that reads every file there key by key, and writes one the
+   others read, has the format right. Every port can write and read its
+   own vault perfectly while disagreeing with every other about where a
+   length prefix goes, and only the fixtures see that.
 
    The rules that keep it true:
 
@@ -243,7 +245,7 @@ A port is complete when it has all four:
   all fourteen where it does not yet). `minivault` is the eleventh
   plugin kind and is not required yet; take it when the language has
   AES-256-GCM and PBKDF2-HMAC-SHA256 within rule 3, and prove it against
-  `test/fixture/minivault.skmv`
+  every vault in `test/fixture/`
 - a conformance suite running `spec/sekreto.json` through that language's
   voxgig/omni runner, covering all fourteen groups
 - a CLI at the path `test/integration.sh` expects, printing exactly
