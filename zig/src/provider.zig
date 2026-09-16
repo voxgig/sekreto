@@ -157,6 +157,17 @@ pub const ProviderSpec = struct {
     /// infisical: the environment slug and secret path.
     environment: []const u8 = "",
     path: []const u8 = "",
+    /// minivault: the passphrase that unwraps `vaultkey`.
+    passphrase: []const u8 = "",
+    /// minivault: which key in the vault file to open with, defaulting to
+    /// `master`. Named apart from `keyid` because that already means an
+    /// AWS access key id.
+    vaultkey: []const u8 = "",
+    /// minivault: PBKDF2 rounds, used only when a key is created. Zero
+    /// means unset.
+    iterations: i64 = 0,
+    /// minivault: make the vault file if it is not there.
+    create: bool = false,
 };
 
 // ---- the provider ----------------------------------------------------
@@ -289,6 +300,10 @@ pub fn optionsof(spec: ProviderSpec) *pv.Value {
                 setstr(m, "secretid", auth.secretid);
                 pv.set(out, f.name, m);
             }
+        } else if (bool == f.type) {
+            if (value) {
+                pv.set(out, f.name, pv.vbool(true));
+            }
         } else if ([]const KeyValue == f.type) {
             if (0 != value.len) {
                 const m = pv.vmap();
@@ -333,6 +348,8 @@ pub fn specof(options: ?*const pv.Value) ProviderSpec {
                     .secretid = pv.asStr(pv.get(given, "secretid")),
                 };
             }
+        } else if (bool == f.type) {
+            @field(spec, f.name) = pv.isBool(given) and pv.asBool(given);
         } else if ([]const KeyValue == f.type) {
             if (pv.isMap(given)) {
                 const keys = pv.keys(given);

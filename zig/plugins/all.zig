@@ -1,6 +1,6 @@
 //! THE FULL SET - every plugin this library ships, in one module.
 //!
-//! It exists for the callers that genuinely want all ten kinds: the CLI,
+//! It exists for the callers that genuinely want all eleven kinds: the CLI,
 //! the conformance suite, an app whose chain is decided at run time.
 //!
 //!     const plugins = @import("sekretoplugins");
@@ -35,9 +35,11 @@ pub const onepassword = @import("onepassword.zig").onepassword;
 pub const doppler = @import("doppler.zig").doppler;
 pub const infisical = @import("infisical.zig").infisical;
 pub const secretspec = @import("secretspec.zig").secretspec;
+pub const minivault = @import("minivault.zig").minivault;
 
 /// Every plugin definition this library ships.
 pub const ALL = [_]sekreto.Definition{
     hashicorp,    boru,        awssecrets, awsparams, gcpsecrets,
     azuresecrets, onepassword, doppler,    infisical, secretspec,
+    minivault,
 };

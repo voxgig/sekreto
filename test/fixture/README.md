@@ -17,6 +17,7 @@ implementations.
 | `minivault-kt.skmv` | kotlin |
 | `minivault-scala.skmv` | scala |
 | `minivault-clj.skmv` | clojure |
+| `minivault-zig.skmv` | zig |
 
 **One file per writing port, and every port reads all of them.** A suite
 that reads only what its own port wrote proves the reader agrees with the
