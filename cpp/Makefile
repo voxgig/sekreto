@@ -62,9 +62,10 @@ deps:
 #   libsekreto.a       src/*.cpp                 the core: the chain, the
 #                                                cache, redaction, checkaddr
 #                                                and the four built-in kinds
-#   libsekretoplugins.a plugins/*.cpp            the ten kinds that open a
-#                                                socket, sign a request or
-#                                                spawn a process
+#   libsekretoplugins.a plugins/*.cpp            the eleven kinds that open
+#                                                a socket, sign a request,
+#                                                spawn a process or do
+#                                                cryptography
 #
 # Each is compiled from ITS OWN directory and no other, so a core source
 # that reached for a plugin would name a header no include path holds. What

@@ -40,8 +40,9 @@ deps:
 #
 #   build/plugin   voxgig/plugin's library classes
 #   build/core     src/  - the chain, the four built-in kinds, no plugin
-#   build/plugins  plugins/ - the ten kinds that open a socket, spawn a
-#                  process or sign a request, and sigv4 with them
+#   build/plugins  plugins/ - the eleven kinds that open a socket, spawn a
+#                  process, sign a request or do cryptography, and sigv4
+#                  with them
 #
 # `core` compiles src/ with build/plugin on the classpath and NOTHING
 # else: plugins/ is a source root of its own and is on neither the

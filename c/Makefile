@@ -64,10 +64,11 @@ LDLIBS = -lssl -lcrypto
 #   libsekreto.a       src/*.c               the core: the chain, the cache,
 #                                            redaction, checkaddr and the
 #                                            four built-in kinds
-#   libsekretoplugins.a plugins/*.c          the ten kinds that open a
-#                                            socket, sign a request or spawn
-#                                            a process, and the transport,
-#                                            TLS, digest and clock under them
+#   libsekretoplugins.a plugins/*.c          the eleven kinds that open a
+#                                            socket, sign a request, spawn a
+#                                            process or do cryptography, and
+#                                            the transport, TLS, digest and
+#                                            clock under them
 #
 # C has no module system, so the boundary is made out of translation units,
 # archives and the link line. Nothing under src/ includes a header under

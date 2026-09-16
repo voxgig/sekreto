@@ -59,7 +59,7 @@ SCALACP := $(subst $(space),:,$(strip $(SCALAJARS)))
 #   voxgigplugin.jar     voxgig/plugin's own scala port
 #   sekreto.jar          the core: the chain, the cache, redaction, the four
 #                        built-in kinds. Nothing else.
-#   sekreto-plugins.jar  the ten plugin kinds, with sigv4 and the shared
+#   sekreto-plugins.jar  the eleven plugin kinds, with sigv4 and the shared
 #                        HTTP-JSON transport. Compiled AGAINST the core.
 #   sekreto-cli.jar      the CLI, self-contained, because test/checks.sh runs
 #                        it as `java -cp <one jar> sekreto.Cli`.

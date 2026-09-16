@@ -94,7 +94,7 @@ check-core: deps
 #
 # Every other port proves this at its unit of loading: rust a crate,
 # javascript a module, kotlin a class file. C#'s unit of loading is the
-# ASSEMBLY and all ten plugins are one, so reaching Hashicorp really does
+# ASSEMBLY and all eleven plugins are one, so reaching Hashicorp really does
 # load Sigv4's code. The property does not hold here as the other ports
 # state it, and a test claiming it did would be false -- which is why the
 # seam suite does not claim it.

@@ -60,7 +60,7 @@ ZIG := zig build-exe
 # The module graph, the same for every binary:
 #
 #   sekreto         src/sekreto.zig      the core - depends on plugin only
-#   sekretoplugins  plugins/all.zig      the ten plugins - depends on both
+#   sekretoplugins  plugins/all.zig      the eleven plugins - depends on both
 #   plugin          <checkout>/zig/src/plugin.zig
 #
 # The core cannot reach the plugins even by accident: a module's imports
