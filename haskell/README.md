@@ -100,6 +100,72 @@ there is none. The library itself searches nothing.
 The conformance suite finds voxgig/omni the same way, under `$OMNI_HOME`,
 and omni never appears on the library's, the plugins' or the CLI's path.
 
+## The mini vault
+
+`plugins/Minivault.hs` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the
+port's worked example of a definition publishing an API beside its
+provider.
+
+```haskell
+import Minivault
+
+vault <- createvault novaultoptions {optfile = "app.skmv", optpassphrase = master}
+vaultset vault "api.token" "tok01"
+vaultgrant vault nogrant {grantkey = "ci", grantpassphrase = ci, grantnames = ["api.token"]}
+
+secrets <-
+  sekreto
+    emptyoptions
+      { optplugins = [minivault],
+        optproviders =
+          [ emptyspec
+              { speckind = "minivault", specfile = "app.skmv",
+                specvaultkey = "ci", specpassphrase = ci }
+          ]
+      }
+
+get secrets "api.token"                     -- the chain reads
+vaultlist =<< vaultof (host secrets) ""     -- ["api.token"] - as `ci` sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `host`. Both exports are numbers, because voxgig/plugin's values are
+numbers and strings and neither a provider nor a vault is data, and both
+are dropped by the definition's `close` — so a chain that was torn down
+and a chain whose construction was refused hand their vaults back alike,
+which `test/MinivaultTest.hs` reads off the table.
+
+`VaultKeyInfo` is an immutable record, so the defect the review round
+found in the canonical — a caller flipping its own `write` bit on the
+record it was handed — cannot be written. Record update syntax makes a
+new value and changes nothing the vault reads.
+
+**Where the crypto comes from, and why there is a second C file.** GHC's
+boot libraries carry no cryptography whatever, and the no-new-package
+rule stands, so the four primitives come from the OpenSSL this port
+already links: `plugins/minivault.c` is AES-256-GCM,
+PBKDF2-HMAC-SHA256, HMAC-SHA256 and the entropy under them, and nothing
+else. AGENTS.md used to confine the dependency exception to cryptographic
+*transport*, which is why `plugins/Crypto.hs` writes SHA-256 and
+HMAC-SHA256 out by hand beside a linked libcrypto that has both; the rule
+now covers cryptography, because a block cipher protecting secrets **at
+rest** has properties no known-answer vector can check. Those two stay
+where they are: they work, a SigV4 signature is a chain of them so one
+wrong bit fails the published vectors loudly, and rewriting them buys
+nothing.
+
+Ports carrying this kind read each other's files, which
+`test/MinivaultTest.hs` checks against every committed vault in
+`test/fixture/`, including the one this port wrote:
+
+```sh
+make vaulttest                        # all of it
+./build/sekreto-minivault restricted  # one case
+```
+
 ## Layout
 
 | | |
@@ -110,15 +176,17 @@ and omni never appears on the library's, the plugins' or the CLI's path.
 | `src/Provider.hs` | the two-function record a provider is, and `SekretoError` |
 | `src/Bytes.hs` | UTF-8, hex, and strict base64 decoding |
 | `plugins/<Kind>.hs` | one module per plugin kind; `Aws` carries both AWS kinds |
-| `plugins/AllPlugins.hs` | the full set, for a caller that wants all ten |
+| `plugins/AllPlugins.hs` | the full set, for a caller that wants all eleven |
 | `plugins/Httpjson.hs` | the HTTP-JSON round trip, and the token clock |
 | `plugins/Subproc.hs` | running a child process, for `boru` and `secretspec` |
 | `plugins/Http.hs` | HTTP/1.1 framing, in-tree |
 | `plugins/Tls.hs`, `plugins/tls.c` | the FFI declarations, the sockets and OpenSSL |
 | `plugins/Sigv4.hs`, `plugins/Crypto.hs` | AWS request signing, SHA-256 and HMAC-SHA256 |
+| `plugins/Minivault.hs`, `plugins/minivault.c` | the mini vault: the SKMV format, and the port's second and last OpenSSL edge |
 | `plugins/Json.hs` | the JSON value model, parser and writer |
 | `test/SekretoTest.hs` | the conformance suite |
 | `test/PluginTest.hs` | the plugin seam, from both sides |
+| `test/MinivaultTest.hs` | the mini vault, and the committed files every port reads |
 | `test/checkcore.py` | the split, read out of the built binaries |
 | `cli/Main.hs` | the app that needs a secret |
 

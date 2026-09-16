@@ -34,6 +34,7 @@ module Providers
     emptyspec,
     errorcode,
     fail',
+    holdprovider,
     first,
     optionsof,
     pluginkinds,
@@ -65,7 +66,7 @@ import System.FilePath (takeDirectory, (</>))
 import System.IO.Error (isDoesNotExistError)
 import System.IO.Unsafe (unsafePerformIO)
 import Types (details2, raise)
-import Value (Value (..), asNum, asStr, isMap, isNum, vget, vhas, vkeys, vset)
+import Value (Value (..), asBool, asNum, asStr, isBool, isMap, isNum, vget, vhas, vkeys, vset)
 
 -- ------------------------------------------------------------ the specs
 
@@ -197,7 +198,17 @@ data ProviderSpec = ProviderSpec
     specconfig :: String,
     -- | infisical: the environment slug and secret path.
     specenvironment :: String,
-    specpath :: String
+    specpath :: String,
+    -- | minivault: the passphrase that unwraps @vaultkey@.
+    specpassphrase :: String,
+    -- | minivault: which key in the vault file to open with, defaulting
+    -- to @master@. Named apart from @keyid@ because that already means an
+    -- AWS access key id.
+    specvaultkey :: String,
+    -- | minivault: PBKDF2 rounds, used only when a key is created.
+    speciterations :: Maybe Int,
+    -- | minivault: make the vault file if it is not there.
+    speccreate :: Bool
   }
 
 -- | Printed without its credentials. See the 'AuthSpec' instance: a
@@ -257,7 +268,11 @@ emptyspec =
       specapiversion = "",
       specconfig = "",
       specenvironment = "",
-      specpath = ""
+      specpath = "",
+      specpassphrase = "",
+      specvaultkey = "",
+      speciterations = Nothing,
+      speccreate = False
     }
 
 -- --------------------------------------------------------- the plumbing
@@ -629,10 +644,18 @@ specof options =
       specapiversion = text "apiversion",
       specconfig = text "config",
       specenvironment = text "environment",
-      specpath = text "path"
+      specpath = text "path",
+      specpassphrase = text "passphrase",
+      specvaultkey = text "vaultkey",
+      speciterations = num "iterations",
+      speccreate = flag "create"
     }
   where
     text key = asStr (vget options key)
+
+    num key = let got = vget options key in if isNum got then Just (round (asNum got)) else Nothing
+    flag key = let got = vget options key in isBool got && asBool got
+
     held = vget options "values"
     auth = vget options "auth"
 
@@ -694,7 +717,13 @@ optionsof spec = foldl set (VMap []) fields
         ("apiversion", text (specapiversion spec)),
         ("config", text (specconfig spec)),
         ("environment", text (specenvironment spec)),
-        ("path", text (specpath spec))
+        ("path", text (specpath spec)),
+        ("passphrase", text (specpassphrase spec)),
+        ("vaultkey", text (specvaultkey spec)),
+        -- Written only when set, like every string above: Nothing and
+        -- False are what "not configured" means for these two.
+        ("iterations", maybe VNull (VNum . fromIntegral) (speciterations spec)),
+        ("create", if speccreate spec then VBool True else VNull)
       ]
 
     text value = if null value then VNull else VStr value
@@ -748,5 +777,6 @@ pluginkinds =
     "onepassword",
     "doppler",
     "infisical",
-    "secretspec"
+    "secretspec",
+    "minivault"
   ]

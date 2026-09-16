@@ -1,4 +1,4 @@
-.PHONY: build build-core build-one check-core clean deps inspect test test-plugins test-spec
+.PHONY: build build-core build-one check-core clean deps inspect test test-plugins test-spec vaulttest
 
 # voxgig/plugin is a RUNTIME dependency of this port - the core is built on
 # it. It has no Hackage release and there is no cabal file to name one from,
@@ -62,7 +62,7 @@ build: deps
 	@test -n "$(PLUGIN)" || { echo "sekreto: voxgig/plugin not found - run make deps" >&2; exit 1; }
 	mkdir -p build
 	$(GHC) $(PLUGINPATH) -icli -outputdir build/lib -o build/sekreto-cli \
-	  --make cli/Main.hs plugins/tls.c $(TLSLIBS) $(FLAGS) -v0
+	  --make cli/Main.hs plugins/tls.c plugins/minivault.c $(TLSLIBS) $(FLAGS) -v0
 
 # The CORE ALONE, as an artifact that can be read. test/CoreOnly.hs uses
 # the facade, the four built-in kinds and nothing else, and it is compiled
@@ -81,7 +81,7 @@ build-one: deps
 	@test -n "$(PLUGIN)" || { echo "sekreto: voxgig/plugin not found - run make deps" >&2; exit 1; }
 	mkdir -p build
 	$(GHC) $(PLUGINPATH) -itest -outputdir build/one -o build/sekreto-one \
-	  --make test/OnePlugin.hs plugins/tls.c $(TLSLIBS) $(FLAGS) -v0
+	  --make test/OnePlugin.hs plugins/tls.c plugins/minivault.c $(TLSLIBS) $(FLAGS) -v0
 
 # THE SPLIT, READ OUT OF THE BUILT ARTIFACT rather than out of the source.
 # A grep of the sources proves what a reader can see; `nm` proves what is
@@ -89,13 +89,25 @@ build-one: deps
 check-core: build build-core build-one
 	@python3 test/checkcore.py
 
-test: build check-core test-plugins test-spec
+# The mini vault, which the shared spec cannot carry until every port
+# ships the kind, and the committed files every port reads. Its own
+# binary, so it runs on a machine with no omni checkout.
+build/sekreto-minivault: deps
+	@test -n "$(PLUGIN)" || { echo "sekreto: voxgig/plugin not found - run make deps" >&2; exit 1; }
+	mkdir -p build
+	$(GHC) $(PLUGINPATH) -itest -outputdir build/vault -o build/sekreto-minivault \
+	  --make test/MinivaultTest.hs plugins/tls.c plugins/minivault.c $(TLSLIBS) $(FLAGS) -v0
+
+vaulttest: build/sekreto-minivault
+	./build/sekreto-minivault $(CASE)
+
+test: build check-core test-plugins vaulttest test-spec
 
 # The plugin seam, which the conformance suite cannot see: it hands every
 # plugin to every chain it builds, so it can never notice a missing one.
 test-plugins: build build-core build-one
 	$(GHC) $(PLUGINPATH) -itest -outputdir build/plugins -o build/sekreto-plugins \
-	  --make test/PluginTest.hs plugins/tls.c $(TLSLIBS) $(FLAGS) -v0
+	  --make test/PluginTest.hs plugins/tls.c plugins/minivault.c $(TLSLIBS) $(FLAGS) -v0
 	./build/sekreto-plugins
 
 # The suite compiles against the same sources `build` just compiled, and
@@ -105,7 +117,7 @@ test-spec: build
 	@test -n "$(OMNI)" || { echo "sekreto: voxgig/omni not found - set OMNI_HOME" >&2; exit 1; }
 	$(MAKE) -C $(OMNI)/haskell build
 	$(GHC) $(PLUGINPATH) -itest -i$(OMNI)/haskell/src -outputdir build/test \
-	  -o build/sekreto-test --make test/SekretoTest.hs plugins/tls.c $(TLSLIBS) \
+	  -o build/sekreto-test --make test/SekretoTest.hs plugins/tls.c plugins/minivault.c $(TLSLIBS) \
 	  $(FLAGS) -Wno-duplicate-exports -v0
 	./build/sekreto-test
 

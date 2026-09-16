@@ -1,6 +1,6 @@
 -- | THE FULL SET - every plugin this port ships, in one import.
 --
--- It exists for the callers that genuinely want all ten kinds: the CLI,
+-- It exists for the callers that genuinely want all eleven kinds: the CLI,
 -- the conformance suite, an app whose chain is decided at run time.
 --
 -- > secrets <- sekreto emptyoptions {optplugins = allplugins, optproviders = chain}
@@ -24,6 +24,7 @@ module AllPlugins
     gcpsecrets,
     hashicorp,
     infisical,
+    minivault,
     onepassword,
     secretspec,
   )
@@ -37,6 +38,7 @@ import Doppler (doppler)
 import Gcpsecrets (gcpsecrets)
 import Hashicorp (hashicorp)
 import Infisical (infisical)
+import Minivault (minivault)
 import Onepassword (onepassword)
 import Secretspec (secretspec)
 
@@ -53,5 +55,6 @@ allplugins =
     onepassword,
     doppler,
     infisical,
-    secretspec
+    secretspec,
+    minivault
   ]
