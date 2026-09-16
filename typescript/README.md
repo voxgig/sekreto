@@ -55,6 +55,40 @@ A custom store is `providerplugin(kind, make)`; see [DOCS.md](../DOCS.md#plugins
 
 The one dependency is `@voxgig/plugin`, which itself has none.
 
+## The mini vault
+
+`plugins/minivault.ts` is a store this port owns outright rather than a
+client for somebody else's server: every secret, encrypted, in one binary
+file. It has a master key and restricted keys, and it is the port's
+worked example of a definition publishing an API beside its provider.
+
+```ts
+import { Sekreto } from '@voxgig/sekreto'
+import { createvault, minivault, vaultof } from '@voxgig/sekreto/plugins/minivault'
+
+const vault = createvault({ file: 'app.skmv', passphrase: MASTER })
+vault.set('api.token', 'tok01')
+vault.grant({ key: 'ci', passphrase: CI, names: ['api.token'] })
+
+const secrets = new Sekreto({
+  plugins: [minivault],
+  providers: [{ kind: 'minivault', file: 'app.skmv', vaultkey: 'ci', passphrase: CI }],
+})
+
+await secrets.get('api.token')     // the chain reads
+vaultof(secrets).list()            // ['api.token'] — as the `ci` key sees it
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `secrets.host`. What each key may do, what the file holds and what
+the whole thing does and does not protect are in
+[DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
+
+Ports carrying this kind read each other's files, which
+`test/minivault.test.ts` checks against a committed vault written by this
+port.
+
 ## Layout
 
 | | |
@@ -66,9 +100,11 @@ The one dependency is `@voxgig/plugin`, which itself has none.
 | `src/provider/addr.ts` | `checkaddr`, the plaintext-address guard — pure, and on the spec |
 | `plugins/<name>.ts` | one plugin each; `plugins/aws.ts` carries `sigv4.ts` beside it |
 | `plugins/httpjson.ts` | the bounded, redirect-refusing HTTP round-trip every wire plugin shares |
+| `plugins/minivault.ts` | the mini vault: the format, the keys, the API, the definition |
 | `plugins/index.ts` | the full set |
 | `test/sekreto.test.ts` | the conformance suite, on `@voxgig/omni` from npm |
 | `test/plugins.test.ts`, `test/lazyload.test.ts` | the plugin seam, from both sides |
+| `test/minivault.test.ts` | the mini vault, and the committed file every port reads |
 | `cli/sekreto-cli.ts` | the app that needs a secret |
 
 ## Testing

@@ -27,15 +27,16 @@ import { onepassword } from './onepassword'
 import { doppler } from './doppler'
 import { infisical } from './infisical'
 import { secretspec } from './secretspec'
+import { minivault } from './minivault'
 
 export {
   hashicorp, boru, awssecrets, awsparams, gcpsecrets, azuresecrets,
-  onepassword, doppler, infisical, secretspec,
+  onepassword, doppler, infisical, secretspec, minivault,
 }
 
 export const allplugins: Definition[] = [
   hashicorp, boru, awssecrets, awsparams, gcpsecrets, azuresecrets,
-  onepassword, doppler, infisical, secretspec,
+  onepassword, doppler, infisical, secretspec, minivault,
 ]
 
 export { hashicorpprovider } from './hashicorp'
@@ -48,4 +49,9 @@ export { onepasswordprovider } from './onepassword'
 export { dopplerprovider } from './doppler'
 export { infisicalprovider } from './infisical'
 export { secretspecprovider } from './secretspec'
+export {
+  ITERATIONS, MASTERKEY, VAULT_EXPORT, createvault, minivaultprovider, openvault,
+  providerof, vaultof,
+} from './minivault'
+export type { GrantSpec, MiniVault, VaultKeyInfo, VaultOptions } from './minivault'
 export { fetchjson } from './httpjson'

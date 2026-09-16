@@ -36,11 +36,13 @@ secretspec(?:'s)?
 struct's
 CLIs
 CLI's
+cipher(?:s|text)?
 cleartext
 hostname
 kubernetes
 [Ll]oopback
 namespaces?
+passphrases?
 plaintext
 systemd
 untrusted
@@ -89,6 +91,7 @@ toolchain
 undecodable
 unescape
 unlinks
+unwrap(?:s|ped)?
 [Uu]ppercas(?:es|ing)
 vendored
 vtable

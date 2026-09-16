@@ -116,6 +116,7 @@ describe('lazy node builtins', () => {
       'awsparamsprovider', 'gcpsecretsprovider', 'azuresecretsprovider',
       'onepasswordprovider', 'dopplerprovider', 'infisicalprovider',
       'secretspecprovider', 'sigv4', 'fetchjson', 'allplugins',
+      'minivaultprovider', 'openvault', 'createvault', 'vaultof',
     ]
 
     const leaked = plugins.filter((name) => undefined !== core[name])

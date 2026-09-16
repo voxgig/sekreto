@@ -158,6 +158,16 @@ export type ProviderSpec = {
   /** infisical: the environment slug and secret path. */
   environment?: string
   path?: string
+  /** minivault: the passphrase that unwraps `vaultkey`. */
+  passphrase?: string
+  /** minivault: which key in the vault file to open with, defaulting to
+   * `master`. Named apart from `key` and `keyid` because those already
+   * mean a secret name and an AWS access key id. */
+  vaultkey?: string
+  /** minivault: PBKDF2 rounds, used only when a key is created. */
+  iterations?: number
+  /** minivault: make the vault file if it is not there. */
+  create?: boolean
 }
 
 // --- providers as voxgig/plugin definitions --------------------------

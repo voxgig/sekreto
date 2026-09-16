@@ -1,0 +1,432 @@
+// The mini vault's file format, and the key hierarchy over it.
+//
+// A port of typescript/plugins/minivault.ts, which is canonical. The
+// bytes are the contract: a vault written by any port is read by every
+// other, and testdata/fixture.skmv pins that rather than leaving it to
+// agreement.
+//
+//	magic       4   'SKMV'
+//	version     1   Format
+//	kdf         1   1 = PBKDF2-HMAC-SHA256
+//	cipher      1   1 = AES-256-GCM
+//	reserved    1   0
+//	keycount    4   uint32
+//	per key:
+//	  id        1 + bytes      the key id, PLAINTEXT
+//	  salt      1 + bytes
+//	  iters     4              PBKDF2 rounds for this key
+//	  ring      1 + iv, 4 + bytes    sealed under the passphrase
+//	  meta      1 + iv, 4 + bytes    sealed under the vault's meta key
+//	entrycount  4   uint32
+//	per entry:
+//	  id        1 + bytes      the blinded lookup id
+//	  name      1 + iv, 4 + bytes    sealed under the vault's name key
+//	  value     1 + iv, 4 + bytes    sealed under that secret's own key
+//
+// Integers are big-endian and every length precedes its bytes, so the
+// file is written with the same two primitives it is read with.
+//
+// NOTHING OUTSIDE A KEY RECORD IS PLAINTEXT. Secret names are sealed,
+// and an entry is addressed by a blinded id derived from its own key, so
+// a restricted key finds what it was granted without the file ever
+// naming the rest. What the file does show anyone is the key ids and how
+// many secrets there are.
+package minivault
+
+import (
+	"bytes"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/binary"
+	"encoding/json"
+	"sort"
+	"strconv"
+
+	"github.com/voxgig/sekreto/go/sekreto"
+)
+
+const (
+	magic  = "SKMV"
+	format = 1
+
+	kdfPBKDF2    = 1
+	cipherAESGCM = 1
+)
+
+// AES-256-GCM: 32-byte keys, 12-byte nonces, 16-byte tags.
+const (
+	keyLen  = 32
+	ivLen   = 12
+	tagLen  = 16
+	saltLen = 16
+)
+
+// Iterations is the PBKDF2-HMAC-SHA256 round count when a caller names
+// none.
+const Iterations = 210000
+
+// MasterKey is the key id a vault gets when a caller names none.
+const MasterKey = "master"
+
+// Additional authenticated data. Every blob is bound to its PLACE in the
+// file, so no ciphertext can be moved: a restricted key's ring cannot be
+// relabelled as the master's, and one secret's value cannot be served
+// under a name it was never written for.
+const (
+	aadRing   = "skmv1:ring:"
+	aadMeta   = "skmv1:meta:"
+	aadName   = "skmv1:name"
+	aadSecret = "skmv1:secret:"
+)
+
+// Everything a master reaches is derived from the root key, so rotating
+// is one new random value rather than a re-wrap of each part.
+const (
+	labelNames = "skmv1:names"
+	labelMeta  = "skmv1:meta"
+	labelID    = "skmv1:id"
+)
+
+func fail(text string) error {
+	return sekreto.Fail("sekreto: minivault: " + text)
+}
+
+// --- keys ------------------------------------------------------------
+
+func mac(key []byte, text string) []byte {
+	h := hmac.New(sha256.New, key)
+	h.Write([]byte(text))
+	return h.Sum(nil)
+}
+
+// pbkdf2sha256 is PBKDF2 with HMAC-SHA256, in-tree.
+//
+// crypto/pbkdf2 arrived in Go 1.24 and this module targets 1.21, and the
+// no-dependency rule says a missing standard-library piece is written
+// small rather than taken from a package. RFC 8018 section 5.2, with the
+// one-block-at-a-time loop the specification states.
+func pbkdf2sha256(passphrase string, salt []byte, iters int, length int) []byte {
+	out := []byte{}
+	block := make([]byte, 4)
+
+	for counter := 1; len(out) < length; counter++ {
+		binary.BigEndian.PutUint32(block, uint32(counter))
+
+		h := hmac.New(sha256.New, []byte(passphrase))
+		h.Write(salt)
+		h.Write(block)
+		u := h.Sum(nil)
+
+		t := make([]byte, len(u))
+		copy(t, u)
+
+		for round := 1; round < iters; round++ {
+			h := hmac.New(sha256.New, []byte(passphrase))
+			h.Write(u)
+			u = h.Sum(nil)
+			for index := range t {
+				t[index] ^= u[index]
+			}
+		}
+
+		out = append(out, t...)
+	}
+
+	return out[:length]
+}
+
+// kek is the key-encryption key a passphrase unwraps a ring with.
+func kek(passphrase string, salt []byte, iters int) []byte {
+	return pbkdf2sha256(passphrase, salt, iters, keyLen)
+}
+
+// secretkey is the key one named secret's value is encrypted with.
+//
+// DERIVED, never stored, for a master: it holds the root key and so
+// reaches every name, including ones written after it was made. A
+// restricted key holds the derived keys it was granted and nothing that
+// produces another, so every other name is ciphertext to it in exactly
+// the way it is to a stranger.
+func secretkey(root []byte, name string) []byte {
+	return mac(root, aadSecret+name)
+}
+
+// entryid is where a secret lives in the file, derived from its own key
+// so that finding it needs no plaintext name. One-way: an id yields
+// nothing about the key that produced it.
+func entryid(key []byte) []byte {
+	return mac(key, labelID)
+}
+
+func random(length int) ([]byte, error) {
+	out := make([]byte, length)
+	if _, err := rand.Read(out); nil != err {
+		return nil, fail("no randomness available: " + err.Error())
+	}
+	return out, nil
+}
+
+// --- sealing ---------------------------------------------------------
+
+type sealed struct {
+	IV   []byte
+	Blob []byte
+}
+
+func gcmof(key []byte) (cipher.AEAD, error) {
+	block, err := aes.NewCipher(key)
+	if nil != err {
+		return nil, fail("bad key: " + err.Error())
+	}
+	return cipher.NewGCM(block)
+}
+
+func seal(key []byte, plain []byte, aad string) (*sealed, error) {
+	iv, err := random(ivLen)
+	if nil != err {
+		return nil, err
+	}
+
+	gcm, err := gcmof(key)
+	if nil != err {
+		return nil, err
+	}
+
+	return &sealed{IV: iv, Blob: gcm.Seal(nil, iv, plain, []byte(aad))}, nil
+}
+
+// unseal returns the plaintext, or a refusal. A GCM tag that fails to
+// verify is the only evidence there is, and it cannot tell a wrong
+// passphrase from a damaged file, so `what` names the attempt and the
+// message admits both.
+func unseal(key []byte, box *sealed, aad string, what string) ([]byte, error) {
+	if len(box.Blob) < tagLen || ivLen != len(box.IV) {
+		return nil, fail(what + ": truncated")
+	}
+
+	gcm, err := gcmof(key)
+	if nil != err {
+		return nil, err
+	}
+
+	plain, err := gcm.Open(nil, box.IV, box.Blob, []byte(aad))
+	if nil != err {
+		return nil, fail(what)
+	}
+
+	return plain, nil
+}
+
+func jsonof(plain []byte, into any, what string) error {
+	if err := json.Unmarshal(plain, into); nil != err {
+		return fail("unreadable " + what)
+	}
+	return nil
+}
+
+// --- the file --------------------------------------------------------
+
+type keyRecord struct {
+	ID    string
+	Salt  []byte
+	Iters int
+	Ring  *sealed
+	Meta  *sealed
+}
+
+type entryRecord struct {
+	ID    []byte
+	Name  *sealed
+	Value *sealed
+}
+
+type vaultFile struct {
+	Keys    []*keyRecord
+	Entries []*entryRecord
+}
+
+func (file *vaultFile) key(id string) *keyRecord {
+	for _, record := range file.Keys {
+		if id == record.ID {
+			return record
+		}
+	}
+	return nil
+}
+
+func (file *vaultFile) entry(id []byte) *entryRecord {
+	for _, record := range file.Entries {
+		if bytes.Equal(id, record.ID) {
+			return record
+		}
+	}
+	return nil
+}
+
+// reader is a cursor, so that every length check is in one place: a
+// truncated vault is refused rather than read as a short one.
+type reader struct {
+	bytes []byte
+	at    int
+	err   error
+}
+
+func (read *reader) take(length int) []byte {
+	if nil != read.err {
+		return nil
+	}
+	if len(read.bytes) < read.at+length {
+		read.err = fail("the vault file is truncated")
+		return nil
+	}
+	out := read.bytes[read.at : read.at+length]
+	read.at += length
+	return out
+}
+
+func (read *reader) u8() int {
+	out := read.take(1)
+	if nil == out {
+		return 0
+	}
+	return int(out[0])
+}
+
+func (read *reader) u32() int {
+	out := read.take(4)
+	if nil == out {
+		return 0
+	}
+	return int(binary.BigEndian.Uint32(out))
+}
+
+func (read *reader) small() []byte { return read.take(read.u8()) }
+func (read *reader) large() []byte { return read.take(read.u32()) }
+
+func (read *reader) sealed() *sealed {
+	return &sealed{IV: read.small(), Blob: read.large()}
+}
+
+func readfile(raw []byte) (*vaultFile, error) {
+	read := &reader{bytes: raw}
+
+	if magic != string(read.take(4)) {
+		if nil != read.err {
+			return nil, read.err
+		}
+		return nil, fail("not a vault file")
+	}
+
+	version := read.u8()
+	if nil != read.err {
+		return nil, read.err
+	}
+	if format != version {
+		return nil, fail("unsupported format version: " + strconv.Itoa(version))
+	}
+
+	kdf := read.u8()
+	ciph := read.u8()
+	if nil != read.err {
+		return nil, read.err
+	}
+	if kdfPBKDF2 != kdf || cipherAESGCM != ciph {
+		return nil, fail("unsupported kdf or cipher: " + strconv.Itoa(kdf) + "/" + strconv.Itoa(ciph))
+	}
+	read.u8()
+
+	file := &vaultFile{Keys: []*keyRecord{}, Entries: []*entryRecord{}}
+
+	keycount := read.u32()
+	for index := 0; index < keycount && nil == read.err; index++ {
+		file.Keys = append(file.Keys, &keyRecord{
+			ID:    string(read.small()),
+			Salt:  read.small(),
+			Iters: read.u32(),
+			Ring:  read.sealed(),
+			Meta:  read.sealed(),
+		})
+	}
+
+	entrycount := read.u32()
+	for index := 0; index < entrycount && nil == read.err; index++ {
+		file.Entries = append(file.Entries, &entryRecord{
+			ID:    read.small(),
+			Name:  read.sealed(),
+			Value: read.sealed(),
+		})
+	}
+
+	if nil != read.err {
+		return nil, read.err
+	}
+	if read.at != len(raw) {
+		return nil, fail("the vault file has trailing bytes")
+	}
+
+	return file, nil
+}
+
+type writer struct {
+	out []byte
+}
+
+func (write *writer) u8(value int) { write.out = append(write.out, byte(value)) }
+
+func (write *writer) u32(value int) {
+	four := make([]byte, 4)
+	binary.BigEndian.PutUint32(four, uint32(value))
+	write.out = append(write.out, four...)
+}
+
+func (write *writer) small(value []byte) {
+	write.u8(len(value))
+	write.out = append(write.out, value...)
+}
+
+func (write *writer) large(value []byte) {
+	write.u32(len(value))
+	write.out = append(write.out, value...)
+}
+
+func (write *writer) sealed(value *sealed) {
+	write.small(value.IV)
+	write.large(value.Blob)
+}
+
+func writefile(file *vaultFile) []byte {
+	write := &writer{out: []byte(magic)}
+
+	write.u8(format)
+	write.u8(kdfPBKDF2)
+	write.u8(cipherAESGCM)
+	write.u8(0)
+
+	write.u32(len(file.Keys))
+	for _, record := range file.Keys {
+		write.small([]byte(record.ID))
+		write.small(record.Salt)
+		write.u32(record.Iters)
+		write.sealed(record.Ring)
+		write.sealed(record.Meta)
+	}
+
+	// SORTED BY ID, which is a blinded value: the file therefore records
+	// nothing about the order secrets were written in.
+	entries := append([]*entryRecord{}, file.Entries...)
+	sort.Slice(entries, func(left, right int) bool {
+		return 0 > bytes.Compare(entries[left].ID, entries[right].ID)
+	})
+
+	write.u32(len(entries))
+	for _, record := range entries {
+		write.small(record.ID)
+		write.sealed(record.Name)
+		write.sealed(record.Value)
+	}
+
+	return write.out
+}

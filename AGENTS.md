@@ -74,12 +74,30 @@ so those twenty-three stay one.
    `plugins/` folder, loaded statically by the calling project.** What
    makes a kind built in is that it reads at most a local file: `env`,
    `memory`, `dotenv`, `file`. Every kind that opens a socket, signs a
-   request or spawns a process — the vault clients, the cloud stores,
-   the two CLIs, and `sigv4` with them — is a voxgig/plugin definition
-   under `plugins/`, and a `Sekreto` can build only the kinds its
-   constructor was handed. The same four built-ins and the same ten
-   plugin kinds in every port; only the loading mechanism follows the
-   language.
+   request, spawns a process or needs crypto — the vault clients, the
+   cloud stores, the two CLIs, `sigv4`, and `minivault` — is a
+   voxgig/plugin definition under `plugins/`, and a `Sekreto` can build
+   only the kinds its constructor was handed. The same four built-ins
+   and the same ten store clients in every port; only the loading
+   mechanism follows the language.
+
+   **`minivault` is the eleventh kind and the one exception to that,
+   deliberately.** It ships in typescript and go; the other twenty-one
+   follow. It is the first kind sekreto owns rather than a client for
+   somebody else's server, so it is also the first that is WRITTEN to:
+   its definition publishes two exports, `provider` for the chain and
+   `vault` for the programmatic API, which is why it writes its `define`
+   out instead of calling `providerplugin`. Writing `define` by hand
+   means reproducing the `sekreto_error` bridge, and nothing else.
+
+   A `minivault` case cannot go in `spec/sekreto.json` until the last
+   port has the kind — the spec runs against all twenty-three. Until
+   then `test/fixture/minivault.skmv`, a vault written by the canonical
+   port, is what pins the on-disk format: a port that reads it key by
+   key, and writes a vault the others read, has the format right. Every
+   port can write and read its own vault perfectly while disagreeing
+   with every other about where a length prefix goes, and only the
+   fixture sees that.
 
    The rules that keep it true:
 
@@ -191,9 +209,12 @@ that disagree about what passing means are worse than one.
 A port is complete when it has all four:
 
 - the library — the equivalent of `Sekreto`, the four built-in kinds in
-  its core, and the ten plugin kinds in its `plugins/` folder where
-  voxgig/plugin has its language (the `kind` switch over all fourteen
-  where it does not yet)
+  its core, and the ten store-client plugin kinds in its `plugins/`
+  folder where voxgig/plugin has its language (the `kind` switch over
+  all fourteen where it does not yet). `minivault` is the eleventh
+  plugin kind and is not required yet; take it when the language has
+  AES-256-GCM and PBKDF2-HMAC-SHA256 within rule 3, and prove it against
+  `test/fixture/minivault.skmv`
 - a conformance suite running `spec/sekreto.json` through that language's
   voxgig/omni runner, covering all fourteen groups
 - a CLI at the path `test/integration.sh` expects, printing exactly
@@ -311,6 +332,15 @@ omni, never edit them here) and prove the shape can go red.
   `boru vault add` against the actual binary, found via `$BORU` or `PATH`
   — read through the CLI, and also over `boru vault serve` (its provision
   wire protocol) with a capability token from `vault grant`.
+- a **mini vault**, written by `test/minivaultinit.js` through the
+  canonical port. There is no server and no mock here, because the store
+  IS the file: what the run proves is that a vault one port wrote is one
+  another port reads, through the CLI. The three checks are the master
+  key, a restricted key granted `api.token`, and a wrong passphrase that
+  must RAISE — a vault that misses on a bad passphrase sends the chain to
+  a weaker store. Ports without the kind are skipped by name;
+  `MINIVAULT_LANGS` in `test/checks.sh` is that list, and it goes away
+  when the last port takes the kind.
 
 Neither suite will start a server on a port something else already holds.
 `waitport` alone cannot tell a mock that bound from a squatter that was
