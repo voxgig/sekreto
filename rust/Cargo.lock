@@ -197,6 +197,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "voxgig_sekreto_minivault"
+version = "0.1.0"
+dependencies = [
+ "ring",
+ "voxgig_plugin",
+ "voxgig_sekreto",
+]
+
+[[package]]
 name = "voxgig_sekreto_onepassword"
 version = "0.1.0"
 dependencies = [
@@ -219,6 +228,7 @@ dependencies = [
  "voxgig_sekreto_hashicorp",
  "voxgig_sekreto_httpjson",
  "voxgig_sekreto_infisical",
+ "voxgig_sekreto_minivault",
  "voxgig_sekreto_onepassword",
  "voxgig_sekreto_secretspec",
 ]

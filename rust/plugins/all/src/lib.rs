@@ -8,7 +8,7 @@
 //! })?;
 //! ```
 //!
-//! DEPENDING ON THIS CRATE LINKS ALL TEN, AWS request signing and seven
+//! DEPENDING ON THIS CRATE LINKS ALL ELEVEN, AWS request signing and seven
 //! HTTP vault clients included, which is exactly the cost the core/plugin
 //! split exists to remove. A lean consumer names the kinds it configures,
 //! one crate each:
@@ -27,6 +27,7 @@ pub use voxgig_sekreto_gcpsecrets as gcpsecrets;
 pub use voxgig_sekreto_hashicorp as hashicorp;
 pub use voxgig_sekreto_httpjson as httpjson;
 pub use voxgig_sekreto_infisical as infisical;
+pub use voxgig_sekreto_minivault as minivault;
 pub use voxgig_sekreto_onepassword as onepassword;
 pub use voxgig_sekreto_secretspec as secretspec;
 
@@ -43,5 +44,6 @@ pub fn all() -> Vec<Definition> {
         doppler::plugin(),
         infisical::plugin(),
         secretspec::plugin(),
+        minivault::minivault(),
     ]
 }

@@ -1,4 +1,4 @@
-.PHONY: build build-clean test deps check-core clean inspect
+.PHONY: build build-clean test vaulttest deps check-core clean inspect
 
 # voxgig/plugin is a RUNTIME dependency of this port - the core is built on
 # it (AGENTS.md rule 3, rule 4). It has no crates.io release, so Cargo takes
@@ -63,6 +63,16 @@ build-clean: deps
 test: deps check-core
 	cargo test --workspace
 	cd corpus && CARGO_NET_GIT_FETCH_WITH_CLI=true cargo test
+
+# THE MINI VAULT, WHICH THE SHARED CORPUS CANNOT CARRY.
+#
+# spec/sekreto.json runs against all twenty-three ports, so an entry naming
+# `minivault` would fail the ones that ship no such kind. The checks that
+# would have been corpus entries are in plugins/minivault/tests instead,
+# and `make test` above runs them with everything else; this target is for
+# running them alone.
+vaulttest: deps
+	cargo test -p voxgig_sekreto_minivault $(CASE)
 
 # THE SPLIT, AS A COMMAND. `cargo tree` on the core is the whole claim in
 # one line: its dependency closure is voxgig/plugin and nothing else, so a

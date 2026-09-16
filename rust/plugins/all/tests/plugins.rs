@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 use voxgig_sekreto::{Options, ProviderSpec, Sekreto, BUILTIN_KINDS, PLUGIN_KINDS};
 use voxgig_sekreto_plugins::{all, hashicorp};
 
-const KINDS: [&str; 10] = [
+const KINDS: [&str; 11] = [
     "awsparams",
     "awssecrets",
     "azuresecrets",
@@ -32,6 +32,7 @@ const KINDS: [&str; 10] = [
     "gcpsecrets",
     "hashicorp",
     "infisical",
+    "minivault",
     "onepassword",
     "secretspec",
 ];
@@ -74,6 +75,7 @@ fn every_kind_builds_from_a_spec() {
             token: "t".to_string(),
             dir: "/tmp".to_string(),
             file: "/tmp/.env".to_string(),
+            passphrase: "p".to_string(),
             ..ProviderSpec::of(kind)
         })
         .collect();
@@ -268,13 +270,14 @@ fn the_full_set_is_built_on_demand() {
     let first = all();
     let second = all();
 
-    assert_eq!(10, first.len());
-    assert_eq!(10, second.len());
+    assert_eq!(11, first.len());
+    assert_eq!(11, second.len());
 
     // Each plugin crate is its own directory with its own manifest, which
     // is what makes "depend on one" a thing a consumer can actually do.
     for kind in ["hashicorp", "boru", "aws", "gcpsecrets", "azuresecrets",
-                 "onepassword", "doppler", "infisical", "secretspec", "httpjson"] {
+                 "onepassword", "doppler", "infisical", "secretspec", "minivault",
+                 "httpjson"] {
         let manifest = here().join("..").join(kind).join("Cargo.toml");
         assert!(
             Path::new(&manifest).exists(),

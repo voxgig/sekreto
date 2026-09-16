@@ -81,6 +81,84 @@ The conformance suite is its own package, `corpus/`, which takes omni as a
 git dependency pinned to omni's `rust/vX.Y.Z` release tag; Cargo fetches
 it, and no shipped manifest here ever names it.
 
+## The mini vault
+
+`plugins/minivault/` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the port's
+worked example of a definition publishing an API beside its provider.
+
+```rust
+use voxgig_sekreto::{Options, ProviderSpec, Sekreto};
+use voxgig_sekreto_minivault::{createvault, minivault, vaultof, GrantSpec, VaultOptions};
+
+let vault = createvault(&VaultOptions {
+    file: "app.skmv".to_string(),
+    passphrase: master.clone(),
+    ..Default::default()
+})?;
+
+vault.set("api.token", "tok01")?;
+vault.grant(&GrantSpec {
+    key: "ci".to_string(),
+    passphrase: ci.clone(),
+    names: vec!["api.token".to_string()],
+    ..Default::default()
+})?;
+
+let secrets = Sekreto::new(Options {
+    plugins: vec![minivault()],
+    providers: vec![ProviderSpec {
+        file: "app.skmv".to_string(),
+        vaultkey: "ci".to_string(),
+        passphrase: ci,
+        ..ProviderSpec::of("minivault")
+    }],
+    ..Default::default()
+})?;
+
+secrets.get("api.token")?;              // the chain reads
+vaultof(&secrets, "")?.list()?;         // the API writes
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off the chain's host. **Both cross as `Value::Opaque`** — voxgig/plugin's
+escape hatch for a client the library never inspects, which is what
+`providerplugin` already does for the provider. Most ports park the handle
+in a slot table and export an index, because their value model carries
+only numbers and strings; rust puts the handle itself in.
+
+`VaultKeyInfo` is a plain value, so the defect the review round found in
+the canonical — a caller flipping its own `write` bit on the record it was
+handed — changes a copy and nothing the vault reads.
+
+**Where the crypto comes from, and why it is not a new dependency.**
+`ring` has been in `Cargo.lock` since TLS arrived: `plugins/httpjson`
+takes rustls with its `ring` feature, and ring is rustls's crypto
+provider. Naming it in this crate adds an edge to something already in the
+closure rather than a crate to it — and a consumer that takes this kind
+and no HTTPS one pays for ring alone, not for rustls, which is what the
+split is for. It carries all four primitives the format is built from:
+AES-256-GCM, PBKDF2-HMAC-SHA256, HMAC-SHA256 and the entropy under them.
+
+The in-tree SHA-256 and HMAC in `plugins/aws/src/crypto.rs` stay where
+they are, which reads as a contradiction and is not one: the dependency
+rule used to confine the exception to cryptographic *transport*, and now
+covers cryptography, because a block cipher protecting secrets **at rest**
+has properties no known-answer vector can check. Those two work, a SigV4
+signature is a chain of them so one wrong bit fails the published vectors
+loudly, and rewriting them buys nothing.
+
+Ports carrying this kind read each other's files, which
+`plugins/minivault/tests/minivault.rs` checks against every committed
+vault in `test/fixture/`, including the one this port wrote:
+
+```sh
+make vaulttest                                    # all of it
+make vaulttest CASE=two_handles                   # one case
+```
+
 ## Layout
 
 | | |
@@ -90,6 +168,7 @@ it, and no shipped manifest here ever names it.
 | `src/addr.rs` | `checkaddr` — pure, so it stays in the core |
 | `plugins/httpjson/` | the HTTP/1.1 client and the JSON reader — and the TLS |
 | `plugins/<kind>/` | one crate per plugin kind; `aws` carries `sigv4` |
+| `plugins/minivault/` | the mini vault: `format.rs` is the SKMV bytes, `lib.rs` the key model |
 | `plugins/all/` | the full set, and the CLI that needs it |
 | `tests/plugin.rs` | the plugin seam, from the core's side |
 | `plugins/all/tests/plugins.rs` | the plugin seam, from the plugins' side |
