@@ -1,6 +1,6 @@
 (* THE FULL SET - every plugin this library ships, in one module.
 
-   It exists for the callers that genuinely want all ten kinds: the CLI,
+   It exists for the callers that genuinely want all eleven kinds: the CLI,
    the conformance suite, an app whose chain is decided at run time.
 
      let secrets = Sekreto.sekreto ~plugins:(Allplugins.all ()) chain
@@ -30,4 +30,5 @@ let all () : Defs.definition list =
     Doppler.plugin ();
     Infisical.plugin ();
     Secretspec.plugin ();
+    Minivault.plugin ();
   ]

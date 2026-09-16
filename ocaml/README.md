@@ -148,6 +148,70 @@ every shipped plugin is made of.
 known until the command line is read. An app that ships one chain names
 the kinds that chain configures and links those.
 
+## The mini vault
+
+`plugins/minivault.ml` is a store this port owns outright rather than a
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the
+port's worked example of a definition publishing an API beside its
+provider.
+
+```ocaml
+let vault =
+  Minivault.createvault
+    { Minivault.nooptions with ofile = "app.skmv"; opassphrase = master }
+in
+Minivault.set vault "api.token" "tok01";
+Minivault.grant vault
+  { Minivault.nogrant with gkey = "ci"; gpassphrase = ci; gnames = [ "api.token" ] };
+
+let secrets =
+  Sekreto.sekreto
+    ~plugins:[ Minivault.plugin () ]
+    [ { Provider.nospec with kind = "minivault"; file = "app.skmv";
+        vaultkey = "ci"; passphrase = ci } ]
+in
+
+Sekreto.get secrets "api.token";                              (* the chain reads *)
+Minivault.list (Minivault.vaultof (Sekreto.host secrets))     (* ["api.token"] *)
+```
+
+A chain reads; writing is a deliberate act with an API of its own, so the
+definition exports `vault` beside `provider` and `vaultof` reads it back
+off `Sekreto.host`. Both exports are numbers, because voxgig/plugin's
+values are numbers and strings and neither a provider nor a vault is
+data, and both are dropped by the definition's `close` — so a chain that
+was torn down and a chain whose construction was refused hand their
+vaults back alike, which `test/minivault_test.ml` reads off the table.
+
+`keyinfo` is an immutable record over an immutable list, so the defect
+the review round found in the canonical — a caller flipping its own
+`write` bit on the record it was handed — does not compile. `with` makes
+a new value and changes nothing the vault reads.
+
+**Where the crypto comes from, and why there is a second C file.** OCaml's
+distribution has no cryptographic digest but MD5 and no cipher at all, and
+the no-new-package rule stands, so the four primitives come from the
+OpenSSL this port already links: `plugins/minivault_stubs.c` is
+AES-256-GCM, PBKDF2-HMAC-SHA256, HMAC-SHA256 and the entropy under them,
+and nothing else. AGENTS.md used to confine the dependency exception to
+cryptographic *transport*, which is why `plugins/crypto.ml` writes
+SHA-256 and HMAC-SHA256 out by hand beside a linked libcrypto that has
+both; the rule now covers cryptography, because a block cipher protecting
+secrets **at rest** has properties no known-answer vector can check.
+Those two stay where they are: they work, a SigV4 signature is a chain of
+them so one wrong bit fails the published vectors loudly, and rewriting
+them buys nothing.
+
+Ports carrying this kind read each other's files, which
+`test/minivault_test.ml` checks against every committed vault in
+`test/fixture/`, including the one this port wrote:
+
+```sh
+make vaulttest                       # all of it
+./build/minivaulttest restricted     # one case
+```
+
 ## Layout
 
 | | |
@@ -161,13 +225,16 @@ the kinds that chain configures and links those.
 | `plugins/httpjson.ml` | one JSON round-trip, and the reads a response body needs |
 | `plugins/http.ml` | HTTP/1.1 framing over a socket, and strict base64 |
 | `plugins/tls.ml` | the OCaml side of the TLS binding |
-| `plugins/tls_stubs.c` | the OpenSSL binding itself, and the port's only third-party edge |
+| `plugins/tls_stubs.c` | the OpenSSL binding for TLS |
+| `plugins/minivault.ml` | the mini vault: the SKMV format and the key model |
+| `plugins/minivault_stubs.c` | its four primitives, and the port's second and last OpenSSL edge |
 | `plugins/sigv4.ml` | AWS request signing |
 | `plugins/crypto.ml` | SHA-256 and HMAC-SHA256 |
 | `plugins/runcmd.ml` | the subprocess runner |
 | `test/sekreto_test.ml` | the conformance suite |
 | `test/behaviour.ml` | what the corpus cannot reach |
 | `test/plugins.ml` | the plugin seam, from both sides |
+| `test/minivault_test.ml` | the mini vault, and the committed files every port reads |
 | `test/coreonly.ml` | a chain of built-ins as a whole program, for the link proof |
 | `test/tlsproof.sh` | the TLS binding, against a real handshake |
 | `cli/cli.ml` | the app that needs a secret |

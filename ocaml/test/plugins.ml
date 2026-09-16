@@ -97,7 +97,7 @@ let () =
   (* ...and the core's list of what ships as a plugin says the same. It is
      what tells a typo from a plugin nobody passed in, so a kind added on
      one side and not the other would give the wrong advice. *)
-  same "ten plugin kinds" 10 (List.length Provider.pluginkinds);
+  same "eleven plugin kinds" 11 (List.length Provider.pluginkinds);
   samelist "four built-in kinds"
     [ "dotenv"; "env"; "file"; "memory" ]
     (sorted Provider.builtinkinds);
@@ -105,7 +105,7 @@ let () =
   (* Built, not held: `all` is a function returning fresh definitions, so
      two chains never share one and nothing is constructed at load time. *)
   let again = Allplugins.all () in
-  same "the full set is built on demand" 10 (List.length again);
+  same "the full set is built on demand" 11 (List.length again);
   check "two calls share no definition"
     (List.for_all2 (fun l r -> l != r) full again)
 
@@ -118,8 +118,11 @@ let () =
     Sekreto.sekreto ~plugins:(Allplugins.all ())
       (List.map
          (fun kind ->
+           (* minivault refuses a chain entry with no passphrase, at
+              construction. Nothing here reaches a file: every provider is
+              lazy, and this case only builds the chain. *)
            { (spec kind) with addr = "http://127.0.0.1:8200"; token = "t"; dir = "/tmp";
-             file = "/tmp/.env" })
+             file = "/tmp/.env"; passphrase = "p" })
          every)
   in
 

@@ -198,14 +198,18 @@ let () =
 
 let () =
   let kinds = Provider.builtinkinds @ Provider.pluginkinds in
-  same "fourteen kinds" 14 (List.length kinds);
+  same "fifteen kinds" 15 (List.length kinds);
   List.iter
     (fun kind ->
       same ("kind builds: " ^ kind) ""
         (refusal (fun () ->
              ignore
                (Sekreto.sekreto ~plugins:(Allplugins.all ())
-                  [ { Provider.nospec with kind } ]))))
+                  (* minivault refuses a chain entry with no file and no
+                     passphrase, at construction. Nothing here reaches
+                     one: every provider is lazy, and this only builds
+                     the chain. *)
+                  [ { Provider.nospec with kind; file = "/tmp/.env"; passphrase = "p" } ]))))
     kinds;
   same "a kv typo is refused at construction" "sekreto: hashicorp: unsupported kv version: 3"
     (refusal (fun () ->

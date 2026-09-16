@@ -9,7 +9,7 @@
 
    Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
             gcpsecrets azuresecrets onepassword doppler infisical
-            secretspec chain
+            secretspec minivault chain
 
    Each source's configuration arrives in the environment variables its own
    ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed in
@@ -155,6 +155,18 @@ let chainfor (source : string) : Provider.spec list =
     }
   in
 
+  (* The mini vault, read-only here: the CLI is an app that needs a
+     secret, and writing one is a separate act with its own API. *)
+  let minivaultspec =
+    {
+      nospec with
+      kind = "minivault";
+      file = env "SEKRETO_VAULT_FILE";
+      vaultkey = env "SEKRETO_VAULT_KEY";
+      passphrase = env "SEKRETO_VAULT_PASSPHRASE";
+    }
+  in
+
   let infisicalspec =
     {
       nospec with
@@ -184,6 +196,7 @@ let chainfor (source : string) : Provider.spec list =
   | "doppler" -> [ dopplerspec ]
   | "infisical" -> [ infisicalspec ]
   | "secretspec" -> [ secretspecspec ]
+  | "minivault" -> [ minivaultspec ]
   (* The default: the chain an app would actually ship with - local
      overrides first, shared vaults last. *)
   | _ -> [ envspec; dotenvspec; hashicorpspec; boruspec ]

@@ -109,6 +109,11 @@ let specof (entry : Omni.json) : Provider.spec =
     config = field entry "config";
     environment = field entry "environment";
     secretpath = field entry "path";
+    passphrase = field entry "passphrase";
+    vaultkey = field entry "vaultkey";
+    iterations =
+      (match Omni.jget entry "iterations" with Omni.Num value -> int_of_float value | _ -> 0);
+    create = (match Omni.jget entry "create" with Omni.Bool value -> value | _ -> false);
   }
 
 (* Build a Sekreto from the spec's declarative chain description.

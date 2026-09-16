@@ -1,4 +1,4 @@
-.PHONY: build test deps tlscheck check-core coreproof clean inspect
+.PHONY: build test vaulttest deps tlscheck check-core coreproof clean inspect
 
 # voxgig/plugin is a RUNTIME dependency of this port - the core is built on
 # it (AGENTS.md rule 3, rule 4). It has no opam release, and this port takes
@@ -51,7 +51,8 @@ PLUGINS = plugins/crypto.ml plugins/sigv4.ml plugins/tls.ml plugins/http.ml \
           plugins/httpjson.ml plugins/runcmd.ml plugins/hashicorp.ml \
           plugins/boru.ml plugins/aws.ml plugins/gcpsecrets.ml \
           plugins/azuresecrets.ml plugins/onepassword.ml plugins/doppler.ml \
-          plugins/infisical.ml plugins/secretspec.ml plugins/allplugins.ml
+          plugins/infisical.ml plugins/secretspec.ml plugins/minivault.ml \
+          plugins/allplugins.ml
 
 # The one third-party edge in the whole port, and it is TRANSPORT ONLY:
 # libssl, and the libcrypto beneath it. The distribution's OpenSSL is the
@@ -105,7 +106,11 @@ build/tls_stubs.o: plugins/tls_stubs.c
 	mkdir -p build
 	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -I$(OCAMLLIB) -c plugins/tls_stubs.c -o $@
 
-$(PLUGINSLIB): $(LIB) $(PLUGINS) build/tls_stubs.o
+build/minivault_stubs.o: plugins/minivault_stubs.c
+	mkdir -p build
+	$(CC) -std=c11 -O2 -Wall -Wextra -Werror -I$(OCAMLLIB) -c plugins/minivault_stubs.c -o $@
+
+$(PLUGINSLIB): $(LIB) $(PLUGINS) build/tls_stubs.o build/minivault_stubs.o
 	mkdir -p $(PLUGINSTAGE)
 	cp $(PLUGINS) $(PLUGINSTAGE)/
 	$(OCAMLOPT) -a -I $(CORESTAGE) -I $(PLUGINSTAGE) -o $(PLUGINSLIB) \
@@ -121,7 +126,7 @@ STAGES = -I $(CORESTAGE) -I $(PLUGINSTAGE)
 build/sekreto-cli: $(PLUGINSLIB) cli/cli.ml
 	cp cli/cli.ml $(PLUGINSTAGE)/
 	$(OCAMLOPT) $(STAGES) -o $@ $(LINK) $(PLUGINSTAGE)/cli.ml \
-	  build/tls_stubs.o $(TLSLIBS)
+	  build/tls_stubs.o build/minivault_stubs.o $(TLSLIBS)
 
 # A CONSUMER WHOSE CHAIN IS BUILT-INS ONLY, BUILT AS ONE. It links the core
 # and voxgig/plugin and NOTHING ELSE: no plugin archive, no TLS stubs, no
@@ -137,22 +142,22 @@ build/sekretotest: $(PLUGINSLIB) test/sekreto_test.ml
 	$(MAKE) -C $(OMNI)/ocaml build
 	cp $(OMNI)/ocaml/src/omni.ml test/sekreto_test.ml $(PLUGINSTAGE)/
 	$(OCAMLOPT) $(STAGES) -o $@ unix.cmxa $(PLUGINSTAGE)/omni.ml $(PLUGINLIB) \
-	  $(LIB) $(PLUGINSLIB) $(PLUGINSTAGE)/sekreto_test.ml build/tls_stubs.o $(TLSLIBS)
+	  $(LIB) $(PLUGINSLIB) $(PLUGINSTAGE)/sekreto_test.ml build/tls_stubs.o build/minivault_stubs.o $(TLSLIBS)
 
 build/behaviour: $(PLUGINSLIB) test/behaviour.ml
 	cp test/behaviour.ml $(PLUGINSTAGE)/
 	$(OCAMLOPT) $(STAGES) -o $@ $(LINK) $(PLUGINSTAGE)/behaviour.ml \
-	  build/tls_stubs.o $(TLSLIBS)
+	  build/tls_stubs.o build/minivault_stubs.o $(TLSLIBS)
 
 build/plugintest: $(PLUGINSLIB) build/coreonly build/sekreto-cli test/plugins.ml
 	cp test/plugins.ml $(PLUGINSTAGE)/
 	$(OCAMLOPT) $(STAGES) -o $@ $(LINK) $(PLUGINSTAGE)/plugins.ml \
-	  build/tls_stubs.o $(TLSLIBS)
+	  build/tls_stubs.o build/minivault_stubs.o $(TLSLIBS)
 
 build/tlsprobe: $(PLUGINSLIB) test/tlsprobe.ml
 	cp test/tlsprobe.ml $(PLUGINSTAGE)/
 	$(OCAMLOPT) $(STAGES) -o $@ $(LINK) $(PLUGINSTAGE)/tlsprobe.ml \
-	  build/tls_stubs.o $(TLSLIBS)
+	  build/tls_stubs.o build/minivault_stubs.o $(TLSLIBS)
 
 # Four suites, because the corpus alone cannot see three of the things this
 # port has to get right.
@@ -169,11 +174,27 @@ build/tlsprobe: $(PLUGINSLIB) test/tlsprobe.ml
 #   tlsproof.sh  the TLS binding, against a real handshake. No case in the
 #                corpus opens a socket, so a port with no transport at all
 #                could pass the first two.
-test: check-core build build/sekretotest build/behaviour build/plugintest build/tlsprobe
+#   minivault_test.ml  the mini vault, which the corpus cannot carry until
+#                every port ships the kind, and the committed files
+#                every port reads.
+test: check-core build build/sekretotest build/behaviour build/plugintest build/minivaulttest build/tlsprobe
 	./build/sekretotest $(GROUP)
 	./build/behaviour
 	./build/plugintest
+	./build/minivaulttest
 	./test/tlsproof.sh
+
+# Its own binary, so it runs on a machine with no omni checkout.
+# NAMED minivault_test.ml, not minivault.ml: every suite is COPIED into
+# build/plugins/ before compiling, and a file named after the module it
+# tests would overwrite that module's source there.
+build/minivaulttest: $(PLUGINSLIB) test/minivault_test.ml
+	cp test/minivault_test.ml $(PLUGINSTAGE)/
+	$(OCAMLOPT) $(STAGES) -o $@ $(LINK) $(PLUGINSTAGE)/minivault_test.ml \
+	  build/tls_stubs.o build/minivault_stubs.o $(TLSLIBS)
+
+vaulttest: build/minivaulttest
+	./build/minivaulttest $(CASE)
 
 # WHAT NEITHER THE COMPILER NOR THE SYMBOL READ CAN SEE.
 #
