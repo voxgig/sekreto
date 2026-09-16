@@ -111,9 +111,17 @@ so those twenty-three stay one.
    mechanism follows the language.
 
    **`minivault` is the eleventh kind and the one exception to that,
-   deliberately.** Eighteen ports ship it; python, rust, perl, dart and
-   swift follow, and they are waiting on rule 3 — none of them has a
-   stdlib AEAD or one already linked. It is the first kind sekreto owns rather than a client for
+   deliberately.** Twenty-one ports ship it; dart and swift follow, and
+   both are waiting on rule 3 — neither has a stdlib AEAD, nor one
+   already linked, nor a manifest to declare a package in. **Dart**
+   resolves nothing at all: `pubspec.yaml` declares no dependencies and
+   `dart pub get` is never run, so the answer is `dart:ffi` to the
+   libcrypto under `dart:io`, not a first pub package. **Swift** has no
+   `Package.swift` — the port builds with `swiftc` — so the answer is a
+   C binding to the libcrypto Foundation already sits on, not swift-crypto
+   (CryptoKit is Apple-only). Neither is a port of somebody else's work,
+   which is why neither is started on the back of the ports that have
+   landed. It is the first kind sekreto owns rather than a client for
    somebody else's server, so it is also the first that is WRITTEN to:
    its definition publishes two exports, `provider` for the chain and
    `vault` for the programmatic API, which is why it writes its `define`

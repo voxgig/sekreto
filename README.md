@@ -90,7 +90,8 @@ loading is explicit rather than a side effect of importing: a `Sekreto`
 can build only the kinds its constructor was handed.
 
 `minivault` is the newest and is not yet everywhere: twenty-one ports
-ship it, and dart and swift follow. Every kind preceding it is in all
+ship it, and dart and swift follow once each has a way to reach
+AES-256-GCM that its build can declare. Every kind preceding it is in all
 twenty-three. Because the shared spec runs against every
 port, a `minivault` case cannot join it until the last port has the kind,
 so until then the ports that do carry it prove the format against each

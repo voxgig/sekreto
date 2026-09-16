@@ -361,8 +361,18 @@ of the three and needed a fourth: its core has SHA-256 and nothing else the
 format wants, so the kind takes `CryptX` — declared the way this port
 already declares `IO::Socket::SSL` for https, as a package the store needs
 rather than one the library depends on, failing closed with the package to
-install. The two still to come are the ones where no answer holds yet, so
-each needs its own before it starts rather than a port of somebody else's.
+install.
+
+The two still to come have no answer yet, and neither is a port of
+somebody else's. **Dart** resolves nothing: `pubspec.yaml` declares no
+dependencies, `dart pub get` is never run, and `package:cryptography`
+would be the port's first — so the way in is `dart:ffi` to the libcrypto
+already under `dart:io`. **Swift** has no `Package.swift` at all, since
+the port builds with `swiftc` directly; CryptoKit ships only on Apple
+platforms and swift-crypto is a package, so the way in is a C binding to
+the libcrypto Foundation sits on, as c, cpp, ocaml, haskell, lean and lua
+already do. Both are a decision about the port's build before they are a
+decision about the vault, which is why each waits for its own.
 
 The acceptance test is `test/fixture/`: a port that reads every vault
 committed there, key by key, and writes one the others read has the

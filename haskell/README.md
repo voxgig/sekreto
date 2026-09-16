@@ -44,7 +44,7 @@ Loading is explicit and never a side effect of importing: a list handed to
 a constructor cannot be erased by a compiler, and the set of stores an app
 can reach is not something to discover at run time. A kind that was not
 passed in is refused with a message that names the fix. `AllPlugins`
-carries the ten as `allplugins` for a caller that genuinely wants them
+carries the eleven as `allplugins` for a caller that genuinely wants them
 all, and importing it links every one.
 
 **GHC's include path is the boundary.** `src/` is compiled with plugin's
