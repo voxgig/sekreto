@@ -553,6 +553,16 @@ public final class Minivault {
     }
   }
 
+  /**
+   * The key a caller asked for, or {@code master}: an EMPTY key is no key.
+   * The canonical's {@code opts.key || MASTERKEY} answers for both null
+   * and empty, and a CLI reaches this with SEKRETO_VAULT_KEY set and
+   * empty, which is what an unset shell variable expands to.
+   */
+  private static String wantkey(String value) {
+    return null == value || value.isEmpty() ? MASTERKEY : value;
+  }
+
   /** How a vault handle is configured. */
   public static final class Options {
     String file;
@@ -567,7 +577,7 @@ public final class Minivault {
     }
 
     public Options key(String value) {
-      this.key = null == value ? MASTERKEY : value;
+      this.key = wantkey(value);
       return this;
     }
 
@@ -689,7 +699,7 @@ public final class Minivault {
 
       this.file = opts.file;
       this.passphrase = opts.passphrase;
-      this.keyid = checkid(opts.key, "a vault needs a key id");
+      this.keyid = checkid(wantkey(opts.key), "a vault needs a key id");
       this.iterations = opts.iterations;
       this.create = opts.create;
     }
@@ -1232,7 +1242,7 @@ public final class Minivault {
     if (null == opts.passphrase || opts.passphrase.isEmpty()) {
       throw fail("a vault needs a passphrase");
     }
-    String keyid = checkid(opts.key, "a vault needs a key id");
+    String keyid = checkid(wantkey(opts.key), "a vault needs a key id");
 
     // No existence check first: the check and the write would be two steps,
     // and `putnew` refuses an existing file in ONE.

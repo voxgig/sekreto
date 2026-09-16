@@ -437,19 +437,51 @@ function mvnew(string $keyid, string $passphrase, int $iterations): array
 }
 
 /**
- * JSON the way every other port writes it: an empty `grants` is an OBJECT
- * for a ring and an ARRAY for a meta record, and PHP's `[]` would write
- * `[]` for both. The ring's is forced; the meta's is a list already.
+ * JSON the way every other port writes it: a ring's `grants` is an OBJECT
+ * keyed by secret name, and a meta record's is an ARRAY of names. PHP has
+ * one `[]` for both, so the ring's is forced to `stdClass` and the meta's
+ * is left as the list it already is. A ring is the one with no `master`.
+ *
+ * FORCED WHATEVER IS IN IT, not only when it is empty, and that is the
+ * whole of the bug this once had. `api.token` is a valid secret name and
+ * so is `0`: PHP turns the string key `"0"` into the integer key `0`, and
+ * `json_encode` writes an array for any map whose keys are `0..n`. So one
+ * grant named `0` wrote `"grants":["..."]`, which PHP reads back as its
+ * own map and no other port can read at all - java sees an array where it
+ * wants an object and the restricted key reaches nothing.
  *
  * @param array<string, mixed> $value
  */
 function mvjson(array $value): string
 {
-    if (isset($value['grants']) && [] === $value['grants'] && !isset($value['master'])) {
-        $value['grants'] = new \stdClass();
+    if (isset($value['grants']) && !isset($value['master'])) {
+        $value['grants'] = (object) $value['grants'];
     }
 
     return json_encode($value, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+}
+
+/**
+ * `fopen` under `x` — O_CREAT|O_EXCL — with the umask set so the kernel
+ * creates the file 0600 and no wider.
+ *
+ * WHY NOT fopen-THEN-chmod, which this used to do: between the two calls
+ * the file exists at 0666 & ~umask, and another local user watching a
+ * shared directory can open it for writing and keep that descriptor after
+ * the chmod lands. PHP has no way to pass a mode to `fopen`, so the umask
+ * is the only way to ask the kernel for the mode AT CREATION. It is
+ * process-global for the width of this call, which is what every PHP
+ * program that needs a private file does.
+ */
+function mvcreate(string $path)
+{
+    $was = umask(0o077);
+
+    try {
+        return @fopen($path, 'xb');
+    } finally {
+        umask($was);
+    }
 }
 
 /**
@@ -462,7 +494,7 @@ function mvjson(array $value): string
  */
 function mvputnew(string $file, array $vault): void
 {
-    $handle = @fopen($file, 'xb');
+    $handle = mvcreate($file);
 
     if (false === $handle) {
         if (file_exists($file)) {
@@ -472,14 +504,16 @@ function mvputnew(string $file, array $vault): void
     }
 
     try {
-        if (false === fwrite($handle, mvwritefile($vault))) {
+        // A SHORT WRITE IS NOT A WRITE. `fwrite` answers the byte count,
+        // and under a quota or a full disk that count is positive and less
+        // than what it was handed - which `false ===` took for success.
+        $raw = mvwritefile($vault);
+        if (strlen($raw) !== fwrite($handle, $raw)) {
             mvfail('cannot write ' . $file);
         }
     } finally {
         fclose($handle);
     }
-
-    @chmod($file, 0600);
 }
 
 /** Is this the same sealed blob, byte for byte? */
@@ -522,7 +556,13 @@ final class MiniVault
 
         $this->file = $file;
         $this->passphrase = $passphrase;
-        $this->keyid = mvcheckid($options['key'] ?? MV_MASTERKEY, 'a vault needs a key id');
+        // AN EMPTY KEY IS NO KEY, so it means `master` - `??` answers for
+        // null alone, and the canonical's `opts.key || MASTERKEY` answers
+        // for both. A CLI reaches this with SEKRETO_VAULT_KEY set and
+        // empty, which is what an unset shell variable expands to.
+        $wantkey = (string) ($options['key'] ?? '');
+        $this->keyid = mvcheckid('' === $wantkey ? MV_MASTERKEY : $wantkey,
+                                 'a vault needs a key id');
         $this->iterations = (int) ($options['iterations'] ?? MV_ITERATIONS);
         $this->create = true === ($options['create'] ?? false);
     }
@@ -917,7 +957,11 @@ final class MiniVault
         foreach (($ring['grants'] ?? []) as $name => $key) {
             $grants[$name] = mvunb64($key, 'a granted key');
         }
-        $names = array_keys($grants);
+        // `strval`, and it is the same PHP rule as the one `mvjson` fights
+        // on the way out: `array_keys` hands back an INTEGER for the key
+        // "0", so a grant on a numerically named secret would reach the
+        // caller as `[0]` where every other port answers `["0"]`.
+        $names = array_map('strval', array_keys($grants));
         sort($names);
 
         $this->opened = [
@@ -1015,17 +1059,19 @@ final class MiniVault
     private function save(array $vault): void
     {
         $temp = $this->file . '.' . bin2hex(mvrandom(8)) . '.tmp';
-        $handle = @fopen($temp, 'xb');
+        $handle = mvcreate($temp);
 
         if (false === $handle) {
             mvfail('cannot write ' . $this->file);
         }
 
-        $ok = false !== fwrite($handle, mvwritefile($vault));
+        // A SHORT WRITE IS NOT A WRITE; see mvputnew. Here it would be
+        // worse: the rename would put a truncated file over a good vault.
+        $raw = mvwritefile($vault);
+        $ok = strlen($raw) === fwrite($handle, $raw);
         fclose($handle);
 
         if ($ok) {
-            @chmod($temp, 0600);
             $ok = @rename($temp, $this->file);
         }
 
@@ -1070,7 +1116,8 @@ function createvault(array $options): MiniVault
     if (!is_string($passphrase) || '' === $passphrase) {
         mvfail('a vault needs a passphrase');
     }
-    $keyid = mvcheckid($options['key'] ?? MV_MASTERKEY, 'a vault needs a key id');
+    $wantkey = (string) ($options['key'] ?? '');
+    $keyid = mvcheckid('' === $wantkey ? MV_MASTERKEY : $wantkey, 'a vault needs a key id');
 
     // No existence check first: the check and the write would be two
     // steps, and `mvputnew` refuses an existing file in ONE.

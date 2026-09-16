@@ -659,6 +659,24 @@ fn avaultneedsafileandapassphrase() !void {
     );
 }
 
+// An EMPTY key is no key, so it means `master`. It is not a contrived
+// case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+// expands to the empty string rather than to nothing at all.
+fn anemptykeymeansthemasterkey() !void {
+    const vault = try fresh();
+    defer vault.deinit();
+
+    _ = try ok(void, try vault.set(ALLOC, "api.token", "tok01"));
+
+    const opened = try openas(vault.vaultfile(), "", MASTER);
+    defer opened.deinit();
+
+    try same("tok01", (try value(opened, "api.token")).?, "api.token");
+
+    const info = try ok(mv.KeyInfo, try opened.open(ALLOC));
+    try same("master", info.key, "key");
+}
+
 fn createmakesthefileonlywhenasked() !void {
     const where = vaultpath();
 
@@ -1073,6 +1091,7 @@ const CASES = [_]Case{
     .{ .name = "damaged", .check = adamagedfileisrefused },
     .{ .name = "createover", .check = creatingoveranexistingvaultisrefused },
     .{ .name = "needsfile", .check = avaultneedsafileandapassphrase },
+    .{ .name = "emptykey", .check = anemptykeymeansthemasterkey },
     .{ .name = "createflag", .check = createmakesthefileonlywhenasked },
     .{ .name = "longkeyid", .check = akeyidlongerthantheformatallows },
     .{ .name = "infocopy", .check = theinfoacallergetscannotchangewhatthekeymaydo },

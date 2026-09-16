@@ -79,6 +79,18 @@ namespace Voxgig.Sekreto.Plugins
         /// <summary>The key id a vault gets when a caller names none.</summary>
         public const string MasterKey = "master";
 
+        /// <summary>
+        /// The key a caller asked for, or <c>master</c>: an EMPTY key is no
+        /// key. The canonical's <c>opts.key || MASTERKEY</c> answers for
+        /// both null and empty, where <c>??</c> answers for null alone - and
+        /// a CLI reaches this with SEKRETO_VAULT_KEY set and empty, which is
+        /// what an unset shell variable expands to.
+        /// </summary>
+        internal static string WantKey(string? value)
+        {
+            return string.IsNullOrEmpty(value) ? MasterKey : value;
+        }
+
         // Additional authenticated data. Every blob is bound to its PLACE in
         // the file, so no ciphertext can be moved.
         internal const string AadRing = "skmv1:ring:";
@@ -707,7 +719,7 @@ namespace Voxgig.Sekreto.Plugins
 
                 file = opts.File;
                 passphrase = opts.Passphrase;
-                keyid = CheckId(opts.Key ?? MasterKey, "a vault needs a key id");
+                keyid = CheckId(WantKey(opts.Key), "a vault needs a key id");
                 iterations = opts.Iterations;
                 create = opts.Create;
             }
@@ -1340,7 +1352,7 @@ namespace Voxgig.Sekreto.Plugins
                 throw Fail("a vault needs a passphrase");
             }
 
-            var keyid = CheckId(opts.Key ?? MasterKey, "a vault needs a key id");
+            var keyid = CheckId(WantKey(opts.Key), "a vault needs a key id");
 
             // No existence check first: the check and the write would be two
             // steps, and `PutNew` refuses an existing file in ONE.
@@ -1395,7 +1407,7 @@ namespace Voxgig.Sekreto.Plugins
             var out_ = new Options
             {
                 File = Providers.TextOr(Get(spec, "file"), ""),
-                Key = Providers.Text(Get(spec, "vaultkey")) ?? MasterKey,
+                Key = WantKey(Providers.Text(Get(spec, "vaultkey"))),
                 Passphrase = Providers.TextOr(Get(spec, "passphrase"), ""),
                 Create = Get(spec, "create") is bool flag && flag,
             };

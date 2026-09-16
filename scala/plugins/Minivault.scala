@@ -119,6 +119,15 @@ private def mvfail(text: String): Nothing =
 
 private def mvutf8(text: String): Array[Byte] = text.getBytes(StandardCharsets.UTF_8)
 
+/** The key a caller asked for, or [[MASTERKEY]]: an EMPTY key is no key.
+  * The canonical's `opts.key || MASTERKEY` answers for both absent and
+  * empty, where `getOrElse` answers for absent alone - and a CLI reaches
+  * this with SEKRETO_VAULT_KEY set and empty, which is what an unset shell
+  * variable expands to.
+  */
+private def mvwantkey(value: String): String =
+  if value.isEmpty then MASTERKEY else value
+
 private def mvcheckid(id: Option[String], what: String): String =
   val text = id.getOrElse("")
   if text.isEmpty then mvfail(what)
@@ -465,7 +474,7 @@ final class MiniVault private[plugins] (options: VaultOptions):
   if options.passphrase.isEmpty then mvfail("a vault needs a passphrase")
 
   private val thefile = options.file
-  private val thekey = mvcheckid(Some(options.key), "a vault needs a key id")
+  private val thekey = mvcheckid(Some(mvwantkey(options.key)), "a vault needs a key id")
   private val thephrase = options.passphrase
   private val theiters = options.iterations
   private val thecreate = options.create
@@ -843,7 +852,7 @@ def openvault(options: VaultOptions): MiniVault = MiniVault(options)
 def createvault(options: VaultOptions): MiniVault =
   if options.file.isEmpty then mvfail("a vault needs a file")
   if options.passphrase.isEmpty then mvfail("a vault needs a passphrase")
-  val keyid = mvcheckid(Some(options.key), "a vault needs a key id")
+  val keyid = mvcheckid(Some(mvwantkey(options.key)), "a vault needs a key id")
 
   // No existence check first: the check and the write would be two steps,
   // and `mvputnew` refuses an existing file in ONE.
@@ -886,7 +895,7 @@ val minivault: Definition =
           VaultOptions(
             file = spec.file.getOrElse(""),
             passphrase = spec.passphrase.getOrElse(""),
-            key = spec.vaultkey.getOrElse(MASTERKEY),
+            key = mvwantkey(spec.vaultkey.getOrElse("")),
             iterations = spec.iterations.getOrElse(MINIVAULT_ITERATIONS),
             create = spec.create.contains(true),
           ),

@@ -26,6 +26,7 @@ use Voxgig\Sekreto\Sekreto;
 use Voxgig\Sekreto\SekretoError;
 
 use function Voxgig\Sekreto\Plugins\createvault;
+use function Voxgig\Sekreto\Plugins\mvjson;
 use function Voxgig\Sekreto\Plugins\minivault;
 use function Voxgig\Sekreto\Plugins\openvault;
 use function Voxgig\Sekreto\Plugins\vaultof;
@@ -424,6 +425,46 @@ testcase('creatingoveranexistingvaultisrefused', function (): void {
 testcase('avaultneedsafileandapassphrase', function (): void {
     threw(SekretoError::class, fn() => openvault(['file' => '', 'passphrase' => MASTER]));
     threw(SekretoError::class, fn() => openvault(['file' => vaultpath(), 'passphrase' => '']));
+});
+
+// A RING'S `grants` IS AN OBJECT, whatever is in it - and PHP is the one
+// port that has to be told. `0` is a valid secret name, PHP turns the
+// string key "0" into the integer key 0, and `json_encode` writes an
+// array for any map whose keys run 0..n. A ring written that way is one
+// PHP reads back perfectly and no other port can read at all, which no
+// round trip inside this port would ever catch: the assertion is on the
+// BYTES the ring encodes to.
+testcase('aringencodesitsgrantsasanobject', function (): void {
+    $grants = ['0' => 'AAAA', '1' => 'BBBB'];
+    $ring = mvjson(['v' => 1, 'write' => false, 'grants' => $grants]);
+    same('{"v":1,"write":false,"grants":{"0":"AAAA","1":"BBBB"}}', $ring);
+
+    // ...and a meta record's `grants` is a LIST of names, which stays one.
+    $meta = mvjson(['v' => 1, 'master' => false, 'write' => false, 'grants' => ['0', '1']]);
+    same('{"v":1,"master":false,"write":false,"grants":["0","1"]}', $meta);
+
+    // End to end: a grant on a numerically named secret reads back.
+    $vault = fresh();
+    $vault->set('0', 'zero');
+    $vault->grant(['key' => 'ci', 'passphrase' => 'ci-pass', 'names' => ['0'],
+                   'iterations' => ROUNDS]);
+
+    $ci = openvault(['file' => $vault->file(), 'key' => 'ci', 'passphrase' => 'ci-pass']);
+    same('zero', $ci->get('0'));
+    same(['0'], $ci->list());
+});
+
+// An EMPTY key is no key, so it means `master`. It is not a contrived
+// case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+// expands to the empty string rather than to nothing at all - and `??`
+// answers for null alone.
+testcase('anemptykeymeansthemasterkey', function (): void {
+    $vault = fresh();
+    $vault->set('api.token', 'tok01');
+
+    $opened = openvault(['file' => $vault->file(), 'key' => '', 'passphrase' => MASTER]);
+    same('tok01', $opened->get('api.token'));
+    same('master', $opened->open()['key']);
 });
 
 testcase('createmakesthefileonlywhenasked', function (): void {

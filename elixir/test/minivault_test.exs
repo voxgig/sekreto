@@ -509,6 +509,25 @@ needsfile = fn ->
   end)
 end
 
+# An EMPTY key is no key, so it means `master`. It is not a contrived
+# case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+# expands to the empty string rather than to nothing at all - and
+# elixir's `||` answers for nil alone, because "" is truthy.
+emptykey = fn ->
+  vault = fresh.()
+  MV.set(vault, "api.token", "tok01")
+
+  opened =
+    MV.openvault(%{
+      "file" => MV.file(vault),
+      "key" => "",
+      "passphrase" => MiniVaultTest.master()
+    })
+
+  MiniVaultTest.same("tok01", MV.get(opened, "api.token"), "api.token")
+  MiniVaultTest.same("master", MV.open(opened)["key"], "key")
+end
+
 createflag = fn ->
   path = vaultpath.()
 
@@ -857,6 +876,7 @@ state = MiniVaultTest.testcase("wrongphrase", wrongphrase, state)
 state = MiniVaultTest.testcase("damaged", damaged, state)
 state = MiniVaultTest.testcase("createover", createover, state)
 state = MiniVaultTest.testcase("needsfile", needsfile, state)
+state = MiniVaultTest.testcase("emptykey", emptykey, state)
 state = MiniVaultTest.testcase("createflag", createflag, state)
 state = MiniVaultTest.testcase("longkeyid", longkeyid, state)
 state = MiniVaultTest.testcase("infocopy", infocopy, state)

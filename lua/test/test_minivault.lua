@@ -505,6 +505,18 @@ local function avaultneedsafileandapassphrase()
     'a vault needs a passphrase', 'no passphrase')
 end
 
+-- An EMPTY key is no key, so it means `master`. It is not a contrived
+-- case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+-- expands to the empty string rather than to nothing at all.
+local function anemptykeymeansthemasterkey()
+  local vault = fresh()
+  vault:set('api.token', 'tok01')
+
+  local opened = openas(vault:file(), '', MASTER)
+  same(opened:get('api.token'), 'tok01', 'api.token')
+  same(opened:open().key, 'master', 'key')
+end
+
 local function createmakesthefileonlywhenasked()
   local where = vaultpath()
 
@@ -768,6 +780,7 @@ testcase('wrongphrase', awrongpassphraseandamissingfile)
 testcase('damaged', adamagedfileisrefused)
 testcase('createover', creatingoveranexistingvaultisrefused)
 testcase('needsfile', avaultneedsafileandapassphrase)
+testcase('emptykey', anemptykeymeansthemasterkey)
 testcase('createflag', createmakesthefileonlywhenasked)
 testcase('longkeyid', akeyidlongerthantheformatallows)
 testcase('infocopy', theinfoacallergetscannotchangewhatthekeymaydo)

@@ -319,6 +319,18 @@
   (refused #(mv/openvault {:file "" :passphrase MASTER}))
   (refused #(mv/openvault {:file (vaultpath) :passphrase ""})))
 
+;; An EMPTY key is no key, so it means `master`. It is not a contrived
+;; case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+;; expands to the empty string rather than to nothing at all - and
+;; clojure's `or` answers for nil alone, because "" is truthy.
+(defn anemptykeymeansthemasterkey []
+  (let [vault (fresh)]
+    (mv/vaultset vault "api.token" "tok01")
+
+    (let [opened (mv/openvault {:file (mv/vaultfile vault) :key "" :passphrase MASTER})]
+      (same "tok01" (mv/vaultget opened "api.token") "api.token")
+      (same "master" (get (mv/vaultopen opened) "key") "key"))))
+
 (defn createmakesthefileonlywhenasked []
   (let [path (vaultpath)
         refuses (mv/openvault {:file path :passphrase MASTER :iterations ROUNDS})]
@@ -519,6 +531,7 @@
   (testcase "damaged" adamagedfileisrefused)
   (testcase "createover" creatingoveranexistingvaultisrefused)
   (testcase "needsfile" avaultneedsafileandapassphrase)
+  (testcase "emptykey" anemptykeymeansthemasterkey)
   (testcase "createflag" createmakesthefileonlywhenasked)
   (testcase "longkeyid" akeyidlongerthantheformatallowsisrefused)
   (testcase "infocopy" theinfoacallergetscannotchangewhatthekeymaydo)

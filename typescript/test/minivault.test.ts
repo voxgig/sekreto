@@ -405,6 +405,22 @@ describe('minivault', () => {
       { message: 'sekreto: minivault: a vault needs a passphrase' })
   })
 
+  // An EMPTY key is no key, so it means `master`. It is not a contrived
+  // case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+  // expands to the empty string rather than to nothing at all. A port
+  // whose null-coalescing operator answers for null alone - PHP's `??`,
+  // Java's `null ==`, C#'s `??`, Kotlin's `?:` - reads it as a key id of
+  // its own and refuses the handle.
+  test('an empty key means the master key', () => {
+    const vault = fresh()
+    vault.set('api.token', 'tok01')
+
+    assert.equal(openvault({ file: vault.file(), key: '', passphrase: MASTER }).get('api.token'),
+      'tok01')
+    assert.equal(openvault({ file: vault.file(), key: '', passphrase: MASTER }).open().key,
+      'master')
+  })
+
   test('create makes the file, and only when asked', () => {
     const file = vaultpath()
 

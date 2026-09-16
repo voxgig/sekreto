@@ -620,6 +620,32 @@ func TestAVaultNeedsAFileAndAPassphrase(t *testing.T) {
 	refuses(t, err, "sekreto: minivault: a vault needs a passphrase")
 }
 
+// An EMPTY key is no key, so it means `master`. It is not a contrived
+// case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+// expands to the empty string rather than to nothing at all.
+func TestAnEmptyKeyMeansTheMasterKey(t *testing.T) {
+	vault := fresh(t)
+	set(t, vault, "api.token", "tok01")
+
+	opened, err := minivault.Open(&minivault.Options{
+		File: vault.File(), Key: "", Passphrase: master})
+	if nil != err {
+		t.Fatal(err)
+	}
+
+	if value, _ := get(t, opened, "api.token"); "tok01" != value {
+		t.Fatalf("api.token: %q", value)
+	}
+
+	info, err := opened.Info()
+	if nil != err {
+		t.Fatal(err)
+	}
+	if minivault.MasterKey != info.Key {
+		t.Fatalf("key: %q", info.Key)
+	}
+}
+
 func TestCreateMakesTheFileWhenAsked(t *testing.T) {
 	file := vaultpath(t)
 

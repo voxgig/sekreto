@@ -514,6 +514,24 @@ internal static class MiniVaultSeam
             }));
         });
 
+        // An EMPTY key is no key, so it means `master`. It is not a
+        // contrived case: the CLI reads SEKRETO_VAULT_KEY, and an unset
+        // shell variable expands to the empty string rather than to
+        // nothing at all - and `??` answers for null alone.
+        Case("an empty key means the master key", () =>
+        {
+            var vault = Fresh();
+            vault.Set("api.token", "tok01");
+
+            var opened = MiniVault.OpenVault(new MiniVault.Options
+            {
+                File = vault.File(), Key = "", Passphrase = MASTER,
+            });
+
+            Eq(opened.Get("api.token"), "tok01", "api.token");
+            Eq(opened.Open().Key, "master", "key");
+        });
+
         Case("create makes the file only when asked", () =>
         {
             string path = VaultPath();

@@ -402,6 +402,17 @@ def avaultneedsafileandapassphrase : IO Unit := do
   holds "no passphrase" "a vault needs a passphrase"
     (← refusal "no passphrase" (openvault (vaultopts "v.skmv" "" "")))
 
+/-- An EMPTY key is no key, so it means `master`. It is not a contrived
+case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+expands to the empty string rather than to nothing at all. -/
+def anemptykeymeansthemasterkey : IO Unit := do
+  let v ← fresh
+  vaultset v "api.token" "tok01"
+
+  let opened ← openas v.file "" master
+  same "api.token" "tok01" (← valueof opened "api.token")
+  same "key" "master" (← vaultopen opened).key
+
 def createmakesthefileonlywhenasked : IO Unit := do
   let where' ← vaultpath
 
@@ -649,6 +660,7 @@ def main (args : List String) : IO UInt32 := do
   testcase "damaged" adamagedfileisrefused
   testcase "createover" creatingoveranexistingvaultisrefused
   testcase "needsfile" avaultneedsafileandapassphrase
+  testcase "emptykey" anemptykeymeansthemasterkey
   testcase "createflag" createmakesthefileonlywhenasked
   testcase "longkeyid" akeyidlongerthantheformatallows
   testcase "infocopy" theinfoacallergetscannotchangewhatthekeymaydo

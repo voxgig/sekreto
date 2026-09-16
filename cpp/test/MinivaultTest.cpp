@@ -580,6 +580,18 @@ void avaultneedsafileandapassphrase() {
         "a vault needs a passphrase", "no passphrase");
 }
 
+// An EMPTY key is no key, so it means `master`. It is not a contrived
+// case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+// expands to the empty string rather than to nothing at all.
+void anemptykeymeansthemasterkey() {
+  auto vault = fresh();
+  vault->set("api.token", "tok01");
+
+  auto opened = openas(vault->file(), "", MASTER);
+  same(opened->get("api.token").value_or(""), "tok01", "api.token");
+  same(opened->open().key(), "master", "key");
+}
+
 void createmakesthefileonlywhenasked() {
   const std::string where = vaultpath();
 
@@ -871,6 +883,7 @@ int main(int argc, char** argv) {
   testcase("damaged", adamagedfileisrefused);
   testcase("createover", creatingoveranexistingvaultisrefused);
   testcase("needsfile", avaultneedsafileandapassphrase);
+  testcase("emptykey", anemptykeymeansthemasterkey);
   testcase("createflag", createmakesthefileonlywhenasked);
   testcase("longkeyid", akeyidlongerthantheformatallows);
   testcase("infocopy", theinfoacallergetscannotchangewhatthekeymaydo);

@@ -389,7 +389,13 @@ module VoxgigSekreto
     def initialize(options)
       opts = options || {}
       @file = opts['file']
-      @keyid = opts['key'] || MiniVaultFormat::MASTERKEY
+      # AN EMPTY KEY IS NO KEY, so it means `master`. Ruby's `||` answers
+      # for nil alone and an empty String is truthy, where the canonical's
+      # `opts.key || MASTERKEY` answers for both. A CLI reaches this with
+      # SEKRETO_VAULT_KEY set and empty, which is what an unset shell
+      # variable expands to.
+      want = opts['key']
+      @keyid = want.nil? || want.to_s.empty? ? MiniVaultFormat::MASTERKEY : want
       @passphrase = opts['passphrase']
       @iterations = opts['iterations'] || MiniVaultFormat::ITERATIONS
       @create = opts['create'] == true
@@ -812,7 +818,8 @@ module VoxgigSekreto
     unless opts['passphrase'].is_a?(String) && !opts['passphrase'].empty?
       minivaultfail('a vault needs a passphrase')
     end
-    keyid = opts['key'] || MiniVaultFormat::MASTERKEY
+    want = opts['key']
+    keyid = want.nil? || want.to_s.empty? ? MiniVaultFormat::MASTERKEY : want
     minivaultcheckid(keyid, 'a vault needs a key id')
 
     # No existence check first: the check and the write would be two

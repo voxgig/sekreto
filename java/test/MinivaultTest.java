@@ -423,6 +423,24 @@ public final class MinivaultTest {
     threw(() -> Minivault.openvault(new Minivault.Options().file(vaultpath()).passphrase("")));
   }
 
+  /**
+   * An EMPTY key is no key, so it means {@code master}. It is not a
+   * contrived case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell
+   * variable expands to the empty string rather than to nothing at all -
+   * and {@code null ==} answers for null alone.
+   */
+  static void anemptykeymeansthemasterkey() {
+    Minivault.Vault vault = fresh();
+    vault.set("api.token", "tok01");
+
+    Minivault.Vault opened =
+        Minivault.openvault(
+            new Minivault.Options().file(vault.file()).key("").passphrase(MASTER));
+
+    same("tok01", opened.get("api.token"), "api.token");
+    same("master", opened.open().key, "key");
+  }
+
   static void createmakesthefileonlywhenasked() {
     String path = vaultpath();
 
@@ -789,6 +807,7 @@ public final class MinivaultTest {
     testcase("damaged", MinivaultTest::adamagedfileisrefused);
     testcase("createover", MinivaultTest::creatingoveranexistingvaultisrefused);
     testcase("needsfile", MinivaultTest::avaultneedsafileandapassphrase);
+    testcase("emptykey", MinivaultTest::anemptykeymeansthemasterkey);
     testcase("createflag", MinivaultTest::createmakesthefileonlywhenasked);
     testcase("longkeyid", MinivaultTest::akeyidlongerthantheformatallowsisrefused);
     testcase("infoimmutable", MinivaultTest::theinfoacallergetscannotchangewhatthekeymaydo);

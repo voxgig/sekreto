@@ -102,6 +102,15 @@ defmodule Sekreto.Plugins.Minivault do
     raise Error, message: "sekreto: minivault: " <> text
   end
 
+  # The key a caller asked for, or `masterkey()`: an EMPTY key is no key.
+  # The canonical's `opts.key || MASTERKEY` answers for both nil and
+  # empty, where elixir's `||` answers for nil alone - `""` is truthy
+  # here. A CLI reaches this with SEKRETO_VAULT_KEY set and empty, which
+  # is what an unset shell variable expands to.
+  defp wantkey(nil), do: masterkey()
+  defp wantkey(""), do: masterkey()
+  defp wantkey(value), do: value
+
   defp checkid(id, _what) when is_binary(id) and id != "" do
     if byte_size(id) > @idmax do
       fail("key id is longer than #{@idmax} bytes: #{String.slice(id, 0, 32)}...")
@@ -402,7 +411,7 @@ defmodule Sekreto.Plugins.Minivault do
     if not is_binary(file) or file == "", do: fail("a vault needs a file")
     if not is_binary(passphrase) or passphrase == "", do: fail("a vault needs a passphrase")
 
-    keyid = checkid(opts["key"] || masterkey(), "a vault needs a key id")
+    keyid = checkid(wantkey(opts["key"]), "a vault needs a key id")
 
     {:ok, agent} = Agent.start_link(fn -> nil end)
 
@@ -430,7 +439,7 @@ defmodule Sekreto.Plugins.Minivault do
     if not is_binary(file) or file == "", do: fail("a vault needs a file")
     if not is_binary(passphrase) or passphrase == "", do: fail("a vault needs a passphrase")
 
-    keyid = checkid(opts["key"] || masterkey(), "a vault needs a key id")
+    keyid = checkid(wantkey(opts["key"]), "a vault needs a key id")
 
     # No existence check first: the check and the write would be two
     # steps, and `putnew` refuses an existing file in ONE.

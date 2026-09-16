@@ -1089,6 +1089,41 @@ static const char *avaultneedsafileandapassphrase(void) {
                "a vault needs a passphrase", "no passphrase");
 }
 
+/* An EMPTY key is no key, so it means `master`. It is not a contrived
+ * case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+ * expands to the empty string rather than to nothing at all. */
+static const char *anemptykeymeansthemasterkey(void) {
+  const char *why;
+  sek_minivault *vault = fresh(&why);
+  sek_minivault *opened;
+  sek_vaultinfo *info = NULL;
+  char *found = NULL;
+
+  if (NULL != why) {
+    return why;
+  }
+  if (NULL != (why = sek_vault_set(vault, "api.token", "tok01"))) {
+    return why;
+  }
+
+  opened = openas(sek_vault_file(vault), "", MASTER, &why);
+  if (NULL != why) {
+    return why;
+  }
+  if (NULL != (why = sek_vault_get(opened, "api.token", &found))) {
+    return why;
+  }
+  if (NULL != (why = same("tok01", found, "api.token"))) {
+    return why;
+  }
+
+  if (NULL != (why = sek_vault_info(opened, &info))) {
+    return why;
+  }
+
+  return same("master", info->key, "key");
+}
+
 static const char *createmakesthefileonlywhenasked(void) {
   const char *why;
   const char *where = vaultpath();
@@ -1758,6 +1793,7 @@ int main(int argc, char **argv) {
   runcase("damaged", adamagedfileisrefused);
   runcase("createover", creatingoveranexistingvaultisrefused);
   runcase("needsfile", avaultneedsafileandapassphrase);
+  runcase("emptykey", anemptykeymeansthemasterkey);
   runcase("createflag", createmakesthefileonlywhenasked);
   runcase("longkeyid", akeyidlongerthantheformatallows);
   runcase("infocopy", theinfoacallergetscannotchangewhatthekeymaydo);

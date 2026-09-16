@@ -365,6 +365,21 @@ class TestMiniVault < Minitest::Test
     end
   end
 
+  # An EMPTY key is no key, so it means `master`. It is not a contrived
+  # case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+  # expands to the empty string rather than to nothing at all - and an
+  # empty String is truthy here, where the canonical's `||` is not.
+  def test_an_empty_key_means_the_master_key
+    vault = fresh
+    vault.set('api.token', 'tok01')
+
+    opened = VoxgigSekreto.openvault('file' => vault.file, 'key' => '',
+                                     'passphrase' => MASTER)
+
+    assert_equal 'tok01', opened.get('api.token')
+    assert_equal 'master', opened.open['key']
+  end
+
   def test_create_makes_the_file_and_only_when_asked
     path = vaultpath
 

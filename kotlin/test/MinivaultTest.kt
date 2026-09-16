@@ -364,6 +364,20 @@ fun main(args: Array<String>) {
         threw { openvault(VaultOptions(file = vaultpath(), passphrase = "")) }
     }
 
+    // An EMPTY key is no key, so it means `master`. It is not a contrived
+    // case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+    // expands to the empty string rather than to nothing at all - and `?:`
+    // answers for null alone.
+    testcase("an empty key means the master key") {
+        val vault = fresh()
+        vault.set("api.token", "tok01")
+
+        val opened = openvault(VaultOptions(file = vault.file(), key = "", passphrase = MASTER))
+
+        eq("tok01", opened.get("api.token"), "api.token")
+        eq("master", opened.open().key, "key")
+    }
+
     testcase("create makes the file only when asked") {
         val path = vaultpath()
 

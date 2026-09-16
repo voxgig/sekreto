@@ -443,6 +443,19 @@ avaultneedsafileandapassphrase = do
   holds "no passphrase" "a vault needs a passphrase"
     =<< refusal "no passphrase" (openvault (vaultopts "v.skmv" "" ""))
 
+-- | An EMPTY key is no key, so it means `master`. It is not a contrived
+-- case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+-- expands to the empty string rather than to nothing at all.
+anemptykeymeansthemasterkey :: IO ()
+anemptykeymeansthemasterkey = do
+  v <- fresh
+  vaultset v "api.token" "tok01"
+
+  opened <- openas (vaultfile v) "" master
+  same "api.token" (Just "tok01") =<< vaultget opened "api.token"
+  info <- vaultopen opened
+  same "key" "master" (vaultinfokey info)
+
 createmakesthefileonlywhenasked :: IO ()
 createmakesthefileonlywhenasked = do
   where' <- vaultpath
@@ -736,6 +749,7 @@ main = do
   check "damaged" adamagedfileisrefused
   check "createover" creatingoveranexistingvaultisrefused
   check "needsfile" avaultneedsafileandapassphrase
+  check "emptykey" anemptykeymeansthemasterkey
   check "createflag" createmakesthefileonlywhenasked
   check "longkeyid" akeyidlongerthantheformatallows
   check "infocopy" theinfoacallergetscannotchangewhatthekeymaydo

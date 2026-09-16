@@ -109,6 +109,16 @@
 (defn- utf8 ^bytes [^String text]
   (.getBytes text StandardCharsets/UTF_8))
 
+(defn- wantkey
+  "The key a caller asked for, or `MASTERKEY`: an EMPTY key is no key.
+
+  The canonical's `opts.key || MASTERKEY` answers for both nil and empty,
+  where clojure's `or` answers for nil alone - `\"\"` is truthy here. A
+  CLI reaches this with SEKRETO_VAULT_KEY set and empty, which is what an
+  unset shell variable expands to."
+  [value]
+  (if (or (nil? value) (= "" value)) MASTERKEY value))
+
 (defn- checkid [id what]
   (when-not (and (string? id) (not= "" id))
     (fail what))
@@ -375,7 +385,7 @@
       (fail "a vault needs a passphrase"))
 
     {:file file
-     :key (checkid (or (:key opts) MASTERKEY) "a vault needs a key id")
+     :key (checkid (wantkey (:key opts)) "a vault needs a key id")
      :passphrase passphrase
      :iterations (or (:iterations opts) ITERATIONS)
      :create (true? (:create opts))
@@ -397,7 +407,7 @@
     (when-not (and (string? passphrase) (not= "" passphrase))
       (fail "a vault needs a passphrase"))
 
-    (let [keyid (checkid (or (:key opts) MASTERKEY) "a vault needs a key id")]
+    (let [keyid (checkid (wantkey (:key opts)) "a vault needs a key id")]
       ;; No existence check first: the check and the write would be two
       ;; steps, and `putnew` refuses an existing file in ONE.
       (putnew file (newvault keyid passphrase (or (:iterations opts) ITERATIONS)))

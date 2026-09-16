@@ -409,6 +409,17 @@ let avaultneedsafileandapassphrase () =
   holds "no passphrase" "a vault needs a passphrase"
     (refusal "no passphrase" (fun () -> ignore (Minivault.openvault (vaultopts "v.skmv" "" ""))))
 
+(* An EMPTY key is no key, so it means `master`. It is not a contrived
+   case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
+   expands to the empty string rather than to nothing at all. *)
+let anemptykeymeansthemasterkey () =
+  let v = fresh () in
+  Minivault.set v "api.token" "tok01";
+
+  let opened = openas (Minivault.file v) "" master in
+  same "api.token" "tok01" (valueof opened "api.token");
+  same "key" "master" (Minivault.opened opened).Minivault.key
+
 let createmakesthefileonlywhenasked () =
   let where = vaultpath () in
 
@@ -674,6 +685,7 @@ let () =
   testcase "damaged" adamagedfileisrefused;
   testcase "createover" creatingoveranexistingvaultisrefused;
   testcase "needsfile" avaultneedsafileandapassphrase;
+  testcase "emptykey" anemptykeymeansthemasterkey;
   testcase "createflag" createmakesthefileonlywhenasked;
   testcase "longkeyid" akeyidlongerthantheformatallows;
   testcase "infocopy" theinfoacallergetscannotchangewhatthekeymaydo;

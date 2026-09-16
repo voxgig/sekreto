@@ -121,6 +121,16 @@ private val RANDOM = SecureRandom()
 
 private fun mvfail(text: String): Nothing = throw SekretoError("sekreto: minivault: $text")
 
+/**
+ * The key a caller asked for, or [MASTERKEY]: an EMPTY key is no key. The
+ * canonical's `opts.key || MASTERKEY` answers for both null and empty,
+ * where `?:` answers for null alone - and a CLI reaches this with
+ * SEKRETO_VAULT_KEY set and empty, which is what an unset shell variable
+ * expands to.
+ */
+private fun wantkey(value: String?): String =
+    if (value.isNullOrEmpty()) MASTERKEY else value
+
 private fun checkid(id: String?, what: String): String {
     if (null == id || id.isEmpty()) {
         mvfail(what)
@@ -545,7 +555,7 @@ class MiniVault internal constructor(options: VaultOptions) {
 
         file = options.file
         passphrase = options.passphrase
-        keyid = checkid(options.key, "a vault needs a key id")
+        keyid = checkid(wantkey(options.key), "a vault needs a key id")
         iterations = options.iterations
         create = options.create
     }
@@ -948,7 +958,7 @@ fun createvault(options: VaultOptions): MiniVault {
     if (options.passphrase.isEmpty()) {
         mvfail("a vault needs a passphrase")
     }
-    val keyid = checkid(options.key, "a vault needs a key id")
+    val keyid = checkid(wantkey(options.key), "a vault needs a key id")
 
     // No existence check first: the check and the write would be two steps,
     // and `putnew` refuses an existing file in ONE.
@@ -994,7 +1004,7 @@ val minivault: Definition = mapOf(
                 VaultOptions(
                     file = spec.file ?: "",
                     passphrase = spec.passphrase ?: "",
-                    key = spec.vaultkey ?: MASTERKEY,
+                    key = wantkey(spec.vaultkey),
                     iterations = spec.iterations ?: MINIVAULT_ITERATIONS,
                     create = true == spec.create,
                 ),
