@@ -58,8 +58,8 @@ The one dependency is `@voxgig/plugin`, which itself has none.
 ## The mini vault
 
 `plugins/minivault.ts` is a store this port owns outright rather than a
-client for somebody else's server: every secret, encrypted, in one binary
-file. It has a master key and restricted keys, and it is the port's
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the port's
 worked example of a definition publishing an API beside its provider.
 
 ```ts
@@ -81,7 +81,7 @@ vaultof(secrets).list()            // ['api.token'] — as the `ci` key sees it
 
 A chain reads; writing is a deliberate act with an API of its own, so the
 definition exports `vault` beside `provider` and `vaultof` reads it back
-off `secrets.host`. What each key may do, what the file holds and what
+off `secrets.host`. What each key may do, what the file holds, and what
 the whole thing does and does not protect are in
 [DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
 

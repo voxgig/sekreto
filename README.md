@@ -89,8 +89,8 @@ loading is explicit rather than a side effect of importing: a `Sekreto`
 can build only the kinds its constructor was handed.
 
 `minivault` is the newest and is not yet everywhere: it ships in
-typescript and go, and the other twenty-one ports follow. Everything
-above it is in all twenty-three. Because the shared spec runs against
+typescript and go, and the other twenty-one ports follow. Every kind
+preceding it is in all twenty-three. Because the shared spec runs against
 every port, a `minivault` case cannot join it until the last port has the
 kind, so until then the two ports that do carry it prove the format
 against each other, through a committed vault file each reads.
@@ -99,7 +99,7 @@ against each other, through a committed vault file each reads.
 
 `minivault` is the store to reach for before there is a vault server. The
 whole thing is one binary file: AES-256-GCM values, PBKDF2-HMAC-SHA256
-passphrases, nothing to run and no socket to open. Moving to HashiCorp
+passphrases, nothing to run, and no socket to open. Moving to HashiCorp
 later is the config change this library exists to make possible.
 
 It has a **master key**, which reads and writes every name, and
@@ -127,8 +127,8 @@ vaultof(secrets)                 // the same vault, as an API
 Writing is not something a chain does, so the writing half is an API of
 its own. `vaultof` reaches it off the plugin host, because voxgig/plugin
 lets a definition publish values beside the provider the host asked it
-for. [`DOCS.md`](DOCS.md) has the format, the key rules and what they do
-and do not protect.
+for. [`DOCS.md`](DOCS.md) has the format, the key rules, and what they
+do and do not protect.
 
 ### Per language
 

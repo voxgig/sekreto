@@ -913,7 +913,7 @@ process does not have. Re-grant afterwards.
 
 Passphrases live in memory for as long as the handle does, which is what
 lets `close` be undone by the next call. A vault is a local store, and a
-process that can read another's memory has already won.
+process that can read the memory of another has already won.
 
 ---
 

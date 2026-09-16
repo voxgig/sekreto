@@ -70,8 +70,8 @@ none, resolved from the module proxy like any other.
 ## The mini vault
 
 `plugins/minivault/` is a store this port owns outright rather than a
-client for somebody else's server: every secret, encrypted, in one binary
-file. It has a master key and restricted keys, and it is the port's
+client for a server somebody else runs: every secret, encrypted, in one
+binary file. It has a master key and restricted keys, and it is the port's
 worked example of a definition publishing an API beside its provider.
 
 ```go
@@ -94,7 +94,7 @@ api, err := minivault.VaultOf(secrets, "") // the same vault, as an API
 
 A chain reads; writing is a deliberate act with an API of its own, so the
 definition exports `vault` beside `provider` and `VaultOf` reads it back
-off `Host()`. What each key may do, what the file holds and what the
+off `Host()`. What each key may do, what the file holds, and what the
 whole thing does and does not protect are in
 [DOCS.md](../DOCS.md#minivault--a-local-mini-vault--plugin-minivault).
 
