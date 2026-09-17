@@ -1,0 +1,6 @@
+go 1.26.3
+
+use (
+	.
+	/Users/richard/Projects/voxgig/omni/go
+)

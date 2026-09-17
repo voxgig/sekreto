@@ -62,6 +62,7 @@ import hmac as hmaclib
 import json
 import os
 import struct
+import sys
 import threading
 
 from voxgig_plugin import PluginError
@@ -177,10 +178,27 @@ def _libcrypto():
 
         tried = []
 
+        # APPLE'S /usr/lib/libcrypto.dylib IS A TRAP, AND IT MUST NOT BE
+        # TRIED. It is a compatibility stub: loading it directly prints
+        # "loading libcrypto in an unsafe way" and calls abort(). That is a
+        # SIGABRT, not an exception, so the `except OSError: continue`
+        # below never runs and the whole process dies — `make test` here
+        # ended at `Abort trap: 6` on the first vault case.
+        #
+        # `find_library('crypto')` returns exactly that path on macOS, so
+        # it cannot be the first thing attempted, and on Darwin it cannot
+        # be attempted at all. Homebrew's openssl@3 is the real library a
+        # mac usually has, and it is named explicitly because it is not on
+        # the loader's default search path.
+        darwin = 'darwin' == sys.platform
+
         found = ctypes.util.find_library('crypto')
-        if found:
+        if found and not (darwin and found.startswith('/usr/lib/')):
             tried.append(found)
 
+        # A statically linked CPython (uv's, python.org's recent builds)
+        # has no `_ssl.__file__` at all, so this finds nothing and the list
+        # below is the only thing standing between a mac and a refusal.
         try:
             import _ssl
             beside = os.path.dirname(getattr(_ssl, '__file__', '') or '')
@@ -194,8 +212,21 @@ def _libcrypto():
         except Exception:
             pass
 
-        tried.extend(['libcrypto.so.3', 'libcrypto.so.1.1', 'libcrypto.so',
-                      'libcrypto.dylib', 'libcrypto-3-x64.dll', 'libcrypto-3.dll'])
+        if darwin:
+            # Homebrew on both architectures, then MacPorts. A bare
+            # `libcrypto.dylib` is deliberately NOT in this list: the
+            # loader would resolve it to /usr/lib and abort.
+            tried.extend([
+                '/opt/homebrew/opt/openssl@3/lib/libcrypto.dylib',
+                '/opt/homebrew/opt/openssl@1.1/lib/libcrypto.dylib',
+                '/usr/local/opt/openssl@3/lib/libcrypto.dylib',
+                '/usr/local/opt/openssl@1.1/lib/libcrypto.dylib',
+                '/opt/local/lib/libcrypto.dylib',
+            ])
+        else:
+            tried.extend(['libcrypto.so.3', 'libcrypto.so.1.1', 'libcrypto.so',
+                          'libcrypto.dylib', 'libcrypto-3-x64.dll',
+                          'libcrypto-3.dll'])
 
         for name in tried:
             try:
