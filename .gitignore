@@ -193,3 +193,11 @@ boru-bin
 # Vale downloads the Google package here on `vale sync`; the vocabularies
 # and house rules beside it are committed.
 .vale/styles/Google/
+
+# Local development links to sibling checkouts. Both are machine-local
+# and absolute: go.work names this machine's plugin/omni paths, and
+# rust/vendor/omni is a symlink into ~/Projects. Committing either
+# breaks every other checkout - the Makefiles regenerate both.
+go/go.work
+go/go.work.sum
+rust/vendor/
