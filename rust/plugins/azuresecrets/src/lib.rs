@@ -10,17 +10,6 @@ use voxgig_sekreto_httpjson::{
     expiryseconds, fetchjson, http, renewdue, renewtime, textat, trimslash,
 };
 
-/// Azure Key Vault.
-///
-/// `api.token` reads secret `api-token` (dots flattened to `-`; Key
-/// Vault names allow nothing else), current version. The token comes
-/// from config, then a client-credentials login when tenant/clientid/
-/// clientsecret are given, then the IMDS managed-identity endpoint - so
-/// on Azure's own platform no credential configuration is needed.
-///
-/// As with GCP, the IMDS call is plain http to a link-local host by
-/// platform design and carries no credential; the login and vault
-/// addresses are `checkaddr`-guarded.
 #[derive(Default)]
 pub struct AzureSecretsProvider {
     pub vault: String,

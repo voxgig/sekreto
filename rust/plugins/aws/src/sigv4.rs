@@ -1,16 +1,3 @@
-//! AWS Signature Version 4, hand-rolled.
-//!
-//! The AWS providers need exactly one thing from the AWS SDK - request
-//! signing - and taking the SDK for it would break the no-dependency rule
-//! that keeps ten ports honest. SigV4 is a stable, published algorithm
-//! built from HMAC-SHA256, which this port carries in-tree (src/crypto.rs).
-//!
-//! `sigv4` is pure: the caller passes the timestamp, so the same input
-//! yields the same signature everywhere. That is what lets the shared spec
-//! carry known-answer cases that all ten ports must reproduce bit-for-bit,
-//! and lets the integration mock recompute the signature server-side.
-//!
-//! A port of typescript/src/Sigv4.ts, which is canonical.
 
 use std::collections::BTreeMap;
 
@@ -32,8 +19,6 @@ pub struct Sigv4Input {
     pub secret: String,
     /// STS session token; signed as x-amz-security-token when non-empty.
     pub session: String,
-    /// The signing moment, `YYYYMMDDTHHMMSSZ`. Passed in, never sampled,
-    /// so the function stays pure.
     pub datetime: String,
 }
 
@@ -157,13 +142,6 @@ pub fn sigv4(input: &Sigv4Input) -> Answer<Sigv4Output> {
 
     let date = input.datetime.get(..8).unwrap_or(&input.datetime);
 
-    // Every header that will be signed: the caller's extras, plus host and
-    // x-amz-date (and the session token when present), lower-cased and
-    // trimmed the way the canonical form requires. A BTreeMap keeps them in
-    // the sorted order the canonical form also requires.
-    // Canonical header values are trimmed AND internally collapsed -
-    // AWS folds sequential whitespace to one space before signing, so a
-    // header like "a  b" must sign as "a b" or the service refuses it.
     let mut headers: BTreeMap<String, String> = BTreeMap::new();
     for (key, value) in &input.headers {
         headers.insert(

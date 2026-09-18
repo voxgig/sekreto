@@ -4,12 +4,6 @@ import { ProviderSpec, Provider, SekretoError, envkey, providerplugin } from '..
 import { checkaddr } from '../src/provider/addr'
 import { fetchjson } from './httpjson'
 
-/** Infisical.
- *
- * `api.token` reads the secret keyed `API_TOKEN` (Infisical's own
- * convention is environment-style keys) at a secret path in one
- * environment of a project. Auth is a token, or a universal-auth
- * (machine identity) login with clientid/clientsecret. */
 export function infisicalprovider(options?: {
   addr?: string
   token?: string

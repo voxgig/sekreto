@@ -1,13 +1,4 @@
 
-# Resolution down a chain of sources.
-#
-# `resolve` walks the chain in order and returns the first hit, raising if
-# nothing has the secret. `trysecret` is the same walk but reports a miss
-# as a null rather than an error.
-#
-# Every entry builds its chain from the spec, so the chain description is
-# part of the input rather than test-harness setup — that is what lets every
-# port share these cases verbatim.
 
 
 resolve: set: [

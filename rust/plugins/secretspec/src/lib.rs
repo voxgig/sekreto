@@ -10,30 +10,6 @@ use std::rc::Rc;
 use voxgig_plugin::catalog::Definition;
 use voxgig_sekreto::{envkey, providerplugin, Answer, Provider, SekretoError};
 
-/// SecretSpec (https://secretspec.dev).
-///
-/// SecretSpec is a declaration - a `secretspec.toml` naming the secrets a
-/// project needs - plus a chain of its own backends to satisfy them from.
-/// That makes it the same shape as sekreto one level down, and the reason
-/// to support it is the same reason sekreto exists: a project that has
-/// already declared its secrets there should not have to declare them
-/// again here.
-///
-/// Read through its CLI, as boru is, because that is the interface it
-/// offers a program in another language: `secretspec get API_TOKEN`
-/// prints the value on stdout and nothing else. A sekreto name maps to a
-/// SecretSpec key exactly as it maps to an environment variable -
-/// `api.token` is `API_TOKEN` - which is the convention SecretSpec's own
-/// examples use.
-///
-/// `backend` selects one of SecretSpec's backends (`--provider`, e.g.
-/// `keyring` or `dotenv://.env`) and is called `backend` here only
-/// because `provider` already means something else in this library.
-///
-/// A reason is required, not optional: SecretSpec records every read in
-/// an audit log and refuses to read at all without one. sekreto sends
-/// `sekreto` unless told otherwise, so the audit trail says which tool
-/// asked.
 pub struct SecretSpecProvider {
     pub command: String,
     pub file: String,
@@ -111,19 +87,6 @@ impl Provider for SecretSpecProvider {
     }
 }
 
-/// Does this SecretSpec failure mean "no such secret" rather than "I
-/// could not answer"?
-///
-/// SecretSpec says `Secret 'API_TOKEN' not found` for both a name it does
-/// not declare and one declared with no value, and both are misses: this
-/// store does not hold it, so the chain carries on.
-///
-/// MATCHED ON THE WHOLE PHRASE, NOT ON "not found". SecretSpec also says
-/// `Provider backend 'keyring' not found`, which is a store that could
-/// not answer at all - and reading that as a miss is the worst failure
-/// this library has, because the chain then falls through to a weaker
-/// store without saying so. The key is required to appear, so the two
-/// cannot be confused.
 fn secretspecmiss(why: &str, key: &str) -> bool {
     why.contains(&format!("Secret '{}' not found", key))
 }

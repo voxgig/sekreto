@@ -1,9 +1,3 @@
-//! Writes this port's committed vault into test/fixture/.
-//!
-//! Run once when the format changes, never as part of a build:
-//! `cargo run -p voxgig_sekreto_minivault --example writefixture -- <path>`.
-//! The passphrases are published and the file holds no real secret; see
-//! test/fixture/README.md.
 use voxgig_sekreto_minivault::*;
 
 fn main() {

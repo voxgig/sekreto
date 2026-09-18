@@ -1,18 +1,3 @@
-// RUN: make test
-// RUN-SOME: cargo test --test plugin builtins
-//
-// THE PLUGIN SEAM, FROM THE CORE'S SIDE: what a chain of built-ins can do
-// with no plugin loaded, how a kind that was not passed in is refused, how
-// a custom kind joins, and what crosses the boundary when a provider
-// refuses its own configuration.
-//
-// This file cannot import a plugin, and that is not discipline - it is
-// Cargo. Every plugin crate depends on `voxgig_sekreto`, so naming one
-// here would be a dependency cycle and the build would stop. The plugins
-// are exercised from their own side, in plugins/all/tests/plugins.rs.
-//
-// The conformance suite can see none of this: it hands every plugin to
-// every chain it builds, so it can never notice a missing one.
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
@@ -118,9 +103,6 @@ fn a_kind_that_was_not_passed_in_is_refused_naming_the_fix() {
     );
 }
 
-// Two providers MAY share a store name - a directed read walks both, and
-// the spec pins it - but an instance ref may not, so the second gets a
-// numbered tag from the host and keeps its store name.
 #[test]
 fn a_repeated_store_name_keeps_the_store_and_numbers_the_instance() {
     let mut secrets = Sekreto::new(Options {
@@ -234,12 +216,6 @@ fn a_sekreto_error_raised_in_define_comes_back_out_as_itself() {
     }
 }
 
-// ...and any other error is not sekreto's to rewrite: it surfaces as the
-// host reports it, naming the instance and the cause.
-//
-// In this port `providerplugin` cannot produce one - its `make` returns a
-// SekretoError or nothing - so the case is reachable only for a definition
-// built by hand, which is exactly the definition sekreto did not write.
 #[test]
 fn any_other_error_raised_in_define_is_the_hosts_report_of_it() {
     let mut broken = Definition::named("broken");
@@ -263,11 +239,6 @@ fn any_other_error_raised_in_define_is_the_hosts_report_of_it() {
     }
 }
 
-// A definition that is not a provider plugin at all - it loads, it
-// activates, it exports nothing - is refused by name. Python's twin of
-// this test passes a MODULE where a definition belongs; here the type
-// system refuses that outright, and what remains checkable is a definition
-// that is not one of ours.
 #[test]
 fn a_definition_that_is_not_a_provider_plugin_is_refused() {
     let err = Sekreto::new(Options {
@@ -281,9 +252,6 @@ fn a_definition_that_is_not_a_provider_plugin_is_refused() {
     assert_eq!("sekreto: plugin hollow exported no provider", err.message());
 }
 
-// A plugin that names a built-in kind replaces it: that is how a host
-// substitutes an implementation, and never an accident, because the four
-// names are documented.
 #[test]
 fn a_plugin_may_replace_a_built_in_kind() {
     struct Replaced;
@@ -426,10 +394,6 @@ fn the_core_names_no_plugin_and_reaches_no_platform() {
         }
         files += 1;
 
-        // CODE, not prose: the doc comments here point at the plugins on
-        // purpose - that is how a reader finds them - and a scan that
-        // could not tell a `use` from a sentence would have to choose
-        // between being wrong and being useless.
         let text = std::fs::read_to_string(&path).expect("source");
         let code: String = text
             .lines()

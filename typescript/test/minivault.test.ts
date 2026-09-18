@@ -1,14 +1,3 @@
-// RUN: npm test
-//
-// The mini vault, from both sides: the store a chain reads, and the
-// programmatic API a plugin definition can publish beside it.
-//
-// The vault is not in spec/sekreto.json and cannot be until every port
-// ships the kind. The spec runs against all twenty-three of them, so an
-// entry naming `minivault` would fail twenty-one ports that have no such
-// provider. What the shared corpus would have carried is here instead,
-// plus the one thing it could not carry either way: a file written by
-// this port and read by another, pinned by test/fixture/minivault.skmv.
 
 import { before, describe, test } from 'node:test'
 import assert from 'node:assert'
@@ -41,7 +30,6 @@ function fresh(): MiniVault {
   return createvault({ file: vaultpath(), passphrase: MASTER, iterations: ROUNDS })
 }
 
-/** Where the committed vaults live, found by walking up. */
 function fixturedir(): string {
   let dir = __dirname
 
@@ -182,7 +170,6 @@ describe('minivault', () => {
     assert.equal(ci.get('db.pass'), undefined)
     assert.equal(ci.has('db.pass'), false)
 
-    // And it is never told the name exists.
     assert.deepEqual(ci.list(), ['api.token'])
   })
 
@@ -330,8 +317,6 @@ describe('minivault', () => {
     assert.throws(() => openvault({ file: vault.file(), key: 'ci', passphrase: 'ci-pass' }).list(),
       { message: 'sekreto: minivault: no such key: ci' })
 
-    // The ciphertext changed, which is the part that makes a copy of the
-    // old file useless for anything written after this point.
     assert.notDeepEqual(readFileSync(vault.file()), before)
 
     // The master passphrase is unchanged: rotating is not a password
@@ -405,12 +390,6 @@ describe('minivault', () => {
       { message: 'sekreto: minivault: a vault needs a passphrase' })
   })
 
-  // An EMPTY key is no key, so it means `master`. It is not a contrived
-  // case: the CLI reads SEKRETO_VAULT_KEY, and an unset shell variable
-  // expands to the empty string rather than to nothing at all. A port
-  // whose null-coalescing operator answers for null alone - PHP's `??`,
-  // Java's `null ==`, C#'s `??`, Kotlin's `?:` - reads it as a key id of
-  // its own and refuses the handle.
   test('an empty key means the master key', () => {
     const vault = fresh()
     vault.set('api.token', 'tok01')
@@ -432,12 +411,6 @@ describe('minivault', () => {
 
   // --- the format, across ports ---------------------------------------
 
-  // EVERY COMMITTED VAULT, not only this port's. A suite that reads only
-  // the vault its own port wrote proves the reader agrees with the
-  // writer beside it — which a port whose serializer and parser share a
-  // mistake satisfies perfectly. The others were written by other ports,
-  // so reading them here is the canonical checking somebody else's
-  // bytes.
   for (const name of fixtures()) {
   test('the committed fixture reads, key by key: ' + name, () => {
     const file = fixture(name)
@@ -548,7 +521,6 @@ describe('minivault', () => {
     api.set('added.here', 'through the host')
     api.grant({ key: 'ci', passphrase: 'ci-pass', names: ['added.here'], iterations: ROUNDS })
 
-    // The file is what changed, so a chain built afterwards sees it.
     const after = new Sekreto({
       plugins: [minivault],
       providers: [{ kind: 'minivault', file: vault.file(), vaultkey: 'ci', passphrase: 'ci-pass' }],
@@ -589,11 +561,6 @@ describe('minivault', () => {
     assert.equal(vaultof(secrets, 'ops').file(), two.file())
   })
 
-  // NAMING A STORE THAT IS NOT THERE RAISES, which is the rule the whole
-  // library follows. `host.exports` falls back to the unqualified alias
-  // when an exact ref misses, so asking for `minivault` in a chain whose
-  // only vault is named `app` used to hand back the `app` vault — and
-  // then write to it.
   test('an explicit store name must exist rather than falling back', () => {
     const vault = fresh()
     vault.set('api.token', 'first')
@@ -626,12 +593,6 @@ describe('minivault', () => {
 
   // --- configuration --------------------------------------------------
 
-  // A provider that refuses its own configuration raises a SekretoError
-  // from inside `define`, and it must come back out of the host as
-  // itself rather than wrapped as plugin_define_failed. The definition
-  // is written out by hand rather than built by `providerplugin`,
-  // because it publishes two exports, so this is the half of
-  // `providerplugin` it has to reproduce.
   test('a chain missing the file or the passphrase is refused at construction', () => {
     let caught: any
     try {
@@ -722,9 +683,6 @@ describe('minivault', () => {
       { message: 'sekreto: minivault: no such key: ci' })
   })
 
-  // The same id, re-granted under a different passphrase, is a different
-  // key wearing the name. A cached ring would have kept the old one
-  // working; the file's ring is what decides.
   test('a re-granted key id does not keep the old passphrase working', () => {
     const vault = fresh()
 
@@ -762,11 +720,8 @@ describe('minivault', () => {
       () => vault.grant({ key: long, passphrase: 'p', names: [], iterations: ROUNDS }),
       { message: /key id is longer than 255 bytes/ })
 
-    // The vault it would have destroyed is untouched.
     assert.equal(vault.get('api.token'), 'tok01')
 
-    // 255 bytes is the limit, not 255 characters: a multi-byte id counts
-    // its bytes.
     assert.throws(
       () => vault.grant({ key: 'é'.repeat(128), passphrase: 'p', names: [], iterations: ROUNDS }),
       { message: /key id is longer than 255 bytes/ })

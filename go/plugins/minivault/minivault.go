@@ -1,23 +1,3 @@
-// A mini vault: every secret a project owns, encrypted, in ONE FILE.
-//
-// The store to reach for before there is a vault server. There is
-// nothing to run and nothing to reach over a socket - the whole store is
-// a single binary file - and the same chain that reads it in development
-// reads HashiCorp or AWS in production by changing config, which is the
-// reason sekreto exists.
-//
-// It is a plugin rather than a built-in kind because it needs crypto,
-// which is the line the four built-ins stay behind.
-//
-// THE KEY DECIDES WHAT THE VAULT HOLDS. A master key reads and writes
-// every name and mints restricted keys. A restricted key reads the names
-// it was granted and CANNOT DERIVE ANY OTHER - the restriction is the
-// cryptography rather than a check this code performs, so a copy of the
-// file plus a restricted passphrase yields exactly what was granted and
-// nothing else. What that does and does not protect is set out in
-// DOCS.md under "What the mini vault protects".
-//
-// A port of typescript/plugins/minivault.ts, which is canonical.
 package minivault
 
 import (
@@ -35,17 +15,6 @@ import (
 	"github.com/voxgig/sekreto/go/sekreto"
 )
 
-// THE WRITE LOCK IS PER FILE, NOT PER HANDLE.
-//
-// Each Vault has its own mutex, and two handles on the same file have
-// two of them, so they did not coordinate: both read a snapshot, both
-// wrote, and the second rename discarded the first one's change while
-// reporting success. Keyed by the absolute path, so two handles spelled
-// differently still meet.
-//
-// This is a guarantee WITHIN one process. Two processes still race, and
-// the format's answer to that is the exclusive create and the atomic
-// rename: a reader sees one whole vault or the other, never half of one.
 var (
 	locksmu sync.Mutex
 	locks   = map[string]*sync.Mutex{}
@@ -78,9 +47,7 @@ type KeyInfo struct {
 	Grants []string `json:"grants"`
 }
 
-// GrantSpec mints a restricted key.
 type GrantSpec struct {
-	// Key is the id the new key answers to.
 	Key string
 	// Passphrase is what unwraps it. Nothing else does, and no master can
 	// recover it - a lost restricted passphrase is re-granted, never read
@@ -88,51 +55,21 @@ type GrantSpec struct {
 	Passphrase string
 	// Names the key may read. A name that does not exist yet is allowed
 	// and means what it says: the key reads it once a master writes it.
-	Names []string
-	// Write says whether it may overwrite the values it can read.
-	Write bool
-	// Iterations for this key's PBKDF2, defaulting to the opening
-	// handle's.
+	Names      []string
+	Write      bool
 	Iterations int
 }
 
-// Options open one vault file as one key.
 type Options struct {
-	// File is the vault file.
-	File string
-	// Key is which key to open with. Default MasterKey.
-	Key string
-	// Passphrase unwraps that key.
+	File       string
+	Key        string
 	Passphrase string
 	// Iterations is the PBKDF2 round count used when this handle CREATES
 	// a key. Reading uses what the file records for the key being opened.
 	Iterations int
-	// Create makes the file, with this key as its master, if it is not
-	// there.
-	//
-	// Off by default. A missing vault is far more often a broken
-	// deployment than a new one, and a store that invents itself where a
-	// real vault was meant to be answers every read with a miss.
-	Create bool
+	Create     bool
 }
 
-// ring is what a key holds, as it is stored: EITHER a root key (master)
-// OR a fixed set of derived per-secret keys (restricted).
-//
-// GRANTS IS A POINTER, AND THAT IS THE WHOLE OF A FORMAT BUG THIS ONCE
-// HAD. The asymmetry is the format: a master's ring carries `root` and no
-// `grants`, and a restricted key's carries `grants` - POSSIBLY EMPTY - and
-// no `root`. A plain map with `omitempty` gets the first half right and
-// the second half wrong, because `omitempty` drops an empty map as
-// readily as a nil one: a key granted nothing wrote
-// `{"v":1,"write":false}` where the canonical writes
-// `{"v":1,"write":false,"grants":{}}`, a vault 12 bytes shorter than
-// every other port's for the same input.
-//
-// It read back identically everywhere, because an absent `grants` parses
-// as empty - which is why no round trip saw it and why the fixtures could
-// not: none of them has a key granted nothing. The bytes are the
-// contract, so the pointer makes the empty map survive while nil omits.
 type ring struct {
 	V      int                `json:"v"`
 	Write  bool               `json:"write"`
@@ -161,13 +98,6 @@ type meta struct {
 	Grants []string `json:"grants"`
 }
 
-// Vault is a handle on one vault file, opened as ONE key.
-//
-// Every method answers as that key: List shows the names it may read,
-// Get answers for those and misses on the rest, and the master-only
-// methods refuse for any other key. Nothing is read or derived until the
-// first call that needs the file, so putting a vault in a chain costs no
-// key derivation until a secret is actually wanted.
 type Vault struct {
 	file       string
 	key        string
@@ -208,11 +138,6 @@ func sameseal(left *sealed, right *sealed) bool {
 	return bytes.Equal(left.IV, right.IV) && bytes.Equal(left.Blob, right.Blob)
 }
 
-// Open a vault file as one key.
-//
-// The handle is lazy. Nothing is read, and no passphrase is stretched,
-// until a method needs the file - so a chain of ten providers costs ten
-// objects rather than ten PBKDF2 runs.
 func Open(options *Options) (*Vault, error) {
 	if nil == options || "" == options.File {
 		return nil, fail("a vault needs a file")
@@ -256,9 +181,6 @@ func Create(options *Options) (*Vault, error) {
 		return nil, err
 	}
 
-	// No os.Stat first: the check and the write would be two steps, and
-	// putnew refuses an existing file in ONE, which is what makes two
-	// processes racing to create a vault leave one vault.
 	fresh, err := newvault(vault.key, vault.passphrase, vault.iterations)
 	if nil != err {
 		return nil, err
@@ -271,18 +193,10 @@ func Create(options *Options) (*Vault, error) {
 	return vault, nil
 }
 
-// File is the vault file this handle reads.
 func (vault *Vault) File() string { return vault.file }
 
-// Key is the key id this handle opens with.
 func (vault *Vault) Key() string { return vault.key }
 
-// Info derives the key and reads the file NOW rather than at first use.
-//
-// A COPY. Set asks Info.Write whether this key may write, so handing the
-// caller the value that answer lives in let it flip its own permission:
-// `info, _ := v.Info(); info.Write = true` turned a read-only key into a
-// writing one. Authorization state does not leave this struct.
 func (vault *Vault) Info() (*KeyInfo, error) {
 	vault.mu.Lock()
 	defer vault.mu.Unlock()
@@ -295,7 +209,6 @@ func (vault *Vault) Info() (*KeyInfo, error) {
 	return copyinfo(info), nil
 }
 
-// Close forgets the derived keys. The next call opens again.
 func (vault *Vault) Close() {
 	vault.mu.Lock()
 	defer vault.mu.Unlock()
@@ -306,19 +219,12 @@ func (vault *Vault) Close() {
 	vault.ring = nil
 }
 
-// --- reading the file ------------------------------------------------
-
 func (vault *Vault) bytes() ([]byte, error) {
 	raw, err := os.ReadFile(vault.file)
 	if nil == err {
 		return raw, nil
 	}
 
-	// A vault is configured deliberately, with a key. Its absence is a
-	// broken deployment and never "no secrets here": answering a miss
-	// would send the chain on to a weaker store, which is the failure
-	// mode this library most has to avoid. Create is the caller saying
-	// the opposite, in writing.
 	if os.IsNotExist(err) {
 		if !vault.create {
 			return nil, fail("no vault file: " + vault.file)
@@ -412,7 +318,6 @@ func (vault *Vault) load() (*vaultFile, *KeyInfo, error) {
 	return file, vault.info, nil
 }
 
-// rootof is the root key, or a refusal naming what needed it.
 func (vault *Vault) rootof(what string) ([]byte, error) {
 	if nil == vault.root {
 		return nil, fail(what + " needs a master key, and " + vault.key + " is restricted")
@@ -428,16 +333,6 @@ func (vault *Vault) keyfor(name string) []byte {
 	return vault.grants[name]
 }
 
-// save replaces the file rather than editing it in place. The rename is
-// what makes a concurrent reader see either the old file or the new one,
-// so a write interrupted halfway leaves a vault rather than wreckage.
-//
-// THE TEMPORARY IS RANDOM AND EXCLUSIVE. `<vault>.<pid>.tmp` is a name
-// anyone can predict, and os.WriteFile FOLLOWS a symlink, so anyone who
-// could write the vault's directory could point that name at another
-// file and have the next save truncate it. O_EXCL refuses an existing
-// path and will not follow a symlink to create one, and the random
-// suffix stops two writers colliding on the name.
 func (vault *Vault) save(file *vaultFile) error {
 	suffix, err := random(8)
 	if nil != err {
@@ -474,7 +369,6 @@ func (vault *Vault) save(file *vaultFile) error {
 
 // --- reading secrets -------------------------------------------------
 
-// List is the names this key can read, sorted.
 func (vault *Vault) List() ([]string, error) {
 	vault.mu.Lock()
 	defer vault.mu.Unlock()
@@ -527,11 +421,6 @@ func (vault *Vault) Get(name string) (string, bool, error) {
 
 	key := vault.keyfor(name)
 	if nil == key {
-		// OUTSIDE THE GRANT IS A MISS, deliberately. The vault answers as
-		// the key that opened it, so a name this key cannot read is a
-		// name this store does not hold for this caller - the same answer
-		// a stranger's vault gives, and the one that makes a restricted
-		// key in front of a broader store a workable chain.
 		return "", false, nil
 	}
 
@@ -548,7 +437,6 @@ func (vault *Vault) Get(name string) (string, bool, error) {
 	return string(plain), true, nil
 }
 
-// Has says whether this key can read that name.
 func (vault *Vault) Has(name string) (bool, error) {
 	_, has, err := vault.Get(name)
 	return has, err
@@ -614,7 +502,6 @@ func (vault *Vault) Set(name string, value string) error {
 	return vault.save(file)
 }
 
-// Remove drops a name. Master only.
 func (vault *Vault) Remove(name string) error {
 	if err := sekreto.CheckName(name); nil != err {
 		return err
@@ -661,7 +548,6 @@ func (vault *Vault) Remove(name string) error {
 
 // --- keys ------------------------------------------------------------
 
-// Keys is every key in the file, with what it may do. Master only.
 func (vault *Vault) Keys() ([]*KeyInfo, error) {
 	vault.mu.Lock()
 	defer vault.mu.Unlock()
@@ -704,7 +590,6 @@ func (vault *Vault) Keys() ([]*KeyInfo, error) {
 	return out, nil
 }
 
-// Grant mints a restricted key. Master only.
 func (vault *Vault) Grant(spec *GrantSpec) error {
 	// Every write on this file, from any handle in this process,
 	// serializes here; see lockfor.
@@ -807,12 +692,6 @@ func (vault *Vault) Revoke(key string) error {
 	return vault.save(file)
 }
 
-// Rotate takes a new root key, re-encrypts every value under it, and
-// DROPS EVERY OTHER KEY. Master only.
-//
-// The other keys go because they must: their rings are sealed under
-// passphrases this process does not have, so there is no way to hand
-// them keys they can unwrap. Re-grant afterwards.
 func (vault *Vault) Rotate() error {
 	// Every write on this file, from any handle in this process,
 	// serializes here; see lockfor.
@@ -834,8 +713,6 @@ func (vault *Vault) Rotate() error {
 
 	iters := file.key(vault.key).Iters
 
-	// Read everything out under the old root before anything changes:
-	// once the root is replaced the old derived keys are unreachable.
 	oldnamekey := mac(oldroot, labelNames)
 	held := [][2]string{}
 
@@ -887,9 +764,6 @@ func (vault *Vault) Rotate() error {
 		return err
 	}
 
-	// SAVE FIRST, adopt second. A handle holding the new root over a file
-	// that still holds the old one reads nothing and says the vault is
-	// damaged, which is the wrong story about a failed write.
 	if err := vault.save(&vaultFile{Keys: []*keyRecord{fresh}, Entries: entries}); nil != err {
 		return err
 	}
@@ -924,7 +798,6 @@ func sealkey(
 	return &keyRecord{ID: id, Salt: salt, Iters: iters, Ring: sealedring, Meta: sealedmeta}, nil
 }
 
-// newvault is a new vault: one master key, no secrets.
 func newvault(keyid string, passphrase string, iterations int) (*vaultFile, error) {
 	root, err := random(keyLen)
 	if nil != err {
@@ -941,15 +814,6 @@ func newvault(keyid string, passphrase string, iterations int) (*vaultFile, erro
 	return &vaultFile{Keys: []*keyRecord{record}, Entries: []*entryRecord{}}, nil
 }
 
-// putnew writes a vault file that is not there yet, and REFUSES one that
-// is.
-//
-// Straight to the target under O_EXCL rather than through a temporary
-// and a rename. Rename REPLACES its destination, so two processes
-// creating the same vault both succeeded and the second discarded the
-// first one's secrets; an os.Stat beforehand only narrows that window.
-// There is nothing to lose by writing the target directly here, because
-// there is no file to damage: either this call creates it or it fails.
 func putnew(file string, vault *vaultFile) error {
 	handle, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if nil != err {
@@ -986,10 +850,6 @@ func unb64(text string, what string) ([]byte, error) {
 	return raw, nil
 }
 
-// tojson is json.Marshal, and deliberately not WriteJSON: these bytes
-// are sealed and then parsed again inside this process, so the HTML
-// escaping WriteJSON turns off is unobservable here. WriteJSON is for
-// what LEAVES the process.
 func tojson(value any) []byte {
 	raw, err := json.Marshal(value)
 	if nil != err {
@@ -1000,12 +860,6 @@ func tojson(value any) []byte {
 
 // --- the provider ----------------------------------------------------
 
-// Provider reads a vault as one store in a chain.
-//
-// The provider is the READ half and nothing more: a chain resolves
-// secrets, and writing one is a deliberate act with an API of its own.
-// That API is the same handle, reached with VaultOf off a chain or built
-// directly with Open.
 type Provider struct {
 	Vault *Vault
 }
@@ -1022,19 +876,6 @@ func (provider *Provider) Describe() string {
 // the `provider` key every kind publishes.
 const VaultExport = "vault"
 
-// Plugin is the `minivault` provider kind, as a voxgig/plugin definition.
-//
-// Written out rather than built by sekreto.ProviderPlugin, because this
-// definition publishes TWO exports: `provider`, the read half every kind
-// publishes, and `vault`, the programmatic API. voxgig/plugin's exports
-// are how a definition offers an application more than the host's own
-// vocabulary, and a store that can only be read is half a vault.
-//
-// The SekretoError wrapping is what ProviderPlugin would have done:
-// plugin wraps a code-less error returned from Define as
-// `plugin_define_failed`, and keeps one that already carries a code, so a
-// refusal of this provider's own configuration travels under
-// `sekreto_error` and comes back out of the host as itself.
 var Plugin = plugin.Definition{
 	Name: "minivault",
 	Define: func(inst *plugin.Inst) error {
@@ -1074,17 +915,6 @@ func wrap(inst *plugin.Inst, err error) error {
 		map[string]any{"ref": inst.Ref(), "cause": serr.Message})
 }
 
-// VaultOf is the vault behind a store in a chain, as its programmatic
-// API.
-//
-// Host() is the voxgig/plugin host the chain is made of, and a
-// definition's exports are readable off it by ref. This is the one call
-// that turns a store into an API, and it lives here rather than on
-// Sekreto because the core knows no plugin.
-//
-// With no store named, the unqualified alias answers: one vault in the
-// chain resolves whatever it is called, and two raise rather than
-// picking one.
 func VaultOf(sek *sekreto.Sekreto, store string) (*Vault, error) {
 	if "" == store {
 		found, err := sek.Host().Exports("minivault/" + VaultExport)
@@ -1098,13 +928,6 @@ func VaultOf(sek *sekreto.Sekreto, store string) (*Vault, error) {
 		return vault, nil
 	}
 
-	// A NAMED STORE MUST EXIST, and the alias must not stand in for it.
-	// Host().Exports falls back to the alias when the exact ref misses,
-	// so asking for `minivault` in a chain whose only vault is named
-	// `app` used to hand back the `app` vault - and then write to it.
-	// Naming a store that is not there raises, which is the rule the
-	// whole library follows: Try already means "may not have it", so it
-	// cannot also mean "may not exist".
 	ref := "minivault"
 	if "minivault" != store {
 		ref = "minivault$" + store

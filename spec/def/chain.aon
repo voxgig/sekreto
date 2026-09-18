@@ -1,13 +1,4 @@
 
-# Describing a chain: `sources` and `stores`.
-#
-# `sources` lists every source in order with enough configuration detail to
-# tell two instances of the same backend apart — it is what a diagnostic
-# dump prints. `stores` lists the addressable NAMES instead: duplicates
-# collapse, because a name is what `getfrom` takes.
-#
-# Both are pure functions of the chain description, so neither contacts a
-# backend and both are safe to run offline.
 
 
 # kind, plus whatever distinguishes this instance from another of the same
@@ -71,8 +62,6 @@ sources: set: [
 ]
 
 
-# The addressable names. A source's name defaults to its kind, so two
-# unnamed sources of one kind collapse to a single entry.
 stores: set: [
   {
     id: 'stores#default', doc: true
@@ -97,8 +86,6 @@ stores: set: [
     out: [ 'local', 'shared' ]
   }
 
-  # Two unnamed sources of the same kind are one addressable store — note
-  # this is where `stores` and `sources` disagree, deliberately.
   {
     in: {
       chain: [

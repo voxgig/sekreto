@@ -4,12 +4,6 @@ import { ProviderSpec, Provider, SekretoError, envkey, providerplugin } from '..
 import { checkaddr } from '../src/provider/addr'
 import { fetchjson } from './httpjson'
 
-/** Doppler.
- *
- * The whole config is downloaded once - Doppler's own bulk endpoint -
- * and answered from memory, like a remote .env: `api.token` is the
- * `API_TOKEN` entry. A service token is config-scoped, so project and
- * config are only needed with broader tokens. */
 export function dopplerprovider(options?: {
   token?: string
   project?: string

@@ -1,8 +1,3 @@
-//! Minimal JSON support for sekreto.
-//!
-//! sekreto adds no third-party dependencies, so it carries just enough JSON
-//! to read a vault's answer and write the CLI's own line of output. It is
-//! deliberately not a general-purpose library.
 
 use std::collections::BTreeMap;
 
@@ -39,7 +34,6 @@ impl Json {
     }
 }
 
-/// Render a number without a trailing `.0`, so 5.0 prints as `5`.
 pub fn numstr(value: f64) -> String {
     if value.is_finite() && value == value.trunc() && value.abs() < 1e15 {
         return format!("{}", value as i64);

@@ -8,12 +8,6 @@ use voxgig_sekreto::{checkaddr, checkname, providerplugin, Answer, Provider, Sek
 use voxgig_sekreto_httpjson::json::Json;
 use voxgig_sekreto_httpjson::{fetchjson, http, trimslash};
 
-/// 1Password, through a Connect server.
-///
-/// The item titled `api.token` (titles keep their dots), in the named
-/// vault. The value is the field with purpose PASSWORD, or the field
-/// labelled `value`. A vault that cannot be found is an error - config
-/// names it, so its absence is a broken store, not a missing secret.
 #[derive(Default)]
 pub struct OnePasswordProvider {
     pub addr: String,

@@ -1,14 +1,3 @@
-//! The mini vault, from both sides: the store a chain reads, and the
-//! programmatic API a plugin definition can publish beside it.
-//!
-//! The vault is not in spec/sekreto.json and cannot be until every port
-//! ships the kind. The spec runs against all twenty-three of them, so an
-//! entry naming `minivault` would fail the ports that have no such
-//! provider. What the shared corpus would have carried is here instead,
-//! plus the one thing it could not carry either way: a file written by
-//! this port and read by another, pinned by the vaults in test/fixture.
-//!
-//! A port of typescript/test/minivault.test.ts.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
@@ -25,10 +14,6 @@ const ROUNDS: u32 = 1000;
 
 static COUNT: AtomicUsize = AtomicUsize::new(0);
 
-/// The process id is in the name because cargo runs these in threads of
-/// ONE process but leaves the directory behind between runs: a fixed name
-/// plus a counter that restarts at zero collides with the last run's
-/// files, and `createvault` refuses an existing path by design.
 fn work() -> PathBuf {
     let dir = std::env::temp_dir().join(format!("sekreto-minivault-rs-{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("work directory");
@@ -165,9 +150,6 @@ fn the_file_is_binary_and_names_nothing_in_plaintext() {
     let raw = std::fs::read(v.file()).expect("read");
     assert_eq!(b"SKMV", &raw[0..4]);
 
-    // NOT ONE OF THESE IS IN THE FILE. The key id is plaintext by design;
-    // the secret's name and its value are not, and neither is the
-    // passphrase that unwrapped them.
     for secret in ["api.token", "tok01", MASTER] {
         assert!(
             !raw.windows(secret.len()).any(|held| held == secret.as_bytes()),
@@ -353,17 +335,6 @@ fn a_repeated_key_id_is_refused() {
     );
 }
 
-/// A RESTRICTED KEY GRANTED NOTHING STILL WRITES A GRANTS MAP, and the
-/// only evidence is the file's length.
-///
-/// The asymmetry is the format: a master's ring carries `root` and no
-/// `grants`, a restricted key's carries `grants` - possibly empty - and no
-/// `root`. A writer that drops an empty map produces a vault 12 bytes
-/// shorter than every other port's, which reads back identically because
-/// an absent `grants` parses as empty, and which no fixture can catch
-/// because not one of them has a key granted nothing. Every length in the
-/// format is fixed or derived, so the size IS deterministic for a given
-/// input, and 401 is what typescript writes.
 #[test]
 fn a_key_granted_nothing_still_writes_a_grants_map() {
     let file = vaultpath();
@@ -558,9 +529,6 @@ fn a_key_id_longer_than_the_format_allows() {
     assert_eq!(1, v.keys().expect("keys").len());
 }
 
-/// NOTHING TO FLIP: `VaultKeyInfo` is a value, so the defect the review
-/// round found in the canonical - a caller flipping its own `write` bit -
-/// changes a copy and nothing the vault reads.
 #[test]
 fn the_info_a_caller_gets_cannot_change_what_the_key_may_do() {
     let v = fresh();
@@ -594,8 +562,6 @@ fn a_revoked_key_stops_reading() {
 
     v.revoke("ci").expect("revoke");
 
-    // The live file no longer holds the key, and a handle that answered
-    // from memory here would make `revoke` a suggestion.
     holds("after", "no such key: ci", &refusal("after", ci.get("api.token")));
 }
 
@@ -611,8 +577,6 @@ fn a_re_granted_key_id() {
     v.revoke("ci").expect("revoke");
     v.grant(&grantof("ci", "second-passphrase", &["api.token"], false)).expect("grant");
 
-    // SAME ID, DIFFERENT KEY. The handle re-derives because the sealed
-    // ring changed, and the old passphrase does not unwrap the new one.
     holds(
         "the old passphrase",
         "wrong passphrase for key ci, or a damaged vault",
@@ -633,15 +597,6 @@ fn close_forgets_the_derived_keys() {
     assert_eq!("tok01", valueof(&v, "api.token"));
 }
 
-/// TWO HANDLES ON ONE FILE, WRITING AT ONCE, LOSE NOTHING. Each Vault has
-/// its own snapshot, so without the shared per-path lock both threads
-/// finish `load` before either saves and the second rename discards the
-/// first one's secret while reporting success. DOCS.md promises this
-/// within one process.
-///
-/// A `Vault` is `Rc` and never crosses a thread, so each thread opens its
-/// own handle - which is exactly the case the lock exists for: what races
-/// is the FILE, not the handle.
 #[test]
 fn two_handles_writing_at_once_lose_nothing() {
     let v = fresh();

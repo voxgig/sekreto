@@ -1,23 +1,3 @@
-// THE FULL SET - every plugin this library ships, in one import.
-//
-// It exists for the callers that genuinely want all eleven kinds: the CLI,
-// the conformance suite, an app whose chain is decided at run time.
-//
-//	secrets, err := sekreto.New(&sekreto.Options{
-//	    Plugins:   plugins.All(),
-//	    Providers: chain,
-//	})
-//
-// IT IS ALSO THE THING TO AVOID IF YOU CARE ABOUT SIZE. Importing this
-// package links every plugin - AWS request signing and seven HTTP vault
-// clients included - which is the cost the core/plugin split exists to
-// remove. A lean consumer imports the kinds it actually configures, each
-// from its own package:
-//
-//	import "github.com/voxgig/sekreto/go/plugins/hashicorp"
-//	Plugins: []plugin.Definition{hashicorp.Plugin}
-//
-// See docs/design/plugin-providers.md.
 package plugins
 
 import (

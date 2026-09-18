@@ -12,12 +12,6 @@ import (
 	"github.com/voxgig/sekreto/go/sekreto"
 )
 
-// Provider reads Doppler.
-//
-// The whole config is downloaded once - Doppler's own bulk endpoint - and
-// answered from memory, like a remote .env: api.token is the API_TOKEN
-// entry. A service token is config-scoped, so project and config are only
-// needed with broader tokens.
 type Provider struct {
 	Token   string
 	Project string

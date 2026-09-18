@@ -40,8 +40,6 @@ func TestTheFullSetHoldsEveryKind(t *testing.T) {
 	}
 }
 
-// Naming a kind is not enough: a kind can be in the catalog and still
-// fail to build. Construction is what the CLI does before any network.
 func TestEveryKindBuildsFromASpec(t *testing.T) {
 	all := append(append([]string{}, sekreto.Kinds.Builtin...), kinds...)
 	sort.Strings(all)
@@ -95,8 +93,6 @@ func TestOnePluginIsEnough(t *testing.T) {
 		t.Fatalf("got %q", value)
 	}
 
-	// The plugin host is what the chain is made of, and it reads like
-	// the chain: the kind, or kind$store for a named store.
 	list := sek.Host().List()
 	if 2 != len(list) || plugin.StatusLive != list["memory"] || plugin.StatusLive != list["hashicorp$prod"] {
 		t.Fatalf("list: %v", list)
@@ -105,7 +101,6 @@ func TestOnePluginIsEnough(t *testing.T) {
 		t.Fatalf("catalog: %v", sek.Catalog().Names())
 	}
 
-	// ...and a kind that was not passed in is refused, naming the fix.
 	_, err = sekreto.New(&sekreto.Options{
 		Plugins:   []plugin.Definition{hashicorp.Plugin},
 		Providers: []*sekreto.ProviderSpec{{Kind: "doppler", Token: "t"}},
