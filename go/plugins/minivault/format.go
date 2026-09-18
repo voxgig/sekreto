@@ -1,36 +1,3 @@
-// The mini vault's file format, and the key hierarchy over it.
-//
-// A port of typescript/plugins/minivault.ts, which is canonical. The
-// bytes are the contract: a vault written by any port is read by every
-// other, and testdata/fixture.skmv pins that rather than leaving it to
-// agreement.
-//
-//	magic       4   'SKMV'
-//	version     1   Format
-//	kdf         1   1 = PBKDF2-HMAC-SHA256
-//	cipher      1   1 = AES-256-GCM
-//	reserved    1   0
-//	keycount    4   uint32
-//	per key:
-//	  id        1 + bytes      the key id, PLAINTEXT
-//	  salt      1 + bytes
-//	  iters     4              PBKDF2 rounds for this key
-//	  ring      1 + iv, 4 + bytes    sealed under the passphrase
-//	  meta      1 + iv, 4 + bytes    sealed under the vault's meta key
-//	entrycount  4   uint32
-//	per entry:
-//	  id        1 + bytes      the blinded lookup id
-//	  name      1 + iv, 4 + bytes    sealed under the vault's name key
-//	  value     1 + iv, 4 + bytes    sealed under that secret's own key
-//
-// Integers are big-endian and every length precedes its bytes, so the
-// file is written with the same two primitives it is read with.
-//
-// NOTHING OUTSIDE A KEY RECORD IS PLAINTEXT. Secret names are sealed,
-// and an entry is addressed by a blinded id derived from its own key, so
-// a restricted key finds what it was granted without the file ever
-// naming the rest. What the file does show anyone is the key ids and how
-// many secrets there are.
 package minivault
 
 import (
@@ -94,13 +61,6 @@ func fail(text string) error {
 	return sekreto.Fail("sekreto: minivault: " + text)
 }
 
-// idMax is the largest key id the format can record.
-//
-// `small` writes a length in ONE byte. A longer id wrapped that byte and
-// the writer then appended the whole thing, so every field after it
-// shifted: a Grant with a 300-character id replaced a working vault with
-// an unreadable one, and said nothing. Checked where an id is ACCEPTED,
-// so the refusal names the id rather than the file.
 const idMax = 255
 
 func checkid(id string, what string) error {
@@ -125,12 +85,6 @@ func mac(key []byte, text string) []byte {
 	return h.Sum(nil)
 }
 
-// pbkdf2sha256 is PBKDF2 with HMAC-SHA256, in-tree.
-//
-// crypto/pbkdf2 arrived in Go 1.24 and this module targets 1.21, and the
-// no-dependency rule says a missing standard-library piece is written
-// small rather than taken from a package. RFC 8018 section 5.2, with the
-// one-block-at-a-time loop the specification states.
 func pbkdf2sha256(passphrase string, salt []byte, iters int, length int) []byte {
 	out := []byte{}
 	block := make([]byte, 4)
@@ -166,13 +120,6 @@ func kek(passphrase string, salt []byte, iters int) []byte {
 	return pbkdf2sha256(passphrase, salt, iters, keyLen)
 }
 
-// secretkey is the key one named secret's value is encrypted with.
-//
-// DERIVED, never stored, for a master: it holds the root key and so
-// reaches every name, including ones written after it was made. A
-// restricted key holds the derived keys it was granted and nothing that
-// produces another, so every other name is ciphertext to it in exactly
-// the way it is to a stranger.
 func secretkey(root []byte, name string) []byte {
 	return mac(root, aadSecret+name)
 }
@@ -297,13 +244,6 @@ type reader struct {
 	err   error
 }
 
-// take reads `length` bytes, or records the refusal.
-//
-// The bound is checked as a UINT64 against what is left, never by adding
-// it to `at` in int arithmetic. On a 32-bit target a damaged vault can
-// encode a length at or above 0x80000000, which becomes a NEGATIVE int:
-// the slice bound goes backwards and the process panics instead of
-// reporting the damaged file this function exists to report.
 func (read *reader) take64(length uint64) []byte {
 	if nil != read.err {
 		return nil

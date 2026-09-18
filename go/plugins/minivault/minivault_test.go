@@ -1,16 +1,3 @@
-// The mini vault, from both sides: the store a chain reads, and the
-// programmatic API a plugin definition can publish beside it.
-//
-// The vault is not in spec/sekreto.json and cannot be until every port
-// ships the kind. The spec runs against all twenty-three of them, so an
-// entry naming `minivault` would fail twenty-one ports that have no such
-// provider. What the shared corpus would have carried is here instead,
-// plus the one thing it could not carry either way: a file written by
-// the canonical port and read by this one,
-// test/fixture/minivault.skmv.
-//
-// A port of typescript/test/minivault.test.ts.
-
 package minivault_test
 
 import (
@@ -526,8 +513,6 @@ func TestRotateKeepsTheSecretsAndDropsEveryOtherKey(t *testing.T) {
 	_, err = gone.List()
 	refuses(t, err, "sekreto: minivault: no such key: ci")
 
-	// The ciphertext changed, which is the part that makes a copy of the
-	// old file useless for anything written after this point.
 	after, _ := os.ReadFile(vault.File())
 	if bytes.Equal(before, after) {
 		t.Fatal("rotate left the bytes alone")
@@ -664,32 +649,6 @@ func TestCreateMakesTheFileWhenAsked(t *testing.T) {
 
 // --- the format, across ports ------------------------------------------
 
-// BOTH DIRECTIONS, and the first one is the point. A suite that only
-// reads a vault its own port wrote proves the reader agrees with the
-// writer beside it - which a port whose serializer and parser share a
-// mistake satisfies perfectly. `minivault.skmv` was written by the
-// canonical port, so reading it here is this port checking somebody
-// else's bytes; `minivault-go.skmv` is this port's own, and the
-// canonical suite reads it.
-// EVERY committed vault, read off disk rather than listed here. A
-// hard-coded list is one more place to edit when a port lands, and the
-// edit that gets forgotten is the one that makes this suite stop checking
-// the port that just arrived.
-// A RESTRICTED KEY GRANTED NOTHING STILL WRITES A GRANTS MAP, and the
-// only evidence is the file's length.
-//
-// The asymmetry is the format: a master's ring carries `root` and no
-// `grants`, a restricted key's carries `grants` - possibly empty - and no
-// `root`. Go's `omitempty` drops an empty map as readily as a nil one, so
-// this vault used to be 12 bytes shorter than the canonical's for the same
-// input: `{"v":1,"write":false}` where every other port writes
-// `{"v":1,"write":false,"grants":{}}`.
-//
-// It read back identically everywhere, because an absent `grants` parses
-// as empty, so no round trip could see it and the fixtures could not
-// either - none of them has a key granted nothing. Every length in the
-// format is fixed or derived, so the size IS deterministic for a given
-// input, and 401 is what typescript writes.
 func TestAKeyGrantedNothingStillWritesAGrantsMap(t *testing.T) {
 	vault := fresh(t)
 
@@ -865,9 +824,6 @@ func TestARevokedKeyStopsReadingFromAnOpenHandle(t *testing.T) {
 	refuses(t, err, "sekreto: minivault: no such key: ci")
 }
 
-// The same id, re-granted under a different passphrase, is a different
-// key wearing the name. A cached ring would have kept the old one
-// working; the file's ring is what decides.
 func TestAReGrantedKeyIdRefusesTheOldPassphrase(t *testing.T) {
 	vault := fresh(t)
 
@@ -929,7 +885,6 @@ func TestAKeyIdLongerThanTheFormatAllows(t *testing.T) {
 		t.Fatalf("api.token: %q", value)
 	}
 
-	// 255 BYTES, not 255 characters.
 	err = vault.Grant(&minivault.GrantSpec{
 		Key: strings.Repeat("é", 128), Passphrase: "p", Iterations: rounds})
 	if nil == err || !strings.Contains(err.Error(), "key id is longer than 255 bytes") {
@@ -937,10 +892,6 @@ func TestAKeyIdLongerThanTheFormatAllows(t *testing.T) {
 	}
 }
 
-// TWO HANDLES ON ONE FILE SHARE A LOCK. Each Vault has its own mutex, so
-// two of them did not coordinate: both read a snapshot, both wrote, and
-// the second rename discarded the first one's change while reporting
-// success. Run under -race, which is how this port's suite runs.
 func TestTwoHandlesOnOneFileSerializeTheirWrites(t *testing.T) {
 	vault := fresh(t)
 	file := vault.File()
@@ -1134,8 +1085,6 @@ func TestTwoVaultsAreTwoStores(t *testing.T) {
 		t.Fatalf("ops: %q", value)
 	}
 
-	// One vault in the chain, whatever it is called: the unqualified
-	// alias resolves it. Two make it ambiguous rather than lucky.
 	if _, err := minivault.VaultOf(sek, ""); nil == err {
 		t.Fatal("the alias picked one of two")
 	}
@@ -1148,11 +1097,6 @@ func TestTwoVaultsAreTwoStores(t *testing.T) {
 	}
 }
 
-// NAMING A STORE THAT IS NOT THERE RAISES, which is the rule the whole
-// library follows. Host().Exports falls back to the unqualified alias
-// when an exact ref misses, so asking for `minivault` in a chain whose
-// only vault is named `app` used to hand back the `app` vault - and then
-// write to it.
 func TestAnExplicitStoreNameMustExist(t *testing.T) {
 	vault := fresh(t)
 	set(t, vault, "api.token", "first")
@@ -1200,12 +1144,6 @@ func TestAChainWithNoVaultSaysSo(t *testing.T) {
 
 // --- configuration -----------------------------------------------------
 
-// A provider that refuses its own configuration returns a SekretoError
-// from inside Define, and it must come back out of the host as itself
-// rather than wrapped as plugin_define_failed. The definition is written
-// out by hand rather than built by sekreto.ProviderPlugin, because it
-// publishes two exports, so this is the half of ProviderPlugin it has to
-// reproduce.
 func TestAChainMissingTheFileOrThePassphraseIsRefused(t *testing.T) {
 	_, err := sekreto.New(&sekreto.Options{
 		Plugins:   []plugin.Definition{minivault.Plugin},

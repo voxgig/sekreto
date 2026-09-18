@@ -1,30 +1,5 @@
 /* Copyright (c) 2025 Voxgig Ltd, MIT License */
 
-// A mini vault: every secret a project owns, encrypted, in ONE FILE.
-//
-// The store to reach for before there is a vault server. There is nothing
-// to run and nothing to reach over a socket - the whole store is a single
-// binary file - and the same chain that reads it in development reads
-// HashiCorp or AWS in production by changing config, which is the reason
-// sekreto exists.
-//
-// It is a plugin rather than a built-in kind because it needs crypto,
-// which is the line the four built-ins stay behind
-// (docs/design/plugin-providers.md).
-//
-// THE KEY DECIDES WHAT THE VAULT HOLDS. A master key reads and writes
-// every name and mints restricted keys. A restricted key reads the names
-// it was granted and CANNOT DERIVE ANY OTHER - the restriction is the
-// cryptography rather than a check this code performs, so a copy of the
-// file plus a restricted passphrase yields exactly what was granted and
-// nothing else. What that does and does not protect is set out in
-// DOCS.md under "What the mini vault protects", because a store
-// described as more than it is gets deployed as more than it is.
-//
-// node:crypto and node:fs are loaded on first use, like every other
-// platform module a plugin needs: a consumer that configured no
-// minivault never evaluates them, and a runtime without them fails at
-// the point of use, naming what it lacks.
 
 import { PluginError } from '@voxgig/plugin'
 
@@ -45,53 +20,19 @@ function fs(): Fs {
 }
 
 
-// --- the format ------------------------------------------------------
-//
-//   magic       4   'SKMV'
-//   version     1   FORMAT
-//   kdf         1   1 = PBKDF2-HMAC-SHA256
-//   cipher      1   1 = AES-256-GCM
-//   reserved    1   0
-//   keycount    4   uint32
-//   per key:
-//     id        1 + bytes      the key id, PLAINTEXT
-//     salt      1 + bytes
-//     iters     4              PBKDF2 rounds for this key
-//     ring      1 + iv, 4 + bytes    sealed under the passphrase
-//     meta      1 + iv, 4 + bytes    sealed under the vault's meta key
-//   entrycount  4   uint32
-//   per entry:
-//     id        1 + bytes      the blinded lookup id
-//     name      1 + iv, 4 + bytes    sealed under the vault's name key
-//     value     1 + iv, 4 + bytes    sealed under that secret's own key
-//
-// Integers are big-endian, and every length precedes its bytes, so a
-// port writes the file with the same two primitives it reads it with.
-// A file one port writes is read by every other; `test/fixture` pins
-// that with a committed vault rather than with agreement, because a
-// format two implementations merely agree about is one that drifts.
-//
-// NOTHING OUTSIDE A KEY RECORD IS PLAINTEXT. Secret names are sealed,
-// and an entry is addressed by a blinded id derived from its own key,
-// so a restricted key finds the entries it was granted without the file
-// ever naming the rest. What the file does show anyone is the key ids
-// and how many secrets there are.
 
 const MAGIC = 'SKMV'
 const FORMAT = 1
 const KDF_PBKDF2 = 1
 const CIPHER_AESGCM = 1
 
-/** AES-256-GCM: 32-byte keys, 12-byte nonces, 16-byte tags. */
 const KEYLEN = 32
 const IVLEN = 12
 const TAGLEN = 16
 const SALTLEN = 16
 
-/** PBKDF2-HMAC-SHA256 rounds when a caller names none. */
 export const ITERATIONS = 210000
 
-/** The key id a vault gets when a caller names none. */
 export const MASTERKEY = 'master'
 
 // Additional authenticated data. Every blob is bound to its PLACE in the
@@ -114,13 +55,6 @@ function fail(text: string): never {
   throw new SekretoError('sekreto: minivault: ' + text)
 }
 
-/** The largest key id the format can record.
- *
- * `small` writes a length in ONE byte. A longer id wrapped that byte and
- * the writer then appended the whole thing, so every field after it
- * shifted: a `grant` with a 300-character id replaced a working vault
- * with an unreadable one, and said nothing. Checked where an id is
- * ACCEPTED, so the refusal names the id rather than the file. */
 const IDMAX = 255
 
 function checkid(id: string, what: string): string {
@@ -134,24 +68,15 @@ function checkid(id: string, what: string): string {
 }
 
 
-// --- keys ------------------------------------------------------------
 
 function hmac(key: Buffer, text: string): Buffer {
   return crypto().createHmac('sha256', key).update(text, 'utf8').digest()
 }
 
-/** The key-encryption key a passphrase unwraps a ring with. */
 function kek(passphrase: string, salt: Buffer, iters: number): Buffer {
   return crypto().pbkdf2Sync(passphrase, salt, iters, KEYLEN, 'sha256')
 }
 
-/** The key one named secret's value is encrypted with.
- *
- * DERIVED, never stored, for a master: it holds the root key and so
- * reaches every name, including ones written after it was made. A
- * restricted key holds the derived keys it was granted and nothing that
- * produces another, so every other name is ciphertext to it in exactly
- * the way it is to a stranger. */
 function secretkey(root: Buffer, name: string): Buffer {
   return hmac(root, AAD_SECRET + name)
 }
@@ -168,7 +93,6 @@ function random(len: number): Buffer {
 }
 
 
-// --- sealing ---------------------------------------------------------
 
 type Sealed = { iv: Buffer, blob: Buffer }
 
@@ -227,14 +151,11 @@ function unb64(text: any, what: string): Buffer {
 }
 
 
-// --- the file --------------------------------------------------------
 
 type KeyRecord = { id: string, salt: Buffer, iters: number, ring: Sealed, meta: Sealed }
 type EntryRecord = { id: Buffer, name: Sealed, value: Sealed }
 type VaultFile = { keys: KeyRecord[], entries: EntryRecord[] }
 
-/** A cursor, so that every length check is in one place: a truncated
- * vault is refused rather than read as a short one. */
 function reader(bytes: Buffer) {
   let at = 0
 
@@ -329,8 +250,6 @@ function writefile(vault: VaultFile): Buffer {
     sealed(key.meta)
   }
 
-  // SORTED BY ID, which is a blinded value: the file therefore records
-  // nothing about the order secrets were written in.
   const entries = [...vault.entries].sort((left, right) => Buffer.compare(left.id, right.id))
 
   u32(entries.length)
@@ -344,7 +263,6 @@ function writefile(vault: VaultFile): Buffer {
 }
 
 
-// --- what a key is ---------------------------------------------------
 
 /** A detached copy, so that what a caller is handed cannot become what
  * this vault believes. */
@@ -357,8 +275,6 @@ function copyinfo(info: VaultKeyInfo): VaultKeyInfo {
   }
 }
 
-/** What a key may do. `grants` is empty for a master key, which reads
- * and writes every name there is. */
 export type VaultKeyInfo = {
   key: string
   master: boolean
@@ -367,7 +283,6 @@ export type VaultKeyInfo = {
 }
 
 export type GrantSpec = {
-  /** The id the new key answers to. */
   key: string
   /** Its passphrase. Nothing else unwraps it, and no master can recover
    * it - a lost restricted passphrase is re-granted, never read back. */
@@ -375,20 +290,14 @@ export type GrantSpec = {
   /** The names it may read. A name that does not exist yet is allowed
    * and means what it says: the key reads it once a master writes it. */
   names: string[]
-  /** May it overwrite the values it can read? Default false. */
   write?: boolean
-  /** PBKDF2 rounds for this key, defaulting to the opening handle's. */
   iterations?: number
 }
 
 export type VaultOptions = {
-  /** The vault file. */
   file: string
-  /** Which key to open with. Default `master`. */
   key?: string
   passphrase: string
-  /** PBKDF2 rounds used when this call CREATES a key. Reading uses what
-   * the file records for the key being opened. */
   iterations?: number
   /** Make the file, with this key as its master, if it is not there.
    *
@@ -398,36 +307,17 @@ export type VaultOptions = {
   create?: boolean
 }
 
-/** A handle on one vault file, opened as ONE key.
- *
- * Every method answers as that key: `list` shows the names it may read,
- * `get` answers for those and misses on the rest, and the master-only
- * methods refuse for any other key. Nothing is read or derived until the
- * first call that needs the file, so putting a vault in a chain costs no
- * key derivation until a secret is actually wanted. */
 export type MiniVault = {
-  /** The file this handle reads. */
   file: () => string
-  /** The key id this handle opens with. */
   key: () => string
-  /** Derive the key and read the file NOW rather than at first use. */
   open: () => VaultKeyInfo
-  /** Forget the derived keys. The next call opens again. */
   close: () => void
-  /** The names this key can read, sorted. */
   list: () => string[]
   has: (name: string) => boolean
-  /** The value, or undefined when the vault does not hold that name or
-   * this key was not granted it. */
   get: (name: string) => string | undefined
-  /** Write a value. A master writes any name; a restricted key holding
-   * `write` overwrites the names it was granted, and creates none. */
   set: (name: string, value: string) => void
-  /** Drop a name. Master only. */
   remove: (name: string) => void
-  /** Every key in the file, with what it may do. Master only. */
   keys: () => VaultKeyInfo[]
-  /** Mint a restricted key. Master only. */
   grant: (spec: GrantSpec) => void
   /** Drop a key. Master only.
    *
@@ -435,19 +325,11 @@ export type MiniVault = {
    * read, so revoking bars future reads of the LIVE file and `rotate` is
    * what takes a secret back. */
   revoke: (key: string) => void
-  /** A new root key, every value re-encrypted under it, and EVERY OTHER
-   * KEY DROPPED. Master only.
-   *
-   * The other keys go because they must: their rings are sealed under
-   * passphrases this process does not have, so there is no way to hand
-   * them keys they can unwrap. Re-grant afterwards. */
   rotate: () => void
 }
 
 
-// --- creating --------------------------------------------------------
 
-/** A new vault: one master key, no secrets. */
 function newvault(keyid: string, passphrase: string, iterations: number): VaultFile {
   const root = random(KEYLEN)
   const salt = random(SALTLEN)
@@ -469,15 +351,6 @@ function newvault(keyid: string, passphrase: string, iterations: number): VaultF
   }
 }
 
-/** Write a vault file that is not there yet, and REFUSE one that is.
- *
- * Straight to the target under `wx` — `O_CREAT|O_EXCL` — rather than
- * through a temporary and a rename. `rename` REPLACES its destination,
- * so two processes creating the same vault both succeeded and the
- * second discarded the first one's secrets; `existsSync` beforehand
- * only narrows that window. There is nothing to lose by writing the
- * target directly here, because there is no file to damage: either this
- * call creates it or the call fails. */
 function putnew(file: string, vault: VaultFile): void {
   try {
     fs().writeFileSync(file, writefile(vault), { mode: 0o600, flag: 'wx' })
@@ -490,10 +363,7 @@ function putnew(file: string, vault: VaultFile): void {
 }
 
 
-// --- opening ---------------------------------------------------------
 
-/** The ring, as stored: EITHER a root key (master) OR a fixed set of
- * derived per-secret keys (restricted). */
 type Ring = { v: number, write: boolean, root?: string, grants?: Record<string, string> }
 
 /** What a master recorded about a key when it minted it, sealed under
@@ -503,7 +373,6 @@ type Meta = { v: number, master: boolean, write: boolean, grants: string[] }
 
 type Opened = {
   info: VaultKeyInfo
-  /** Present for a master key only. */
   root?: Buffer
   /** The per-name keys this key was granted. Empty for a master, which
    * derives them from the root key instead. */
@@ -515,16 +384,10 @@ type Opened = {
   ring: Sealed
 }
 
-/** Is this the same sealed blob, byte for byte? */
 function sameseal(left: Sealed, right: Sealed): boolean {
   return 0 === Buffer.compare(left.iv, right.iv) && 0 === Buffer.compare(left.blob, right.blob)
 }
 
-/** Open a vault file as one key.
- *
- * The handle is lazy. Nothing is read, and no passphrase is stretched,
- * until a method needs the file - so a chain of ten providers costs ten
- * objects rather than ten PBKDF2 runs. */
 export function openvault(options: VaultOptions): MiniVault {
   const opts = options || ({} as VaultOptions)
   const file = opts.file
@@ -546,11 +409,6 @@ export function openvault(options: VaultOptions): MiniVault {
     try {
       return fs().readFileSync(file)
     } catch (err: any) {
-      // A vault is configured deliberately, with a key. Its absence is a
-      // broken deployment and never "no secrets here": answering a miss
-      // would send the chain on to a weaker store, which is the failure
-      // mode this library most has to avoid. `create` is the caller
-      // saying the opposite, in writing.
       if ('ENOENT' === err.code) {
         if (true !== opts.create) {
           fail('no vault file: ' + file)
@@ -653,16 +511,6 @@ export function openvault(options: VaultOptions): MiniVault {
     }
   }
 
-  /** Read, change, and REPLACE - never edit in place. The rename is what
-   * makes a concurrent reader see either the old file or the new one, so
-   * a write interrupted halfway leaves a vault rather than wreckage.
-   *
-   * THE TEMPORARY IS RANDOM AND EXCLUSIVE. `<vault>.<pid>.tmp` is a name
-   * anyone can predict, so anyone who can write the vault's directory
-   * could put a symlink there and have the next save truncate whatever
-   * it pointed at. `wx` is `O_CREAT|O_EXCL`, which POSIX refuses on a
-   * symlink, and the random suffix stops two writers in one process
-   * colliding on the path. */
   const save = (vault: VaultFile): void => {
     const node = fs()
     const temp = file + '.' + random(8).toString('hex') + '.tmp'
@@ -674,8 +522,6 @@ export function openvault(options: VaultOptions): MiniVault {
       try {
         node.unlinkSync(temp)
       } catch {
-        // The vault is unchanged either way, and the write error is what
-        // the caller needs to be told about.
       }
       fail('cannot write ' + file + ': ' + err.message)
     }
@@ -705,8 +551,6 @@ export function openvault(options: VaultOptions): MiniVault {
           .sort()
       }
 
-      // A restricted key has no name key, so it reports the grants it can
-      // actually find: the vault never tells it what else is in there.
       return open.info.grants
         .filter((name) => undefined !== findentry(vault, open.grants[name]))
         .sort()
@@ -720,11 +564,6 @@ export function openvault(options: VaultOptions): MiniVault {
 
       const key = keyfor(open, name)
       if (undefined === key) {
-        // OUTSIDE THE GRANT IS A MISS, deliberately. The vault answers as
-        // the key that opened it, so a name this key cannot read is a
-        // name this store does not hold for this caller - the same answer
-        // a stranger's vault gives, and the one that makes a restricted
-        // key in front of a broader store a workable chain.
         return undefined
       }
 
@@ -857,8 +696,6 @@ export function openvault(options: VaultOptions): MiniVault {
       const { vault, open } = load()
       rootof(open, 'rotating the vault')
 
-      // Read everything out under the old root before anything changes:
-      // once the root is replaced the old derived keys are unreachable.
       const plain = self.list().map((name) => ({ name, value: self.get(name) as string }))
 
       const root = random(KEYLEN)
@@ -879,9 +716,6 @@ export function openvault(options: VaultOptions): MiniVault {
         { v: FORMAT, write: true, root: b64(root) },
         { v: FORMAT, master: true, write: true, grants: [] })
 
-      // SAVE FIRST, adopt second. A handle holding the new root over a
-      // file that still holds the old one reads nothing and says the
-      // vault is damaged, which is the wrong story about a failed write.
       save({ keys: [fresh], entries })
 
       opened = {
@@ -912,23 +746,13 @@ export function createvault(options: VaultOptions): MiniVault {
   }
   checkid(opts.key || MASTERKEY, 'a vault needs a key id')
 
-  // No `existsSync` first: the check and the write would be two steps,
-  // and `putnew` refuses an existing file in ONE, which is what makes
-  // two processes racing to create a vault leave one vault.
   putnew(opts.file, newvault(opts.key || MASTERKEY, opts.passphrase, opts.iterations || ITERATIONS))
 
   return openvault(opts)
 }
 
 
-// --- the provider ----------------------------------------------------
 
-/** Read a vault as one store in a chain.
- *
- * The provider is the READ half and nothing more: a chain resolves
- * secrets, and writing one is a deliberate act with an API of its own.
- * That API is the same handle, reached with `vaultof` off a chain or
- * built directly with `openvault`. */
 export function providerof(vault: MiniVault): Provider {
   return {
     lookup: (name: string) => vault.get(name),
@@ -936,12 +760,10 @@ export function providerof(vault: MiniVault): Provider {
   }
 }
 
-/** A vault provider from options, for a chain built by hand. */
 export function minivaultprovider(options: VaultOptions): Provider {
   return providerof(openvault(options))
 }
 
-/** The vault options a provider spec describes. */
 function vaultoptions(spec: ProviderSpec): VaultOptions {
   return {
     file: spec.file || '',
@@ -953,25 +775,9 @@ function vaultoptions(spec: ProviderSpec): VaultOptions {
 }
 
 
-// --- the plugin ------------------------------------------------------
 
-/** The export key the vault API is published under, beside the
- * `provider` key every kind publishes. */
 export const VAULT_EXPORT = 'vault'
 
-/** The `minivault` provider kind.
- *
- * Written out rather than built by `providerplugin`, because this
- * definition publishes TWO exports: `provider`, the read half every kind
- * publishes, and `vault`, the programmatic API. voxgig/plugin's exports
- * are how a definition offers an application more than the host's own
- * vocabulary, and a store that can only be read is half a vault.
- *
- * The SekretoError wrapping is what `providerplugin` would have done:
- * plugin wraps a code-less error raised in `define` as
- * `plugin_define_failed`, and keeps one that already carries a code, so
- * a refusal of this provider's own configuration travels under
- * `sekreto_error` and comes back out of the host as itself. */
 export const minivault: Definition = {
   name: 'minivault',
   define: (inst: any) => {
@@ -995,16 +801,6 @@ export const minivault: Definition = {
   },
 }
 
-/** The vault behind a store in a chain, as its programmatic API.
- *
- * `secrets.host` is the voxgig/plugin host the chain is made of, and a
- * definition's exports are readable off it by ref. This is the one line
- * that turns a store into an API, and it lives here rather than on
- * `Sekreto` because the core knows no plugin.
- *
- * With no store named, the unqualified alias answers: one vault in the
- * chain resolves whatever it is called, and two raise rather than
- * picking one. */
 export function vaultof(secrets: { host: any }, store?: string): MiniVault {
   if (undefined === store) {
     const found = secrets.host.exports('minivault/' + VAULT_EXPORT)
@@ -1014,13 +810,6 @@ export function vaultof(secrets: { host: any }, store?: string): MiniVault {
     return found as MiniVault
   }
 
-  // A NAMED STORE MUST EXIST, and the alias must not stand in for it.
-  // `host.exports` falls back to the alias when the exact ref misses, so
-  // asking for `minivault` in a chain whose only vault is named `app`
-  // used to hand back the `app` vault - and then write to it. Naming a
-  // store that is not there raises, which is the rule the whole library
-  // follows: `try` already means "may not have it", so it cannot also
-  // mean "may not exist".
   const ref = 'minivault' === store ? 'minivault' : 'minivault$' + store
 
   if (undefined === secrets.host.instance(ref)) {

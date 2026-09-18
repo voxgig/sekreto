@@ -12,12 +12,6 @@ import (
 	"github.com/voxgig/sekreto/go/sekreto"
 )
 
-// Provider reads 1Password, through a Connect server.
-//
-// The item titled api.token (titles keep their dots), in the named vault.
-// The value is the field with purpose PASSWORD, or the field labelled
-// `value`. A vault that cannot be found is an error - config names it, so
-// its absence is a broken store, not a missing secret.
 type Provider struct {
 	Addr  string
 	Token string

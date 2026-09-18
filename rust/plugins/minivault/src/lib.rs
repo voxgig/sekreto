@@ -1,40 +1,4 @@
-//! The mini vault: every secret a project owns, encrypted, in one file.
-//!
-//! A store this library owns outright rather than a client for a server
-//! somebody else runs. It has a master key and restricted keys, and it is
-//! the port's worked example of a definition publishing an API beside its
-//! provider: a chain READS, and writing is a deliberate act with an
-//! interface of its own.
-//!
-//! ```no_run
-//! use voxgig_sekreto::{Options, ProviderSpec, Sekreto};
-//! use voxgig_sekreto_minivault::{createvault, minivault, vaultof, VaultOptions};
-//!
-//! let vault = createvault(&VaultOptions {
-//!     file: "app.skmv".to_string(),
-//!     passphrase: "master".to_string(),
-//!     ..Default::default()
-//! })
-//! .unwrap();
-//! vault.set("api.token", "tok01").unwrap();
-//!
-//! let mut secrets = Sekreto::new(Options {
-//!     plugins: vec![minivault()],
-//!     providers: vec![ProviderSpec {
-//!         kind: "minivault".to_string(),
-//!         file: "app.skmv".to_string(),
-//!         passphrase: "master".to_string(),
-//!         ..Default::default()
-//!     }],
-//!     ..Default::default()
-//! })
-//! .unwrap();
-//!
-//! let _ = secrets.get("api.token").unwrap();            // the chain reads
-//! let _ = vaultof(&secrets, "").unwrap().list().unwrap(); // the API writes
-//! ```
-//!
-//! A port of typescript/plugins/minivault.ts, which is canonical.
+#![doc = include_str!("../COMMENT-NOTES.md")]
 
 mod format;
 
@@ -69,20 +33,6 @@ pub const VAULT_EXPORT: &str = "vault";
 
 // --- the lock every handle on one file shares -------------------------
 
-/// Each `Vault` is its own object, so two handles on one path did not
-/// coordinate: both could finish `load` before either saved, and the
-/// second rename then discarded the first one's change while reporting
-/// success. Keyed by the ABSOLUTE path, so two handles spelled
-/// differently still meet.
-///
-/// A guarantee WITHIN one process, which is what DOCS.md promises and what
-/// the go port arranges the same way. Two processes still race, and the
-/// format's answer to that is the exclusive create and the atomic rename:
-/// a reader sees one whole vault or the other, never half of one.
-///
-/// `std::sync`, although a `Vault` is `Rc` and never crosses a thread:
-/// what races is the FILE, and two threads each opening their own handle
-/// on one path is exactly the case this exists for.
 static LOCKS: OnceLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = OnceLock::new();
 
 fn lockfor(file: &str) -> Arc<Mutex<()>> {
@@ -96,9 +46,6 @@ fn lockfor(file: &str) -> Arc<Mutex<()>> {
 
 // --- base64 ----------------------------------------------------------
 
-/// Here rather than in the HTTP plugin: a vault opens no socket, and
-/// reaching that crate for two functions would link a TLS stack into a
-/// program whose only store is a local file.
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn b64(raw: &[u8]) -> String {
@@ -165,12 +112,6 @@ fn unb64(text: &str, what: &str) -> Answer<Vec<u8>> {
 
 // --- the rings -------------------------------------------------------
 
-/// A MASTER's ring holds the root and no grants; a RESTRICTED key's holds
-/// grants and no root, EVEN WHEN IT WAS GRANTED NOTHING. That asymmetry is
-/// the format rather than a saving: a ring with a root reaches every name
-/// there will ever be, so a grant list beside it would be a second answer
-/// to the same question - and an empty grant map is still a grant map, as
-/// the go port learned by writing twelve bytes fewer than everyone else.
 fn masterring(root: &[u8]) -> String {
     let mut out = Value::map();
     out.set("v", Value::Num(format::FORMAT as f64));
@@ -218,13 +159,6 @@ fn jsontrue(held: &Value, key: &str) -> bool {
 
 // --- the vault -------------------------------------------------------
 
-/// What a key may do. `grants` is empty for a master key, which reads and
-/// writes every name there is.
-///
-/// FIELDS THE CALLER CANNOT WRITE THROUGH, so the defect the review round
-/// found in the canonical - a caller flipping its own `write` bit on the
-/// record it was handed - cannot be written at all. A clone makes a new
-/// value and changes nothing the vault reads.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct VaultKeyInfo {
     pub key: String,
@@ -236,11 +170,9 @@ pub struct VaultKeyInfo {
 /// How a vault file is opened as one key.
 #[derive(Clone, Debug, Default)]
 pub struct VaultOptions {
-    /// The vault file.
     pub file: String,
     /// Which key to open with. Empty means `master`.
     pub key: String,
-    /// What unwraps that key.
     pub passphrase: String,
     /// The PBKDF2 round count used when this handle CREATES a key.
     /// Reading uses what the file records for the key being opened.
@@ -253,14 +185,10 @@ pub struct VaultOptions {
     pub create: bool,
 }
 
-/// What mints a restricted key.
 #[derive(Clone, Debug, Default)]
 pub struct GrantSpec {
-    /// The id the new key answers to.
     pub key: String,
-    /// What will unwrap it.
     pub passphrase: String,
-    /// The names it may read.
     pub names: Vec<String>,
     /// Whether it may overwrite those names. It can never create one.
     pub write: bool,
@@ -289,16 +217,6 @@ struct Held {
     opened: RefCell<Option<Opened>>,
 }
 
-/// A handle on one vault file, opened as ONE key.
-///
-/// Every method answers as that key: `list` shows the names it may read,
-/// `get` answers for those and misses on the rest, and the master-only
-/// ones refuse for any other key. Nothing is read or derived until the
-/// first call that needs the file, so putting a vault in a chain costs no
-/// key derivation until a secret is actually wanted.
-///
-/// Cheap to clone: the handle is shared, not copied, so the definition can
-/// export one and keep one.
 #[derive(Clone)]
 pub struct Vault {
     held: Rc<Held>,
@@ -365,8 +283,6 @@ pub fn createvault(options: &VaultOptions) -> Answer<Vault> {
         ITERATIONS
     };
 
-    // No existence check first: the check and the write would be two
-    // steps, and `putnew` refuses an existing file in ONE.
     putnew(&options.file, &newvault(key, &options.passphrase, iterations)?)?;
 
     openvault(options)
@@ -412,11 +328,6 @@ fn sealkey(
 
 // --- the file on disk -------------------------------------------------
 
-/// Writes a vault file that is not there yet, and REFUSES one that is.
-///
-/// `create_new` is `O_EXCL`, and the mode goes on at creation rather than
-/// after: a `set_permissions` once the bytes are written leaves the file
-/// readable for as long as it takes to write them.
 fn putnew(path: &str, made: &VaultFile) -> Answer<()> {
     let mut open = fs::OpenOptions::new();
     open.write(true).create_new(true);
@@ -455,12 +366,10 @@ fn readmaybe(path: &str) -> Answer<Option<Vec<u8>>> {
 }
 
 impl Vault {
-    /// The file this handle reads.
     pub fn file(&self) -> &str {
         &self.held.file
     }
 
-    /// The key id this handle opens with.
     pub fn key(&self) -> &str {
         &self.held.key
     }
@@ -470,15 +379,6 @@ impl Vault {
         *self.held.opened.borrow_mut() = None;
     }
 
-    /// Replaces the file rather than editing it in place. The rename is
-    /// what makes a concurrent reader see either the old file or the new
-    /// one, so a write interrupted halfway leaves a vault rather than
-    /// wreckage.
-    ///
-    /// THE TEMPORARY IS RANDOM AND EXCLUSIVE. `<vault>.<pid>.tmp` is a
-    /// name anyone can predict, and an ordinary create FOLLOWS a symlink,
-    /// so anyone who could write the vault's directory could point that
-    /// name at another file and have the next save truncate it.
     fn save(&self, made: &VaultFile) -> Answer<()> {
         let suffix = random(8)?;
         let temp = format!("{}.{}.tmp", self.held.file, hex(&suffix));
@@ -500,12 +400,6 @@ impl Vault {
         match readmaybe(&self.held.file)? {
             Some(raw) => Ok(raw),
             None => {
-                // A vault is configured deliberately, with a key. Its
-                // absence is a broken deployment and never "no secrets
-                // here": answering a miss would send the chain on to a
-                // weaker store, which is the failure mode this library
-                // most has to avoid. `create` is the caller saying the
-                // opposite, in writing.
                 if !self.held.create {
                     return fail(&format!("no vault file: {}", self.held.file));
                 }
@@ -633,13 +527,11 @@ impl Vault {
         }
     }
 
-    /// Derive the key and read the file NOW rather than at first use.
     pub fn open(&self) -> Answer<VaultKeyInfo> {
         self.load()?;
         Ok(self.info())
     }
 
-    /// The names this key can read, sorted.
     pub fn list(&self) -> Answer<Vec<String>> {
         let file = self.load()?;
         let info = self.info();
@@ -753,7 +645,6 @@ impl Vault {
         self.save(&file)
     }
 
-    /// Drop a name. Master only.
     pub fn remove(&self, name: &str) -> Answer<()> {
         checkname(name)?;
 
@@ -815,7 +706,6 @@ impl Vault {
         Ok(out)
     }
 
-    /// Mint a restricted key. Master only.
     pub fn grant(&self, spec: &GrantSpec) -> Answer<()> {
         let one = lockfor(&self.held.file);
         let _guard = one.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -884,12 +774,6 @@ impl Vault {
         self.save(&file)
     }
 
-    /// Take a new root key, re-encrypt every value under it, and DROP
-    /// EVERY OTHER KEY. Master only.
-    ///
-    /// The other keys go because they must: their rings are sealed under
-    /// passphrases this process does not have, so there is no way to hand
-    /// them keys they can unwrap. Re-grant afterwards.
     pub fn rotate(&self) -> Answer<()> {
         let one = lockfor(&self.held.file);
         let _guard = one.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -902,8 +786,6 @@ impl Vault {
             None => self.held.iterations,
         };
 
-        // Read everything out under the old root before anything changes:
-        // once the root is replaced the old derived keys are unreachable.
         let oldnamekey = mac(&oldroot, LABEL_NAMES);
         let mut held = Vec::new();
 
@@ -949,8 +831,6 @@ impl Vault {
             entries,
         })?;
 
-        // The ring this handle holds is the OLD one, so the next call must
-        // derive again rather than answer from it.
         self.close();
 
         Ok(())
@@ -978,18 +858,6 @@ impl Provider for MiniVaultProvider {
     }
 }
 
-/// The `minivault` provider kind, as a voxgig/plugin definition.
-///
-/// Written out rather than built by `providerplugin`, because this
-/// definition publishes TWO exports: `provider`, the read half every kind
-/// publishes, and `vault`, the programmatic API. voxgig/plugin's exports
-/// are how a definition offers an application more than the host's own
-/// vocabulary, and a store that can only be read is half a vault.
-///
-/// Both cross as `Value::Opaque` - plugin's escape hatch for "a client the
-/// library never inspects" - which is what `providerplugin` already does
-/// for the provider. No slot table: unlike the ports whose value model
-/// carries only numbers and strings, rust can put the handle itself in.
 pub fn minivault() -> Definition {
     let mut definition = Definition::named("minivault");
 
@@ -1055,10 +923,6 @@ pub fn vaultof(secrets: &Sekreto, store: &str) -> Answer<Vault> {
         return held("minivault", "no minivault store in this chain");
     }
 
-    // A NAMED STORE MUST EXIST, and the alias must not stand in for it.
-    // `exports` falls back to the alias when the exact ref misses, so
-    // asking for `minivault` in a chain whose only vault is named `app`
-    // used to hand back the `app` vault - and then write to it.
     let missing = format!("no minivault store named {} in this chain", store);
     let eref = if "minivault" == store {
         "minivault".to_string()

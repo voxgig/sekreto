@@ -1,20 +1,3 @@
-// THE FULL SET - every plugin this library ships, in one import.
-//
-// It exists for the callers that genuinely want all eleven kinds: the CLI,
-// the conformance suite, an app whose chain is decided at run time.
-//
-//     import { allplugins } from '@voxgig/sekreto/plugins'
-//     new Sekreto({ plugins: allplugins, providers: [...] })
-//
-// IT IS ALSO THE THING TO AVOID IF YOU CARE ABOUT SIZE. Reaching one
-// plugin through this file makes every other reachable too - AWS request
-// signing and seven HTTP vault clients included - which is the cost the
-// core/plugin split exists to remove. A lean consumer imports the kinds
-// it actually configures, each from its own module:
-//
-//     import { hashicorp } from '@voxgig/sekreto/plugins/hashicorp'
-//
-// See docs/design/plugin-providers.md.
 
 import type { Definition } from '@voxgig/plugin'
 

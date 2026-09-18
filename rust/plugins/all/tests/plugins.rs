@@ -1,21 +1,3 @@
-// RUN: make test
-// RUN-SOME: cargo test -p voxgig_sekreto_plugins fullset
-//
-// THE PLUGIN SEAM, FROM THE PLUGINS' SIDE: the full set holds every kind,
-// every kind builds from a spec, one plugin is enough for a chain that
-// names only it, one plugin links only what it needs, and the CLI passes
-// the whole set.
-//
-// Moving the provider kinds that open sockets and spawn processes out of
-// the core made a consumer's PLUGIN LIST load-bearing: a kind nobody
-// passed in is not in the catalog, and a chain naming it is refused. That
-// is the intended behaviour, and it means a consumer can be broken without
-// a single conformance test noticing - the conformance suite passes every
-// plugin, so it can never see a missing one.
-//
-// The core's half of the seam is pinned in ../../tests/plugin.rs, which
-// cannot import any of this: every plugin crate depends on the core, so
-// the core's own tests naming one would be a dependency cycle.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -169,7 +151,6 @@ fn one_plugin_is_enough_for_a_chain_that_names_only_it() {
 // A provider that refuses its own configuration returns a SekretoError
 // from inside the plugin's `define`. The spec pins that message byte for
 // byte, so it must come back out of the host as itself - not wrapped as
-// plugin_define_failed, and not as a PluginError.
 #[test]
 fn a_refusal_comes_back_out_as_itself() {
     let err = Sekreto::new(Options {
@@ -238,7 +219,6 @@ fn one_plugin_links_only_what_it_needs() {
     // stops being true it is a real change, not a tidy-up.
     assert_eq!(vec!["voxgig_plugin", "voxgig_sekreto"], depsof("secretspec"));
 
-    // The TLS exception of AGENTS.md rule 3 lives in exactly one crate.
     assert_eq!(
         vec!["rustls", "voxgig_sekreto", "webpki-roots"],
         depsof("httpjson")
@@ -263,7 +243,6 @@ fn one_plugin_links_only_what_it_needs() {
 }
 
 // The full set is BUILT, not held: `all()` is a function returning fresh
-// definitions, so two Sekretos never share one, and a consumer that wants
 // one kind calls that kind's own crate and links nothing else.
 #[test]
 fn the_full_set_is_built_on_demand() {

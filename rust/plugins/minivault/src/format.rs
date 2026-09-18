@@ -1,38 +1,3 @@
-//! The mini vault's file format, and the key hierarchy over it.
-//!
-//! A port of typescript/plugins/minivault.ts, which is canonical. The
-//! bytes are the contract: a vault written by any port is read by every
-//! other, and the vaults committed under `test/fixture/` pin that rather
-//! than leaving it to agreement.
-//!
-//! ```text
-//! magic       4   'SKMV'
-//! version     1   FORMAT
-//! kdf         1   1 = PBKDF2-HMAC-SHA256
-//! cipher      1   1 = AES-256-GCM
-//! reserved    1   0
-//! keycount    4   u32
-//! per key:
-//!   id        1 + bytes            the key id, PLAINTEXT
-//!   salt      1 + bytes
-//!   iters     4                    PBKDF2 rounds for this key
-//!   ring      1 + iv, 4 + bytes    sealed under the passphrase
-//!   meta      1 + iv, 4 + bytes    sealed under the vault's meta key
-//! entrycount  4   u32
-//! per entry:
-//!   id        1 + bytes            the blinded lookup id
-//!   name      1 + iv, 4 + bytes    sealed under the vault's name key
-//!   value     1 + iv, 4 + bytes    sealed under that secret's own key
-//! ```
-//!
-//! Integers are big-endian and every length precedes its bytes, so the
-//! file is written with the same two primitives it is read with.
-//!
-//! NOTHING OUTSIDE A KEY RECORD IS PLAINTEXT. Secret names are sealed,
-//! and an entry is addressed by a blinded id derived from its own key, so
-//! a restricted key finds what it was granted without the file ever
-//! naming the rest. What the file does show anyone is the key ids and how
-//! many secrets there are.
 
 use std::num::NonZeroU32;
 
@@ -80,13 +45,6 @@ pub fn fail<T>(text: &str) -> Answer<T> {
     Err(SekretoError::new(format!("sekreto: minivault: {}", text)))
 }
 
-/// The largest key id the format can record.
-///
-/// `small` writes a length in ONE byte. A longer id wraps that byte and
-/// the writer then appends the whole thing, so every field after it
-/// shifts: a grant with a 300-character id would replace a working vault
-/// with an unreadable one, and say nothing. Checked where an id is
-/// ACCEPTED, so the refusal names the id rather than the file.
 pub const IDMAX: usize = 255;
 
 pub fn checkid(id: &str, what: &str) -> Answer<()> {
@@ -129,13 +87,6 @@ pub fn kek(passphrase: &str, salt: &[u8], iters: u32) -> Answer<Vec<u8>> {
     Ok(out)
 }
 
-/// The key one named secret's value is encrypted with.
-///
-/// DERIVED, never stored, for a master: it holds the root key and so
-/// reaches every name, including ones written after it was made. A
-/// restricted key holds the derived keys it was granted and nothing that
-/// produces another, so every other name is ciphertext to it in exactly
-/// the way it is to a stranger.
 pub fn secretkey(root: &[u8], name: &str) -> Vec<u8> {
     mac(root, &format!("{}{}", AAD_SECRET, name))
 }
@@ -254,13 +205,6 @@ struct Reader<'a> {
 }
 
 impl<'a> Reader<'a> {
-    /// Reads `length` bytes, or refuses.
-    ///
-    /// The bound is checked AGAINST WHAT IS LEFT, as a u64, never by
-    /// adding the length to the cursor. A damaged vault can encode a
-    /// length at or above `u32::MAX`, and adding that to `at` on a 32-bit
-    /// target wraps - so the slice bound goes backwards and the process
-    /// panics instead of reporting the damaged file this exists to report.
     fn take(&mut self, length: u64) -> Answer<&'a [u8]> {
         if ((self.bytes.len() - self.at) as u64) < length {
             return fail("the vault file is truncated");

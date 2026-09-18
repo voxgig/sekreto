@@ -16,18 +16,6 @@ import {
   vaultref,
 } from '../src'
 
-// THE CONFORMANCE SUITE LOADS EVERY PLUGIN, deliberately.
-//
-// `spec/sekreto.json` is the contract for the whole library and exercises
-// all fourteen provider kinds, so this suite hands the full set to every
-// Sekreto it builds. That is not a leak of the core/plugin split - it is
-// the split working: a CONSUMER passes the kinds it configures and
-// carries nothing else, while the suite that proves all fourteen behave
-// has to have all fourteen. `lazyload.test.ts` pins the other half, that
-// the core surface reaches none of them.
-//
-// `sigv4` lives with the aws plugin - it is the crypto edge, and only
-// the two aws kinds use it (docs/design/plugin-providers.md).
 import { allplugins, sigv4 } from '../plugins'
 
 // omni from npm, as a devDependency - which is omni's own isolation device
@@ -38,7 +26,6 @@ import { makeRunner } from '@voxgig/omni'
 
 import { specfile } from './specfile'
 
-// Build a Sekreto from the spec's declarative chain description.
 function chainof(spec: any): Sekreto {
   return new Sekreto({ plugins: allplugins, providers: spec.chain, cache: false })
 }

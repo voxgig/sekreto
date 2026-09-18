@@ -1,21 +1,3 @@
-//! The full set: every plugin this repository ships, in one call.
-//!
-//! ```ignore
-//! let secrets = Sekreto::new(Options {
-//!     plugins: voxgig_sekreto_plugins::all(),
-//!     providers: chain,
-//!     ..Default::default()
-//! })?;
-//! ```
-//!
-//! DEPENDING ON THIS CRATE LINKS ALL ELEVEN, AWS request signing and seven
-//! HTTP vault clients included, which is exactly the cost the core/plugin
-//! split exists to remove. A lean consumer names the kinds it configures,
-//! one crate each:
-//!
-//! ```ignore
-//! plugins: vec![voxgig_sekreto_hashicorp::plugin()]
-//! ```
 
 use voxgig_plugin::catalog::Definition;
 

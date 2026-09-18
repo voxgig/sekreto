@@ -1,14 +1,3 @@
-// RUN: make test
-// RUN-SOME: cd testutil && go test -run 'TestSekreto/envkey'
-//
-// The commands name this NESTED module deliberately. This suite lives
-// outside the published module (register 4.13: nothing the library
-// builds may name omni), so `go test ./...` from the port root skips it
-// entirely and reports a green that ran no conformance at all.
-//
-// The sekreto conformance suite. Every port runs these same groups, from
-// the same spec/sekreto.json, through its own voxgig/omni runner.
-
 package sekreto_test
 
 import (
@@ -44,15 +33,6 @@ func specfile(t *testing.T, name string) string {
 	return ""
 }
 
-// The spec describes a provider chain as plain JSON. Re-encoding is the
-// shortest honest route from omni's `any` to the library's typed specs.
-//
-// THE CONFORMANCE SUITE LOADS EVERY PLUGIN, deliberately. The spec is the
-// contract for the whole library and exercises all fourteen provider
-// kinds, so this suite hands the full set to every Sekreto it builds.
-// That is the split working, not a leak of it: a CONSUMER passes the
-// kinds it configures and links nothing else, while the suite that
-// proves all fourteen behave has to have all fourteen.
 func chainof(value any) (*sekreto.Sekreto, error) {
 	entry, is := value.(map[string]any)
 	if !is {
@@ -119,8 +99,6 @@ var (
 			return nil, err
 		}
 
-		// SigV4 lives with the aws plugin - it is the crypto edge, and
-		// only the two aws kinds use it (docs/design/plugin-providers.md).
 		var input aws.Sigv4Input
 		if err := json.Unmarshal(data, &input); nil != err {
 			return nil, err

@@ -6,12 +6,6 @@ import {
 import { checkaddr } from '../src/provider/addr'
 import { fetchjson } from './httpjson'
 
-/** 1Password, through a Connect server.
- *
- * The item titled `api.token` (titles keep their dots), in the named
- * vault. The value is the field with purpose PASSWORD, or the field
- * labelled `value`. A vault that cannot be found is an error - config
- * names it, so its absence is a broken store, not a missing secret. */
 export function onepasswordprovider(options?: {
   addr?: string
   token?: string

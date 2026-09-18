@@ -1,20 +1,3 @@
-// RUN: npm test
-//
-// THE PLUGIN SEAM, from both sides.
-//
-// Moving the provider kinds that open sockets and spawn processes out of
-// the core made a consumer's PLUGIN LIST load-bearing: a kind nobody
-// passed in is not in the catalog, and a chain naming it is refused.
-// That is the intended behaviour, and it means a consumer can be broken
-// without a single conformance test noticing - the conformance suite
-// passes every plugin, so it can never see a missing one.
-//
-// It happened immediately, in the previous shape of this split: the
-// CLI's only reference to the full set was a TYPE import, which the
-// compiler erased, and every kind but env and memory failed in the
-// integration suite while `make test` stayed green. So the full set is
-// pinned here: it holds every kind, every kind builds, and the CLI
-// passes it as a value.
 
 import { describe, test } from 'node:test'
 import assert from 'node:assert'
@@ -60,10 +43,6 @@ describe('plugins', () => {
   })
 
   test('the CLI passes the full set as a value, not a type', () => {
-    // This suite runs COMPILED, out of dist/test, so the package root is
-    // two levels up - not one. Reading the TypeScript source is the point:
-    // the defect being guarded is a type-only import, which exists in the
-    // source and by definition is gone from the compiled output.
     const src = readFileSync(
       join(__dirname, '..', '..', 'cli', 'sekreto-cli.ts'), 'utf8')
 
@@ -112,9 +91,6 @@ describe('plugins', () => {
     )
   })
 
-  // Two providers MAY share a store name - a directed read walks both,
-  // and the spec pins it - but an instance ref may not, so the second
-  // gets a numbered tag from the host and keeps its store name.
   test('a repeated store name keeps the store and numbers the instance', async () => {
     const secrets = new Sekreto({
       providers: [
@@ -183,9 +159,6 @@ describe('plugins', () => {
     assert.deepEqual(secrets.host.list(), { shouty: 'live' })
   })
 
-  // A plugin that names a built-in kind replaces it: that is how a host
-  // substitutes an implementation, and never an accident, because the
-  // four names are documented.
   test('a plugin may replace a built-in kind', async () => {
     const memory = providerplugin('memory', () => ({
       lookup: () => 'replaced',

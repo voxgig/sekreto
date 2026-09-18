@@ -505,3 +505,11 @@ names in the dynamic languages, the language's own convention in the
 compiled ones; comments that say *why*, not *what*; and constants on the
 left of a comparison (`404 == status`), which is the house style
 throughout voxgig.
+
+## Source code comments
+
+Follow [COMMENT-POLICY.md](COMMENT-POLICY.md): comments are sparse and terse,
+only for intricate or surprising code. Names carry intent; documents carry
+requirements. Run `make comments comments-test` after editing source.
+
+Durable implementation rationale is in [COMMENT-NOTES.md](COMMENT-NOTES.md).

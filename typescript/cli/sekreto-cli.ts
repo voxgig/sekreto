@@ -1,33 +1,7 @@
-// A tiny app that needs a secret.
-//
-// It asks sekreto for `api.token` and calls the token-protected API with
-// it. Every port ships this same CLI, and test/integration.sh runs all of
-// them against the same server from every secret source - which is
-// what proves the library, rather than the spec alone.
-//
-// Usage: sekreto-cli <api-url> [--source <source>] [--store <name>]
-//
-// Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-//          gcpsecrets azuresecrets onepassword doppler infisical
-//          secretspec minivault chain
-//
-// Each source's configuration arrives in the environment variables its
-// own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
-// in chainfor below.
 
 import { Sekreto } from '../src'
 import type { ProviderSpec } from '../src'
 
-// THE FULL SET, passed to Sekreto. The CLI is asked for any provider
-// kind on the command line, so it is the one consumer that legitimately
-// wants all eleven plugins; an app passes the one or two it configures.
-//
-// It must be a VALUE import. An earlier shape of this split registered
-// kinds as a side effect of importing them, and the CLI's only import of
-// the full set named a type, so TypeScript ERASED it: every kind but env
-// and memory failed as `unknown provider kind`, caught by the
-// integration suite while `make test` stayed green. Passing the list
-// explicitly is what makes that mistake impossible to compile.
 import { allplugins } from '../plugins'
 
 function chainfor(source: string): ProviderSpec[] {

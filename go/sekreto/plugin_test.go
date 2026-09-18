@@ -65,9 +65,6 @@ func TestUnknownKindNamesTheFix(t *testing.T) {
 	}
 }
 
-// Two providers MAY share a store name - a directed read walks both, and
-// the spec pins it - but an instance ref may not, so the second gets a
-// numbered tag from the host and keeps its store name.
 func TestRepeatedStoreNameNumbersTheInstance(t *testing.T) {
 	sek, err := New(&Options{Providers: []*ProviderSpec{
 		{Kind: "memory", Values: map[string]string{}},

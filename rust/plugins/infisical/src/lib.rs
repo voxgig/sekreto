@@ -12,12 +12,6 @@ use voxgig_sekreto_httpjson::{
     expiryseconds, fetchjson, http, renewdue, renewtime, textat, trimslash,
 };
 
-/// Infisical.
-///
-/// `api.token` reads the secret keyed `API_TOKEN` (Infisical's own
-/// convention is environment-style keys) at a secret path in one
-/// environment of a project. Auth is a token, or a universal-auth
-/// (machine identity) login with clientid/clientsecret.
 #[derive(Default)]
 pub struct InfisicalProvider {
     pub addr: String,

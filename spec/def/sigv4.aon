@@ -1,14 +1,4 @@
 
-# AWS Signature Version 4.
-#
-# sekreto talks to AWS Secrets Manager and Parameter Store over plain HTTP
-# rather than pulling in an SDK, so every port implements SigV4 itself.
-# These are golden vectors: the expected signatures below were produced
-# once and are now fixed, so a port that signs differently fails here
-# instead of failing against AWS.
-#
-# The signing time is supplied as `datetime` precisely so the vectors stay
-# deterministic. The first entry is the canonical aws4_request test case.
 
 
 sigv4: set: [
@@ -97,24 +87,6 @@ sigv4: set: [
     }
   }
 
-  # ESCAPING IN THE QUERY, AND ITS HEX CASE. The case above sorts two
-  # parameters that need no escaping, so nothing there pins how a
-  # parameter IS escaped. Here the canonical query is
-  #
-  #   p=a%2Fb&q=c%3Ad
-  #
-  # and both escapes carry a hex LETTER, which is the point: RFC 3986 and
-  # the AWS canonical request require UPPERCASE hex, so a port that emits
-  # %2f signs a different string and fails here. Nothing else in this
-  # corpus can see that. The convention is split across every port — the
-  # JSON writer emits lowercase \u escapes while this emits uppercase —
-  # and one port has already shipped a defect from getting it the wrong
-  # way round.
-  #
-  # The vector was produced twice and only kept because the two agreed: by
-  # an implementation written from the AWS specification rather than from
-  # any port, which reproduces the two vectors above before it was trusted
-  # for this one, and by canonical typescript.
   {
     id: 'sigv4#query-escaped'
     in: {

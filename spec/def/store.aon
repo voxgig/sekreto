@@ -1,10 +1,4 @@
 
-# Targeted lookup: `getfrom` and `tryfrom`.
-#
-# Where `resolve` walks the whole chain, these address ONE store by name.
-# That makes them the escape hatch when precedence is not what you want —
-# and it means a miss in the named store is a miss, full stop, even when a
-# later store in the chain does have the secret.
 
 
 getfrom: set: [
@@ -105,15 +99,6 @@ getfrom: set: [
     err: 'sekreto: not an http(s) address: ftp://vault.example.com'
   }
 
-  # NO REFUSAL PRINTS THE CREDENTIAL IT IS REFUSING.
-  #
-  # Every message here names the address, and one of them fires precisely
-  # because that address carries a password - so printing it verbatim
-  # wrote the password to stderr and into the logs. It cannot be cleaned
-  # up afterwards either: the password was never resolved as a secret, so
-  # `redact` has never seen it. The host is what identifies the offending
-  # chain entry; the userinfo is not. This case is the scheme branch,
-  # which fires before any of the parsing and leaked too.
   {
     in: {
       chain: [ { kind: 'hashicorp', addr: 'ftp://svc:hunter2@vault.example.com/' } ]
@@ -123,19 +108,6 @@ getfrom: set: [
     err: 'sekreto: not an http(s) address: ftp://[redacted]@vault.example.com/'
   }
 
-  # USERINFO, refused outright.
-  #
-  # `localhost:8200@evil.example.com` is a request to evil.example.com,
-  # but a port that finds the host by splitting the authority on ':'
-  # reads it as `localhost`, allows it, and sends the vault token in the
-  # clear to the attacker - defeating the one check that exists to
-  # prevent exactly that. Eight of the twelve ports did this.
-  #
-  # The fix is not to locate the userinfo more carefully but to refuse
-  # any address that has one. No store this library speaks authenticates
-  # by userinfo, so such an address is a mistake whatever the host; and
-  # "does the authority contain an '@'" is a question twelve ports answer
-  # identically, where "where does the userinfo end" is not.
   {
     in: {
       chain: [ { kind: 'hashicorp', addr: 'http://localhost:8200@evil.example.com/' } ]
@@ -157,8 +129,6 @@ getfrom: set: [
     err: 'sekreto: refusing an address with embedded credentials: http://[redacted]@evil.example.com/'
   }
 
-  # Two @ signs. The URL parsers split this one four different ways
-  # across the twelve platforms; refusing the shape makes them agree.
   {
     in: {
       chain: [ { kind: 'hashicorp', addr: 'http://a@127.0.0.1@evil.example.com/' } ]
@@ -180,10 +150,6 @@ getfrom: set: [
     err: 'sekreto: refusing an address with embedded credentials: https://[redacted]@vault.example.com'
   }
 
-  # An '@' after the authority is part of the path, and the path is not
-  # this check's business. Reaching 'unsupported kv version' is how a
-  # case proves the address was ALLOWED: that error comes from the
-  # provider, after the check let it through.
   {
     in: {
       chain: [ { kind: 'hashicorp', addr: 'http://localhost:8200/a@b', token: 't', kv: 3 } ]
@@ -205,8 +171,6 @@ getfrom: set: [
     err: 'unsupported kv version'
   }
 
-  # Case is not part of a host's identity. Every URL parser folds it; the
-  # two ports that must parse by hand have to fold it themselves.
   {
     in: {
       chain: [ { kind: 'hashicorp', addr: 'http://LOCALHOST:8200', token: 't', kv: 3 } ]
@@ -216,9 +180,6 @@ getfrom: set: [
     err: 'unsupported kv version'
   }
 
-  # An IPv4-mapped IPv6 loopback is deliberately NOT in the allowlist.
-  # Widening the set of addresses that count as local is a separate
-  # decision from parsing the host correctly, and it has not been made.
   {
     in: {
       chain: [ { kind: 'hashicorp', addr: 'http://[::ffff:127.0.0.1]:8200' } ]

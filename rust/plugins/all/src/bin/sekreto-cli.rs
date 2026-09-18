@@ -1,19 +1,3 @@
-//! A tiny app that needs a secret.
-//!
-//! It asks sekreto for `api.token` and calls the token-protected API with
-//! it. Every port ships this same CLI, and test/integration.sh runs all of
-//! them against the same server from every secret source - which is
-//! what proves the library, rather than the spec alone.
-//!
-//! Usage: sekreto-cli <api-url> [--source <source>] [--store <name>]
-//!
-//! Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-//!          gcpsecrets azuresecrets onepassword doppler infisical
-//!          secretspec minivault chain
-//!
-//! Each source's configuration arrives in the environment variables its
-//! own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
-//! in chainfor below.
 
 use std::env;
 use std::process;
@@ -206,10 +190,6 @@ fn run() -> i32 {
         _ => String::new(),
     };
 
-    // THE CLI PASSES THE FULL SET, deliberately: it is the one program
-    // here that can be asked for any of the fourteen kinds at run time.
-    // An app that knows its chain names the kinds it configures instead,
-    // and links nothing else.
     let mut secrets = match Sekreto::new(Options {
         plugins: all(),
         providers: chainfor(&source),

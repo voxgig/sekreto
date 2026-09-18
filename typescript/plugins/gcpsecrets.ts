@@ -6,17 +6,6 @@ import {
 import { checkaddr } from '../src/provider/addr'
 import { fetchjson } from './httpjson'
 
-/** GCP Secret Manager.
- *
- * `api.token` reads secret `api_token` (dots flattened to `_`; Secret
- * Manager ids have no hierarchy and reject dots), latest version. The
- * token comes from config, then `GOOGLE_OAUTH_ACCESS_TOKEN`, then the
- * GCE/GKE metadata server - so on Google's own platform no credential
- * configuration is needed at all.
- *
- * The metadata call itself is plain http to a link-local host by
- * platform design; no credential rides on it, so `checkaddr` guards the
- * Secret Manager address instead. */
 export function gcpsecretsprovider(options?: {
   project?: string
   token?: string

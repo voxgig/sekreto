@@ -8,13 +8,6 @@ import (
 	"testing"
 )
 
-// A Sekreto resolved from several goroutines must not lose a value.
-//
-// Four providers were given a mutex for exactly this reason; the facade
-// holding the results was not. Two goroutines appending to `seen` from the
-// same length silently dropped one - and a value missing from `seen` is a
-// value Redact hands straight back into the log, which is the failure this
-// guards. Run under `-race`, which the Makefile does.
 func TestConcurrentResolveKeepsEverySecret(t *testing.T) {
 	sek, err := New(&Options{Providers: []*ProviderSpec{{Kind: "memory", Values: map[string]string{
 		"A_ONE":   "value-one-aaaa",

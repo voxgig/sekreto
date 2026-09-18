@@ -1,19 +1,3 @@
-// A tiny app that needs a secret.
-//
-// It asks sekreto for `api.token` and calls the token-protected API with
-// it. Every port ships this same CLI, and test/integration.sh runs all of
-// them against the same server from every secret source - which is what
-// proves the library, rather than the spec alone.
-//
-// Usage: sekreto-cli <api-url> [--source <source>] [--store <name>]
-//
-// Sources: env dotenv file hashicorp boru boruwire awssecrets awsparams
-// gcpsecrets azuresecrets onepassword doppler infisical secretspec
-// minivault chain
-//
-// Each source's configuration arrives in the environment variables its
-// own ecosystem already uses (VAULT_*, AWS_*, OP_CONNECT_*, ...), listed
-// in chainfor below.
 package main
 
 import (
@@ -48,7 +32,6 @@ func chainfor(source string) []*sekreto.ProviderSpec {
 		Dir:  envor("SEKRETO_FILEDIR", "/run/secrets"),
 	}
 
-	// A kv of 0 means "unset", and the provider defaults it to 2.
 	kv, _ := strconv.Atoi(os.Getenv("VAULT_KV"))
 
 	var auth *sekreto.AuthSpec
@@ -226,10 +209,6 @@ func run() int {
 		}
 	}
 
-	// THE FULL SET, passed to New. The CLI is asked for any provider kind
-	// on the command line, so it is the one consumer that legitimately
-	// wants all eleven plugins; an app passes the one or two it configures,
-	// and links nothing else.
 	secrets, err := sekreto.New(&sekreto.Options{
 		Plugins:   plugins.All(),
 		Providers: chainfor(source),
