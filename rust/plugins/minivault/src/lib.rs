@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use voxgig_plugin::catalog::Definition;
 use voxgig_plugin::host::Inst;
 use voxgig_plugin::types::{details, PluginError};
-use voxgig_plugin::value::Value;
+use voxgig_plugin::value::{parse, Value};
 
 use voxgig_sekreto::{
     checkname, specof, Answer, Provider, Sekreto, ERROR_CODE, PROVIDER_EXPORT,
@@ -145,7 +145,7 @@ fn metaof(master: bool, write: bool, names: &[String]) -> String {
 
 fn jsonof(plain: &[u8], what: &str) -> Answer<Value> {
     let text = String::from_utf8_lossy(plain);
-    match voxgig_plugin::value::parse(&text) {
+    match parse(&text) {
         Ok(held) if held.as_map().is_some() => Ok(held),
         _ => fail(&format!("unreadable {}", what)),
     }
