@@ -1,5 +1,3 @@
-#![doc = include_str!("../COMMENT-NOTES.md")]
-
 mod format;
 
 use std::cell::RefCell;
