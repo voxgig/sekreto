@@ -1,9 +1,10 @@
 # Testing against the real secret stores
 
-sekreto has twelve ports and fourteen provider kinds, and until now every
-network provider was tested against a mock: `test/mockhashicorp.js`,
-`test/mockaws.js` and their five siblings, each reimplementing a
-vendor's published wire protocol in a hundred lines of Node.
+When this note was written sekreto had twelve ports and fourteen provider
+kinds (it has twenty-three ports now), and every network provider was
+tested against a mock: `test/mockhashicorp.js`, `test/mockaws.js` and
+their five siblings, each reimplementing a vendor's published wire
+protocol in a hundred lines of Node.
 
 Those mocks are good, and they are not going anywhere. But a mock is a
 **claim** — "this is what the real server does" — written by the same

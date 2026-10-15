@@ -281,9 +281,11 @@ all, so the library and the CLI compile on a machine with no omni checkout
 
   The watchdog's bound is **total**: wall-clock from the moment the
   connection is up, not a per-read timer that a trickle of bytes resets.
-  That makes this port and Go the only two of the twelve that cut a server
-  which answers 200 and then dribbles its body one byte at a time —
-  measured at 10.05 seconds here, against 30 seconds and still going for the other ten.
+  When it went in, that made this port and Go the only two of the twelve
+  ports then measured that cut a server which answers 200 and then
+  dribbles its body one byte at a time — 10.05 seconds here, against 30
+  seconds and still going for the other ten. The ports added since have
+  not been measured against that server.
 
   The request is still built by hand rather than through `Client.fetch`,
   which gives no access to the connection at all.
