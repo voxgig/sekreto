@@ -47,7 +47,7 @@ import Sekreto
 import Sigv4 (Signing (..), emptysigning, sigv4)
 import System.Environment (getArgs)
 import System.Exit (exitFailure, exitSuccess)
-import System.IO (hFlush, stdout)
+import System.IO (IOMode (ReadMode), hFlush, stdout, withFile)
 
 -- | Find the shared spec directory by walking up from the working
 -- directory. Named `findspec` because `specfile` and `specpath` are both
@@ -59,7 +59,7 @@ findspec name = search "." (0 :: Int)
       | 8 <= step = throwIO (OmniError ("sekreto: spec not found: " ++ name))
       | otherwise = do
           let cand = dir ++ "/spec/" ++ name
-          found <- try (readFile cand) :: IO (Either SomeException String)
+          found <- try (withFile cand ReadMode (const (pure ()))) :: IO (Either SomeException ())
           case found of
             Right _ -> pure cand
             Left _ -> search (dir ++ "/..") (step + 1)

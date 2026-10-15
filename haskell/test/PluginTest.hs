@@ -22,9 +22,11 @@
 module Main (main) where
 
 import AllPlugins (allplugins)
+import Bytes (utf8decode)
 import Catalog (catalogNames)
 import Control.Exception (Exception, SomeException, displayException, fromException, throwIO, try)
 import Control.Monad (when)
+import qualified Data.ByteString as B
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef)
 import Data.List (isInfixOf, nub, sort)
 import Data.Maybe (isJust)
@@ -153,7 +155,7 @@ everykindbuildsfromaspec = do
 -- included, so that `take 1 allplugins` cannot satisfy it.
 theclipassesthefullset :: IO ()
 theclipassesthefullset = do
-  body <- readFile "cli/Main.hs"
+  body <- utf8decode <$> B.readFile "cli/Main.hs"
 
   let wanted =
         [ "import AllPlugins (allplugins)",

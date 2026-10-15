@@ -78,10 +78,11 @@ module VoxgigSekreto
         raise SekretoError, 'sekreto: cannot run ' + @command + ': ' + e.message
       end
 
-      # boru prints the value and one newline, and nothing else.
-      return out.sub(/\n\z/, '') if status.success?
+      # boru prints the value and one newline, and nothing else. Open3 tags
+      # the bytes with the locale's encoding, so read them as UTF-8.
+      return out.force_encoding('UTF-8').sub(/\n\z/, '') if status.success?
 
-      why = err.to_s.strip
+      why = err.to_s.force_encoding('UTF-8').scrub.strip
 
       # "no alias named" is boru saying it does not hold this secret, which is
       # a miss: the chain carries on to the next provider. A locked vault or a

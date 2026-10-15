@@ -65,7 +65,7 @@ module VoxgigSekreto
                if jwt.nil?
                  file = @auth['jwtfile'] || '/var/run/secrets/kubernetes.io/serviceaccount/token'
                  jwt = begin
-                   File.read(file).strip
+                   File.read(file, encoding: 'UTF-8').strip
                  rescue StandardError
                    raise SekretoError, 'sekreto: hashicorp: cannot read jwt file ' + file
                  end

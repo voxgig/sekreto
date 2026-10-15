@@ -56,7 +56,7 @@ module VoxgigSekreto
     def load
       if @values.nil?
         @values = begin
-          VoxgigSekreto.parsedotenv(File.read(@file))
+          VoxgigSekreto.parsedotenv(File.read(@file, encoding: 'UTF-8'))
         rescue Errno::ENOENT, Errno::ENOTDIR
           # An absent file - or an absent directory - means "no secrets
           # here", exactly like FileProvider. Anything else (permission
@@ -114,7 +114,7 @@ module VoxgigSekreto
       file = File.join(@dir, VoxgigSekreto.envkey(name, @prefix))
 
       text = begin
-        File.read(file)
+        File.read(file, encoding: 'UTF-8')
       rescue Errno::ENOENT, Errno::ENOTDIR
         # An absent file - or an absent directory - means "no secrets
         # here", exactly like a missing .env. Anything else (permission
