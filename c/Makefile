@@ -1,4 +1,4 @@
-.PHONY: build deps test seam clean inspect check-core check-tls tlscheck
+.PHONY: build deps test seam clean inspect check-core check-tls check-decls tlscheck
 
 # SERIAL, because `build` recurses and three phony targets depend on it:
 # under -j, `check-core` and `check-tls` would each start their own `build`
@@ -190,6 +190,18 @@ check-tls: build
 	fi; \
 	echo "check-tls: OpenSSL confined to plugins/tls.c and plugins/minivault.c"
 
+# Every shipped translation unit declares what it calls, checked at -O0:
+# _FORTIFY_SOURCE's wrappers declare some libc functions themselves, so an
+# optimised build can compile a call its own feature macros leave undeclared,
+# and gcc then truncates the returned pointer to an int wherever the
+# wrappers are absent.
+check-decls: deps
+	@for f in src/*.c plugins/*.c cli/*.c; do \
+	  $(CC) -std=c99 -O0 -U_FORTIFY_SOURCE -Werror=implicit-function-declaration \
+	    -fsyntax-only $(INCLUDES) $$f || exit 1; \
+	done; \
+	echo "check-decls: every call in src/, plugins/ and cli/ is declared"
+
 # The suite compiles against the archives `build` just made, so the library
 # is compiled once however many times the tests are run. omni appears here
 # and nowhere else: no shipped source file names it, which is what the
@@ -198,7 +210,7 @@ check-tls: build
 # The conformance suite links the plugins because it hands every plugin to
 # every chain it builds - which is also why it can never see a consumer
 # that passes the wrong list. That is what `seam` is for.
-test: build check-core check-tls
+test: build check-core check-tls check-decls
 	@test -n "$(OMNI)" || { echo "sekreto: voxgig/omni not found - set OMNI_HOME" >&2; exit 1; }
 	$(MAKE) -C $(OMNI)/c build
 	@mkdir -p build

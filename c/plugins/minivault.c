@@ -62,7 +62,8 @@
  * to agreement between implementations.
  */
 
-#define _POSIX_C_SOURCE 200809L
+/* realpath is XSI: glibc declares it under _XOPEN_SOURCE, not _POSIX_C_SOURCE. */
+#define _XOPEN_SOURCE 700
 
 #include <errno.h>
 #include <fcntl.h>
