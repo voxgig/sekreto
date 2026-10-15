@@ -63,7 +63,7 @@ VOCAB = "Sekreto"
 ROOT_PAGES = ("README.md", "DOCS.md")
 
 # No documentation tree: the documentation is DOCS.md and the READMEs.
-# doc/design/ and docs/design/ hold working documents, not pages.
+# docs/design/ holds working documents, not pages.
 DOC_GLOBS = ()
 NOT_DOCS = ()
 
@@ -75,7 +75,7 @@ EXTRA_PAGES = ()
 # one is a port, and its README is a page. api/ is the token-protected
 # server the integration suite stands up, not a port, and has no README.
 PORT_DIRS = True
-NOT_PORTS = ("api", "doc", "docs", "spec", "test", "tools", "node_modules")
+NOT_PORTS = ("api", "docs", "spec", "test", "tools", "node_modules")
 PORT_PAGES = ("README.md",)
 
 # Where "we" is allowed: the tutorial (voice rule 7). DOCS.md is a
@@ -85,15 +85,15 @@ TUTORIAL_PAGES = ()
 
 # Working documents a page must not cite, by name. Regex, then the label
 # a finding shows. See STYLE-GUIDE.md, "Documentation does not cite a
-# working document". Everything under doc/design/ and docs/design/ is a
+# working document". Everything under docs/design/ is a
 # plan, an argument or a review; the specification a page cites is
 # spec/sekreto.aon and the tests.
 WORKING_DOCS = (
     (r"\bAGENTS\.md\b", "AGENTS.md"),
     (r"\bCLAUDE\.md\b", "CLAUDE.md"),
-    (r"\bdocs?/design/[\w.-]+\.md\b", "a design note under doc/design or docs/design"),
-    (r"(?<![/\w-])more-ports\.md\b", "doc/design/more-ports.md"),
-    (r"(?<![/\w-])real-stores\.md\b", "doc/design/real-stores.md"),
+    (r"\bdocs/design/[\w.-]+\.md\b", "a design note under docs/design"),
+    (r"(?<![/\w-])more-ports\.md\b", "docs/design/more-ports.md"),
+    (r"(?<![/\w-])real-stores\.md\b", "docs/design/real-stores.md"),
     (r"(?<![/\w-])review-\d{4}-\d{2}\.md\b", "a review file"),
     (r"(?<![/\w-])plugin-providers\.md\b", "docs/design/plugin-providers.md"),
     (r"\b[A-Z][A-Z0-9_]*_(?:PLAN|REVIEW)\.md\b", "a plan or review file"),

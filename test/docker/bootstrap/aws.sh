@@ -23,7 +23,7 @@
 # separate a miss from a failure.
 #
 # Against REAL AWS none of this applies: seed with the aws CLI and real
-# credentials. See doc/design/real-stores.md.
+# credentials. See docs/design/real-stores.md.
 
 set -eu
 
@@ -35,7 +35,7 @@ KEYID=${AWS_ACCESS_KEY_ID:-test}
 ENDPOINT=${ENDPOINT%/}
 
 # The body goes in on STDIN. Nothing here is worth hiding against
-# LocalStack, but doc/design/real-stores.md advertises pointing this at a
+# LocalStack, but docs/design/real-stores.md advertises pointing this at a
 # real account, and /proc/*/cmdline is world-readable.
 call() {
   local target=$1 body=$2

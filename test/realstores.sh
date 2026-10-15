@@ -31,7 +31,7 @@
 # account, a real Infisical. Nothing here assumes docker except the part
 # that starts docker.
 #
-# doc/design/real-stores.md says which of these are the vendor's own
+# docs/design/real-stores.md says which of these are the vendor's own
 # server, which are emulators, and which cannot be run locally at all.
 
 set -u

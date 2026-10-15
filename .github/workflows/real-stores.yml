@@ -18,7 +18,7 @@
 # a port has a bug the mocks do not model, or a mock has drifted from
 # the server it imitates.
 #
-# doc/design/real-stores.md says which services are the vendor's own,
+# docs/design/real-stores.md says which services are the vendor's own,
 # which are emulators, and which cannot be run locally at all.
 
 name: real-stores

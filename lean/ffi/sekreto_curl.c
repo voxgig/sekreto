@@ -3,7 +3,7 @@
  * library outside the Lean toolchain.
  *
  * Lean has no sockets, no TLS and no HTTP: reaching any of them means
- * FFI to C. `doc/design/more-ports.md` names libcurl for Lean, because
+ * FFI to C. `docs/design/more-ports.md` names libcurl for Lean, because
  * that is what the Lean HTTP clients that exist already are, and because
  * the rule the repository settled on is that CRYPTOGRAPHIC TRANSPORT IS
  * NOT HAND-ROLLED - a port with TLS in its standard library uses it, and

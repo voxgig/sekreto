@@ -633,7 +633,7 @@ def discover_ports():
     port of this tool exactly that happened - a whole language was missed
     while the output said everything was clean.
     """
-    skip = {'tools', 'spec', 'test', 'doc', 'api'}
+    skip = {'tools', 'spec', 'test', 'docs', 'api'}
     found = set()
     for entry in ROOT.iterdir():
         if not entry.is_dir() or entry.name.startswith('.') or entry.name in skip:

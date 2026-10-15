@@ -9,7 +9,7 @@
 # Not every store can be run. Some have no server to run (Doppler is SaaS
 # only), some need a paid account to issue the credential their server
 # demands (1Password Connect), and some have no emulator worth the name
-# (GCP Secret Manager). doc/design/real-stores.md sets out what is real,
+# (GCP Secret Manager). docs/design/real-stores.md sets out what is real,
 # what is an emulator, and what cannot be done locally at all - read it
 # before adding a service here.
 #
@@ -76,7 +76,7 @@ services:
   # LocalStack, for Secrets Manager and SSM Parameter Store. Both are in
   # the community edition.
   #
-  # READ doc/design/real-stores.md ON SIGNATURES: LocalStack does not
+  # READ docs/design/real-stores.md ON SIGNATURES: LocalStack does not
   # verify the SigV4 signature, it only parses the Authorization header
   # for the access key. test/mockaws.js DOES verify it, re-deriving the
   # signature of every request. So for signing, the mock is the stronger

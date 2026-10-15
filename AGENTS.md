@@ -97,7 +97,7 @@ so those twenty-three stay one.
    (a separate step, and the one people forget), send SNI, and honour
    `SEKRETO_CA_BUNDLE` for extra roots. `test/realstores.sh` proves it both
    ways — the Azure emulator must be refused without its certificate and
-   accepted with it. See `doc/design/more-ports.md`.
+   accepted with it. See `docs/design/more-ports.md`.
 
 4. **Four kinds are built in; everything else is a plugin, in the port's
    `plugins/` folder, loaded statically by the calling project.** What
@@ -234,7 +234,7 @@ minutes. CI runs it weekly and on demand
 port has a bug the mocks do not model or a mock has drifted from the
 server it imitates.
 
-It has already found both kinds. Read `doc/design/real-stores.md` before
+It has already found both kinds. Read `docs/design/real-stores.md` before
 changing it — in particular for which services are the vendor's own
 server, which are emulators, and why AWS signing is still guarded by the
 mock rather than by LocalStack.
@@ -492,7 +492,7 @@ and any other new page must be reachable from that block or neither gate
 reads it.
 
 Three things trip agents most often: a page must not name or link
-`AGENTS.md`, `doc/design/*` or `docs/design/*` (state the fact instead —
+`AGENTS.md` or `docs/design/*` (state the fact instead —
 those are plans, arguments and reviews, and the spec under `spec/` is what
 a page cites); the em dash is spaced (` — `) and rationed to one aside per
 line; and a word Vale's dictionary does not know goes into `accept.txt` one

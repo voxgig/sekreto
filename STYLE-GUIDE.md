@@ -98,8 +98,8 @@ of it that will not be updated in the same commit.
 The record is the spec (`spec/def/*.aon`, and the fourteen groups
 `DOCS.md` lists under `## The shared spec`) and the port's own tests. A
 port page names the divergence, says what this port does, and names the
-spec group or the test that pins it. The design notes under `doc/` and
-`docs/` are where a divergence was argued, and they are not citable —
+spec group or the test that pins it. The design notes under
+`docs/design/` are where a divergence was argued, and they are not citable —
 see the next section.
 
 ## Documentation does not cite a working document
@@ -116,9 +116,9 @@ The banned set, by name:
 | Document | What it is |
 |---|---|
 | `AGENTS.md`, `CLAUDE.md` | instructions to contributors and agents working in the repository (there is no `CLAUDE.md` yet; the name is guarded in advance) |
-| `doc/design/more-ports.md` | the plan that brought the port count to twenty-three, with what it predicted and what it did not |
-| `doc/design/real-stores.md` | the argument for testing against the real stores, and the log of what that suite found |
-| `doc/design/review-2026-08.md` | a code review, findings numbered `SK-1` onward, revised as they are fixed |
+| `docs/design/more-ports.md` | the plan that brought the port count to twenty-three, with what it predicted and what it did not |
+| `docs/design/real-stores.md` | the argument for testing against the real stores, and the log of what that suite found |
+| `docs/design/review-2026-08.md` | a code review, findings numbered `SK-1` onward, revised as they are fixed |
 | `docs/design/plugin-providers.md` | the plan for moving the provider kinds onto voxgig/plugin, with a status line and a propagation order |
 | any `*_PLAN.md` or `*_REVIEW.md`, and `BUILD_LOG.md` | the shapes this project has not needed yet, guarded in advance |
 

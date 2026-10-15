@@ -22,7 +22,7 @@
 # containers. The mocks integration.sh uses are a claim about what those
 # servers do; this checks the claim. It needs docker, takes minutes, and
 # so is not part of `all` - CI runs it on a schedule.
-# See doc/design/real-stores.md.
+# See docs/design/real-stores.md.
 
 # Every port directory. Target names are the directory names, used verbatim
 # as `make -C <dir>`.
